@@ -1,0 +1,41 @@
+<Solution>
+  <Folder Name="/refs/" />
+  <Folder Name="/refs/core-cs/" />
+  <Folder Name="/refs/core-cs/src/">
+    <Project Path="refs/core-cs/src/Core.Avalonia/Core.Avalonia.csproj" />
+    <Project Path="refs/core-cs/src/Core.Base/Core.Base.csproj" />
+    <Project Path="refs/core-cs/src/Core.Collections/Core.Collections.csproj" />
+    <Project Path="refs/core-cs/src/Core.Net.I2p/Core.Net.I2p.csproj" />
+    <Project Path="refs/core-cs/src/Core.Net.Proxies/Core.Net.Proxies.csproj" />
+    <Project Path="refs/core-cs/src/Core.Net.Upnp/Core.Net.Upnp.csproj" />
+    <Project Path="refs/core-cs/src/Core.Omnikit/Core.Omnikit.csproj" />
+    <Project Path="refs/core-cs/src/Core.Pipelines/Core.Pipelines.csproj" />
+    <Project Path="refs/core-cs/src/Core.RocketPack.DefinitionCompiler/Core.RocketPack.DefinitionCompiler.csproj" />
+    <Project Path="refs/core-cs/src/Core.RocketPack/Core.RocketPack.csproj" />
+    <Project Path="refs/core-cs/src/Core.Serialization/Core.Serialization.csproj" />
+    <Project Path="refs/core-cs/src/Core.Sql/Core.Sql.csproj" />
+    <Project Path="refs/core-cs/src/Core.Storages/Core.Storages.csproj" />
+    <Project Path="refs/core-cs/src/Core.Streams/Core.Streams.csproj" />
+    <Project Path="refs/core-cs/src/Core.Testkit/Core.Testkit.csproj" />
+  </Folder>
+  <Folder Name="/refs/core-cs/test/">
+    <Project Path="refs/core-cs/test/Core.Base.Tests/Core.Base.Tests.csproj" />
+    <Project Path="refs/core-cs/test/Core.Net.I2p.Tests/Core.Net.I2p.Tests.csproj" />
+    <Project Path="refs/core-cs/test/Core.Net.Upnp.Tests/Core.Net.Upnp.Tests.csproj" />
+    <Project Path="refs/core-cs/test/Core.Omnikit.Tests/Core.Omnikit.Tests.csproj" />
+    <Project Path="refs/core-cs/test/Core.Pipelines.Tests/Core.Pipelines.Tests.csproj" />
+    <Project Path="refs/core-cs/test/Core.RocketPack.DefinitionCompiler.Tests/Core.RocketPack.DefinitionCompiler.Tests.csproj" />
+    <Project Path="refs/core-cs/test/Core.RocketPack.Tests/Core.RocketPack.Tests.csproj" />
+    <Project Path="refs/core-cs/test/Core.Serialization.Tests/Core.Serialization.Tests.csproj" />
+    <Project Path="refs/core-cs/test/Core.Storages.Tests/Core.Storages.Tests.csproj" />
+    <Project Path="refs/core-cs/test/Core.Streams.Tests/Core.Streams.Tests.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Axus.Service/Axus.Service.csproj" />
+    <Project Path="src/Axus.Ui.Desktop/Axus.Ui.Desktop.csproj" />
+    <Project Path="src/Axus.Updater/Axus.Updater.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/Axus.Service.Tests/Axus.Service.Tests.csproj" />
+  </Folder>
+</Solution>

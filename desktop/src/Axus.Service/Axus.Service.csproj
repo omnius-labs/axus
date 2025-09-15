@@ -1,0 +1,32 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Update="Assets/Dir/normal.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>assets/dir/normal.png</Link>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\refs\core-cs\src\Core.Omnikit\Core.Omnikit.csproj" />
+    <ProjectReference Include="..\..\refs\core-cs\src\Core.Collections\Core.Collections.csproj" />
+    <ProjectReference Include="..\..\refs\core-cs\src\Core.Streams\Core.Streams.csproj" />
+    <ProjectReference Include="..\..\refs\core-cs\src\Core.RocketPack\Core.RocketPack.csproj" />
+    <ProjectReference Include="..\..\refs\core-cs\src\Core.Serialization\Core.Serialization.csproj" />
+    <ProjectReference Include="..\..\refs\core-cs\src\Core.Base\Core.Base.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NLog" />
+    <PackageReference Include="LiteDB" />
+    <PackageReference Include="SharpCompress" />
+    <PackageReference Include="Magick.NET-Q16-AnyCPU" />
+    <PackageReference Include="SixLabors.ImageSharp" />
+    <PackageReference Include="Generator.Equals" />
+  </ItemGroup>
+
+</Project>

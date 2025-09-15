@@ -1,0 +1,38 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "gen-envfile",
+            "windows": {
+                "command": "pwsh",
+                "args": ["-File", "${workspaceFolder}/eng/gen-envfile-win.ps1"]
+            },
+            "linux": {
+                "command": "bash",
+                "args": ["${workspaceFolder}/eng/gen-envfile-linux.sh"]
+            },
+            "osx": {
+                "command": "bash",
+                "args": ["${workspaceFolder}/eng/gen-envfile-mac.sh"]
+            }
+        },
+        {
+            "label": "build",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "${workspaceFolder}/src/Axus.Ui.Desktop/Axus.Ui.Desktop.csproj",
+                "/property:GenerateFullPaths=true",
+                "/consoleloggerparameters:NoSummary"
+            ],
+            "options": {
+                "env": {
+                    "BuildTargetName": "vscode"
+                }
+            },
+            "problemMatcher": "$msCompile",
+            "dependsOn": "gen-envfile"
+        }
+    ]
+}

@@ -1,0 +1,71 @@
+name: test-slim
+
+on:
+  push:
+    branches:
+      - "**"
+      - "!main"
+      - "!releases/*"
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!**.md"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  StableTest: false
+  # ContinuousIntegrationBuild: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+      - name: Setup dotnet
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+      - name: Setup dotnet tool
+        run: dotnet tool restore
+      - name: Install dependencies
+        run: dotnet restore
+      - name: format check
+        run: dotnet format --verify-no-changes
+      - name: Test
+        run: dotnet test --no-restore
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+      - name: Setup dotnet
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+      - name: Install dependencies
+        run: dotnet restore
+      - name: Test
+        run: dotnet test --no-restore
+  macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+      - name: Setup dotnet
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+      - name: Install dependencies
+        run: dotnet restore
+      - name: Test
+        run: dotnet test --no-restore

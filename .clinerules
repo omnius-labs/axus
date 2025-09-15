@@ -1,7 +1,0 @@
-## Coding
-- Follow the official Rust style guide
-- Use rustfmt and clippy for formatting and linting
-- Prefer the 2024 edition syntax and features
-- Always use the module naming pattern `<module>.rs` instead of `mod.rs`
-    - For submodules, create a directory with the same name as the module and place the module file inside
-        - Example: For module `config`, use `config.rs` rather than `config/mod.rs`

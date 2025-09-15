@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "ui-desktop",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "args": ["-s", "./storage", "-v", "true"],
+            "cwd": "${workspaceFolder}/tmp",
+            "stopAtEntry": false,
+            "console": "internalConsole",
+            "windows": {
+                "program": "${workspaceFolder}/tmp/bin/win-vscode/Omnius.Axus.Ui.Desktop/Debug/net8.0/Omnius.Axus.Ui.Desktop.dll",
+                "envFile": "${workspaceFolder}/.env"
+            },
+            "linux": {
+                "program": "${workspaceFolder}/tmp/bin/linux-vscode/Omnius.Axus.Ui.Desktop/Debug/net8.0/Omnius.Axus.Ui.Desktop.dll",
+                "envFile": "${workspaceFolder}/.env"
+            },
+            "osx": {
+                "program": "${workspaceFolder}/tmp/bin/osx-vscode/Omnius.Axus.Ui.Desktop/Debug/net8.0/Omnius.Axus.Ui.Desktop.dll",
+                "envFile": "${workspaceFolder}/.env"
+            }
+        }
+    ]
+}

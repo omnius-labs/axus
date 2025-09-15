@@ -1,0 +1,60 @@
+<!-- https://github.com/amwx/FluentAvalonia/blob/master/src/FluentAvalonia/Styling/ControlThemes/BasicControls/CheckBoxStyles.axaml -->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="using:FluentAvalonia.UI.Controls"
+        xmlns:scg="clr-namespace:System.Collections;assembly=netstandard"
+        xmlns:sys="clr-namespace:System;assembly=netstandard"
+        xmlns:skp="clr-namespace:Avalonia.Svg.Skia;assembly=Avalonia.Svg.Skia">
+    <Design.PreviewWith>
+        <StackPanel Orientation="Vertical" MinWidth="500">
+            <StackPanel.Styles>
+                <Style Selector="Label.separator" >
+                    <Setter Property="Height" Value="32" />
+                    <Setter Property="Background" Value="Gray" />
+                    <Setter Property="VerticalContentAlignment" Value="Center" />
+                    <Setter Property="HorizontalContentAlignment" Value="Center" />
+                </Style>
+            </StackPanel.Styles>
+
+            <Label Classes="separator" Content="Thumbnail" />
+            <RadioButton Classes="Thumbnail" IsHitTestVisible="True" Width="256" Height="256"
+                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
+                <DockPanel Margin="8">
+                    <TextBlock DockPanel.Dock="Bottom" Grid.Row="1" Text="Test"
+                               TextWrapping="Wrap" Margin="8" HorizontalAlignment="Center" />
+                    <Panel HorizontalAlignment="Center"  MaxWidth="256" MaxHeight="256">
+                        <skp:Svg Path="/Assets/settings.svg" />
+                    </Panel>
+                </DockPanel>
+            </RadioButton>
+
+        </StackPanel>
+    </Design.PreviewWith>
+
+    <Style Selector="RadioButton.Thumbnail">
+        <Setter Property="BorderBrush" Value="#e1e1e1" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Background="{TemplateBinding Background}"
+                        BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}"
+                        CornerRadius="{TemplateBinding CornerRadius}">
+
+                    <ContentPresenter Name="ContentPresenter"
+                                      Content="{TemplateBinding Content}"
+                                      Margin="{TemplateBinding Padding}"
+                                      HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                      VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                      Foreground="{DynamicResource CheckBoxForegroundUnchecked}"/>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+
+        <Style Selector="^:checked /template/ Border">
+            <Setter Property="BorderBrush" Value="#a6a6a6" />
+            <Setter Property="Background" Value="#3f9ea3ff" />
+        </Style>
+
+    </Style>
+</Styles>

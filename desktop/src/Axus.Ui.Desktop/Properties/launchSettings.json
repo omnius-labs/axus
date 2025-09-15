@@ -1,0 +1,9 @@
+{
+    "profiles": {
+        "Axus.Ui.Desktop": {
+            "commandLineArgs": "\"-s\" \"./storage\" \"-v\" \"true\"",
+            "commandName": "Project",
+            "workingDirectory": "../../tmp"
+        }
+    }
+}

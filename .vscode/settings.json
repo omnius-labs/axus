@@ -35,6 +35,7 @@
         "rocketpack",
         "rocksdb",
         "rowid",
+        "rsplit",
         "rupnp",
         "rustls",
         "Seedable",

@@ -82,12 +82,9 @@ impl SessionAccepter {
 
     pub async fn accept(&self, typ: &SessionType) -> Result<Session> {
         let mut receivers = self.receivers.lock().await;
-        let receiver = receivers.get_mut(typ).ok_or_else(|| {
-            Error::builder()
-                .kind(ErrorKind::UnsupportedType)
-                .message("unsupported session type")
-                .build()
-        })?;
+        let receiver = receivers
+            .get_mut(typ)
+            .ok_or_else(|| Error::builder().kind(ErrorKind::UnsupportedType).message("unsupported session type").build())?;
 
         receiver
             .recv()
@@ -197,10 +194,7 @@ impl Inner {
             let received_session_request_message: V1RequestMessage = stream.receiver.lock().await.recv_message().await?;
             let typ = match received_session_request_message.request_type {
                 V1RequestType::Unknown => {
-                    return Err(Error::builder()
-                        .kind(ErrorKind::UnsupportedType)
-                        .message("unsupported request type")
-                        .build());
+                    return Err(Error::builder().kind(ErrorKind::UnsupportedType).message("unsupported request type").build());
                 }
                 V1RequestType::NodeFinder => SessionType::NodeFinder,
                 V1RequestType::FileExchanger => SessionType::FileExchanger,

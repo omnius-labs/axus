@@ -220,9 +220,7 @@ impl TaskEncoder {
             let cursor = Cursor::new(bytes_slice);
             let mut reader = BufReader::new(cursor);
 
-            uncommitted_blocks = self
-                .encode_bytes(&mut reader, &uncommitted_file.id, uncommitted_file.block_size, rank)
-                .await?;
+            uncommitted_blocks = self.encode_bytes(&mut reader, &uncommitted_file.id, uncommitted_file.block_size, rank).await?;
             all_uncommitted_blocks.extend(uncommitted_blocks.iter().cloned());
             current_block_hashes = uncommitted_blocks.iter().map(|block| block.block_hash.clone()).collect();
 
@@ -252,9 +250,7 @@ impl TaskEncoder {
                 self.blocks_storage.delete(path.as_str()).await?;
             }
 
-            self.file_publisher_repo
-                .commit_file_without_blocks(&new_committed_file, &uncommitted_file.id)
-                .await?;
+            self.file_publisher_repo.commit_file_without_blocks(&new_committed_file, &uncommitted_file.id).await?;
 
             return Ok(());
         }

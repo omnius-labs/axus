@@ -89,10 +89,7 @@ impl TaskCommunicator {
         *self.join_handle.lock().await = Some(tokio::spawn(async move {
             loop {
                 // 終了済みのタスクを削除
-                this.communicate_join_handles
-                    .lock()
-                    .await
-                    .retain(|join_handle| !join_handle.is_finished());
+                this.communicate_join_handles.lock().await.retain(|join_handle| !join_handle.is_finished());
 
                 if let Some(status) = this.session_receiver.lock().await.recv().await {
                     let communicator = this.clone();
@@ -143,9 +140,7 @@ impl TaskCommunicator {
     }
 
     pub async fn handshake(session: &Session, node_profile: &NodeProfile) -> Result<NodeProfile> {
-        let send_hello_message = HelloMessage {
-            version: NodeFinderVersion::V1,
-        };
+        let send_hello_message = HelloMessage { version: NodeFinderVersion::V1 };
         session.stream.sender.lock().await.send_message(&send_hello_message).await?;
         let received_hello_message: HelloMessage = session.stream.receiver.lock().await.recv_message().await?;
 
@@ -248,12 +243,8 @@ impl TaskReceiver {
         {
             let mut received_data_message = self.status.received_data_message.lock();
             received_data_message.want_asset_keys.extend(data_message.want_asset_keys);
-            received_data_message
-                .give_asset_key_locations
-                .extend(data_message.give_asset_key_locations);
-            received_data_message
-                .push_asset_key_locations
-                .extend(data_message.push_asset_key_locations);
+            received_data_message.give_asset_key_locations.extend(data_message.give_asset_key_locations);
+            received_data_message.push_asset_key_locations.extend(data_message.push_asset_key_locations);
 
             received_data_message.want_asset_keys.shrink(1024 * 256);
             received_data_message.give_asset_key_locations.shrink(1024 * 256);
@@ -287,12 +278,8 @@ impl RocketMessage for HelloMessage {
     where
         Self: Sized,
     {
-        let version = NodeFinderVersion::from_bits(reader.get_u32()?).ok_or_else(|| {
-            RocketPackError::builder()
-                .kind(RocketPackErrorKind::InvalidFormat)
-                .message("invalid version")
-                .build()
-        })?;
+        let version = NodeFinderVersion::from_bits(reader.get_u32()?)
+            .ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).message("invalid version").build())?;
 
         Ok(Self { version })
     }
@@ -382,12 +369,7 @@ impl RocketMessage for DataMessage {
     where
         Self: Sized,
     {
-        let get_too_large_err = || {
-            RocketPackError::builder()
-                .kind(RocketPackErrorKind::TooLarge)
-                .message("len too large")
-                .build()
-        };
+        let get_too_large_err = || RocketPackError::builder().kind(RocketPackErrorKind::TooLarge).message("len too large").build();
 
         let len = reader.get_u32()? as usize;
         ensure_err!(len > 128, get_too_large_err);

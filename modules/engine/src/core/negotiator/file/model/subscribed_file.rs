@@ -35,10 +35,7 @@ impl sqlx::Type<sqlx::Sqlite> for SubscribedFileStatus {
 }
 
 impl sqlx::Encode<'_, sqlx::Sqlite> for SubscribedFileStatus {
-    fn encode_by_ref(
-        &self,
-        buf: &mut <sqlx::Sqlite as sqlx::Database>::ArgumentBuffer<'_>,
-    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+    fn encode_by_ref(&self, buf: &mut <sqlx::Sqlite as sqlx::Database>::ArgumentBuffer<'_>) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
         let s = match self {
             SubscribedFileStatus::Unknown => "Unknown",
             SubscribedFileStatus::Downloading => "Downloading",

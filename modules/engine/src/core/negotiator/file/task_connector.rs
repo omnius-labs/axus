@@ -179,13 +179,7 @@ impl TaskConnector {
             v1.into_iter().chain(v2.into_iter()).collect()
         };
 
-        let mut asset_keys: Vec<AssetKey> = root_hashes
-            .into_iter()
-            .map(|hash| AssetKey {
-                typ: "file".to_string(),
-                hash,
-            })
-            .collect();
+        let mut asset_keys: Vec<AssetKey> = root_hashes.into_iter().map(|hash| AssetKey { typ: "file".to_string(), hash }).collect();
 
         let mut rng = ChaCha20Rng::from_os_rng();
         asset_keys.shuffle(&mut rng);
@@ -198,9 +192,9 @@ impl TaskConnector {
                 .into_iter()
                 .filter(|n| !connected_ids.contains(&n.id))
                 .collect();
-            let node_profile = node_profiles
-                .choose(&mut rng)
-                .ok_or_else(|| Error::builder().kind(ErrorKind::NotFound).message("node profile is not found").build())?;
+            let Some(node_profile) = node_profiles.choose(&mut rng) else {
+                continue;
+            };
 
             for addr in node_profile.addrs.iter() {
                 if let Ok(session) = self.session_connector.connect(addr, &SessionType::FileExchanger).await {

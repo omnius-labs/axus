@@ -165,91 +165,55 @@ impl From<std::io::Error> for Error {
 
 impl From<sqlx::Error> for Error {
     fn from(e: sqlx::Error) -> Self {
-        Error::builder()
-            .kind(ErrorKind::DatabaseError)
-            .message("Database operation failed")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::DatabaseError).message("Database operation failed").source(e).build()
     }
 }
 
 impl From<std::num::ParseIntError> for Error {
     fn from(e: std::num::ParseIntError) -> Error {
-        Error::builder()
-            .kind(ErrorKind::InvalidFormat)
-            .message("int parse error")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::InvalidFormat).message("int parse error").source(e).build()
     }
 }
 
 impl From<std::net::AddrParseError> for Error {
     fn from(e: std::net::AddrParseError) -> Error {
-        Error::builder()
-            .kind(ErrorKind::InvalidFormat)
-            .message("addr parse error")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::InvalidFormat).message("addr parse error").source(e).build()
     }
 }
 
 impl From<hex::FromHexError> for Error {
     fn from(e: hex::FromHexError) -> Self {
-        Error::builder()
-            .kind(ErrorKind::InvalidFormat)
-            .message("hex decode error")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::InvalidFormat).message("hex decode error").source(e).build()
     }
 }
 
 impl From<base64::DecodeError> for Error {
     fn from(e: base64::DecodeError) -> Self {
-        Error::builder()
-            .kind(ErrorKind::InvalidFormat)
-            .message("base64 decode error")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::InvalidFormat).message("base64 decode error").source(e).build()
     }
 }
 
 impl From<std::num::TryFromIntError> for Error {
     fn from(e: std::num::TryFromIntError) -> Self {
-        Error::builder()
-            .kind(ErrorKind::InvalidFormat)
-            .message("integer conversion error")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::InvalidFormat).message("integer conversion error").source(e).build()
     }
 }
 
 impl From<reqwest::Error> for Error {
     fn from(e: reqwest::Error) -> Self {
-        Error::builder()
-            .kind(ErrorKind::HttpClientError)
-            .message("http request failed")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::HttpClientError).message("http request failed").source(e).build()
     }
 }
 
 impl From<toml::de::Error> for Error {
     fn from(e: toml::de::Error) -> Error {
-        Error::builder()
-            .kind(ErrorKind::SerdeError)
-            .message("failed to parse toml file")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::SerdeError).message("failed to parse toml file").source(e).build()
     }
 }
 
 impl From<omnius_core_rocketpack::Error> for Error {
     fn from(e: omnius_core_rocketpack::Error) -> Error {
-        Error::builder()
-            .kind(ErrorKind::SerdeError)
-            .message("rocket pack error")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::SerdeError).message("rocket pack error").source(e).build()
     }
 }
 

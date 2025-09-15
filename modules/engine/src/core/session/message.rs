@@ -29,12 +29,8 @@ impl RocketMessage for HelloMessage {
     where
         Self: Sized,
     {
-        let version = SessionVersion::from_bits(reader.get_u32()?).ok_or_else(|| {
-            RocketPackError::builder()
-                .kind(RocketPackErrorKind::InvalidFormat)
-                .message("invalid version")
-                .build()
-        })?;
+        let version =
+            SessionVersion::from_bits(reader.get_u32()?).ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).message("invalid version").build())?;
 
         Ok(Self { version })
     }
@@ -98,12 +94,12 @@ pub struct V1RequestMessage {
 
 impl RocketMessage for V1RequestMessage {
     fn pack(writer: &mut RocketMessageWriter, value: &Self, _depth: u32) -> RocketPackResult<()> {
-        writer.put_u32(value.request_type.to_u32().ok_or_else(|| {
-            RocketPackError::builder()
-                .kind(RocketPackErrorKind::InvalidFormat)
-                .message("invalid request_type")
-                .build()
-        })?);
+        writer.put_u32(
+            value
+                .request_type
+                .to_u32()
+                .ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).message("invalid request_type").build())?,
+        );
 
         Ok(())
     }
@@ -112,12 +108,8 @@ impl RocketMessage for V1RequestMessage {
     where
         Self: Sized,
     {
-        let request_type: V1RequestType = FromPrimitive::from_u32(reader.get_u32()?).ok_or_else(|| {
-            RocketPackError::builder()
-                .kind(RocketPackErrorKind::InvalidFormat)
-                .message("invalid request_type")
-                .build()
-        })?;
+        let request_type: V1RequestType = FromPrimitive::from_u32(reader.get_u32()?)
+            .ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).message("invalid request_type").build())?;
 
         Ok(Self { request_type })
     }
@@ -137,12 +129,12 @@ pub struct V1ResultMessage {
 
 impl RocketMessage for V1ResultMessage {
     fn pack(writer: &mut RocketMessageWriter, value: &Self, _depth: u32) -> RocketPackResult<()> {
-        writer.put_u32(value.result_type.to_u32().ok_or_else(|| {
-            RocketPackError::builder()
-                .kind(RocketPackErrorKind::InvalidFormat)
-                .message("invalid request_type")
-                .build()
-        })?);
+        writer.put_u32(
+            value
+                .result_type
+                .to_u32()
+                .ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).message("invalid request_type").build())?,
+        );
 
         Ok(())
     }
@@ -151,12 +143,8 @@ impl RocketMessage for V1ResultMessage {
     where
         Self: Sized,
     {
-        let result_type: V1ResultType = FromPrimitive::from_u32(reader.get_u32()?).ok_or_else(|| {
-            RocketPackError::builder()
-                .kind(RocketPackErrorKind::InvalidFormat)
-                .message("invalid request_type")
-                .build()
-        })?;
+        let result_type: V1ResultType = FromPrimitive::from_u32(reader.get_u32()?)
+            .ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).message("invalid request_type").build())?;
 
         Ok(Self { result_type })
     }

@@ -163,11 +163,7 @@ impl From<std::io::Error> for Error {
 
 impl From<sqlx::Error> for Error {
     fn from(e: sqlx::Error) -> Self {
-        Error::builder()
-            .kind(ErrorKind::DatabaseError)
-            .message("Database operation failed")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::DatabaseError).message("Database operation failed").source(e).build()
     }
 }
 
@@ -187,65 +183,39 @@ impl<T> From<nom::Err<nom::error::Error<T>>> for Error {
     fn from(e: nom::Err<nom::error::Error<T>>) -> Error {
         match e {
             nom::Err::Incomplete(_) => Error::builder().kind(ErrorKind::InvalidFormat).message("nom incomplete").build(),
-            nom::Err::Error(e) => Error::builder()
-                .kind(ErrorKind::InvalidFormat)
-                .message(format!("nom error: {:?}", e.code))
-                .build(),
-            nom::Err::Failure(e) => Error::builder()
-                .kind(ErrorKind::InvalidFormat)
-                .message(format!("nom failure: {:?}", e.code))
-                .build(),
+            nom::Err::Error(e) => Error::builder().kind(ErrorKind::InvalidFormat).message(format!("nom error: {:?}", e.code)).build(),
+            nom::Err::Failure(e) => Error::builder().kind(ErrorKind::InvalidFormat).message(format!("nom failure: {:?}", e.code)).build(),
         }
     }
 }
 
 impl From<std::num::ParseIntError> for Error {
     fn from(e: std::num::ParseIntError) -> Error {
-        Error::builder()
-            .kind(ErrorKind::InvalidFormat)
-            .message("int parse error")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::InvalidFormat).message("int parse error").source(e).build()
     }
 }
 
 impl From<std::net::AddrParseError> for Error {
     fn from(e: std::net::AddrParseError) -> Error {
-        Error::builder()
-            .kind(ErrorKind::InvalidFormat)
-            .message("addr parse error")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::InvalidFormat).message("addr parse error").source(e).build()
     }
 }
 
 impl From<hex::FromHexError> for Error {
     fn from(e: hex::FromHexError) -> Self {
-        Error::builder()
-            .kind(ErrorKind::InvalidFormat)
-            .message("hex decode error")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::InvalidFormat).message("hex decode error").source(e).build()
     }
 }
 
 impl From<base64::DecodeError> for Error {
     fn from(e: base64::DecodeError) -> Self {
-        Error::builder()
-            .kind(ErrorKind::InvalidFormat)
-            .message("base64 decode error")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::InvalidFormat).message("base64 decode error").source(e).build()
     }
 }
 
 impl From<omnius_core_rocketpack::Error> for Error {
     fn from(e: omnius_core_rocketpack::Error) -> Error {
-        Error::builder()
-            .kind(ErrorKind::SerdeError)
-            .message("rocket pack error")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::SerdeError).message("rocket pack error").source(e).build()
     }
 }
 
@@ -277,61 +247,37 @@ impl From<omnius_core_omnikit::Error> for Error {
 
 impl From<std::num::TryFromIntError> for Error {
     fn from(e: std::num::TryFromIntError) -> Self {
-        Error::builder()
-            .kind(ErrorKind::InvalidFormat)
-            .message("Integer conversion error")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::InvalidFormat).message("Integer conversion error").source(e).build()
     }
 }
 
 impl From<rupnp::Error> for Error {
     fn from(e: rupnp::Error) -> Self {
-        Error::builder()
-            .kind(ErrorKind::UpnpError)
-            .message("UPnP operation failed")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::UpnpError).message("UPnP operation failed").source(e).build()
     }
 }
 
 impl From<local_ip_address::Error> for Error {
     fn from(e: local_ip_address::Error) -> Self {
-        Error::builder()
-            .kind(ErrorKind::NetworkError)
-            .message("Failed to get local IP address")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::NetworkError).message("Failed to get local IP address").source(e).build()
     }
 }
 
 impl From<reqwest::Error> for Error {
     fn from(e: reqwest::Error) -> Self {
-        Error::builder()
-            .kind(ErrorKind::HttpClientError)
-            .message("HTTP request failed")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::HttpClientError).message("HTTP request failed").source(e).build()
     }
 }
 
 impl From<rocksdb::Error> for Error {
     fn from(e: rocksdb::Error) -> Self {
-        Error::builder()
-            .kind(ErrorKind::DatabaseError)
-            .message("RocksDB operation failed")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::DatabaseError).message("RocksDB operation failed").source(e).build()
     }
 }
 
 impl From<fast_socks5::SocksError> for Error {
     fn from(e: fast_socks5::SocksError) -> Self {
-        Error::builder()
-            .kind(ErrorKind::NetworkError)
-            .message("Socks operation failed")
-            .source(e)
-            .build()
+        Error::builder().kind(ErrorKind::NetworkError).message("Socks operation failed").source(e).build()
     }
 }
 

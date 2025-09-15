@@ -320,7 +320,7 @@ INSERT INTO files (id, root_hash, file_path, rank, block_count_downloaded, block
         status = excluded.status,
         failed_reason = excluded.failed_reason,
         updated_at = excluded.updated_at
-"#
+"#,
         )
         .bind(row.id)
         .bind(row.root_hash)

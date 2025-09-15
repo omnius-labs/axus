@@ -85,7 +85,7 @@ impl TaskConnector {
         let this = self.clone();
         *self.join_handle.lock().await = Some(tokio::spawn(async move {
             loop {
-                this.sleeper.sleep(std::time::Duration::from_secs(1)).await;
+                this.sleeper.sleep(std::time::Duration::from_secs(20)).await;
                 let res = this.connect().await;
                 if let Err(e) = res {
                     warn!(error_message = e.to_string(), "connect failed");

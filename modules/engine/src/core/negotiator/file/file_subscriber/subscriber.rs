@@ -88,10 +88,7 @@ impl FileSubscriber {
     }
 
     pub async fn write_block(&self, root_hash: &OmniHash, block_hash: &OmniHash, value: Bytes) -> Result<()> {
-        let blocks = self
-            .file_subscriber_repo
-            .find_blocks_by_root_hash_and_block_hash(root_hash, block_hash)
-            .await?;
+        let blocks = self.file_subscriber_repo.find_blocks_by_root_hash_and_block_hash(root_hash, block_hash).await?;
         if blocks.is_empty() {
             return Ok(());
         }

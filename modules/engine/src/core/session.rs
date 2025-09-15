@@ -20,9 +20,7 @@ mod tests {
     use crate::{
         base::{
             Shutdown,
-            connection::{
-                ConnectionTcpAccepterImpl, ConnectionTcpConnectorImpl, FramedRecvExt as _, FramedSendExt as _, TcpProxyOption, TcpProxyType,
-            },
+            connection::{ConnectionTcpAccepterImpl, ConnectionTcpConnectorImpl, FramedRecvExt as _, FramedSendExt as _, TcpProxyOption, TcpProxyType},
         },
         core::session::{SessionAccepter, SessionConnector, model::SessionType},
     };

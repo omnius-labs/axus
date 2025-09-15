@@ -33,10 +33,7 @@ impl sqlx::Type<sqlx::Sqlite> for PublishedUncommittedFileStatus {
 }
 
 impl sqlx::Encode<'_, sqlx::Sqlite> for PublishedUncommittedFileStatus {
-    fn encode_by_ref(
-        &self,
-        buf: &mut <sqlx::Sqlite as sqlx::Database>::ArgumentBuffer<'_>,
-    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+    fn encode_by_ref(&self, buf: &mut <sqlx::Sqlite as sqlx::Database>::ArgumentBuffer<'_>) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
         let s = match self {
             PublishedUncommittedFileStatus::Unknown => "Unknown",
             PublishedUncommittedFileStatus::Pending => "Pending",

@@ -73,10 +73,7 @@ impl UpnpClient {
             return Ok(());
         }
 
-        Err(Error::builder()
-            .kind(ErrorKind::UpnpError)
-            .message("failed to delete port mapping")
-            .build())
+        Err(Error::builder().kind(ErrorKind::UpnpError).message("failed to delete port mapping").build())
     }
 
     #[allow(unused)]
@@ -102,10 +99,7 @@ impl UpnpClient {
             return Ok(res.unwrap());
         }
 
-        Err(Error::builder()
-            .kind(ErrorKind::UpnpError)
-            .message("failed to get generic port mapping")
-            .build())
+        Err(Error::builder().kind(ErrorKind::UpnpError).message("failed to get generic port mapping").build())
     }
 
     pub async fn get_external_ip_address() -> Result<HashMap<String, String>> {
@@ -129,10 +123,7 @@ impl UpnpClient {
             return Ok(res.unwrap());
         }
 
-        Err(Error::builder()
-            .kind(ErrorKind::UpnpError)
-            .message("failed to get external ip address")
-            .build())
+        Err(Error::builder().kind(ErrorKind::UpnpError).message("failed to get external ip address").build())
     }
 
     async fn action(urn: &URN, name: &str, args: &str) -> Result<HashMap<String, String>> {
@@ -155,10 +146,7 @@ impl UpnpClient {
             return Ok(result.unwrap());
         }
 
-        Err(Error::builder()
-            .kind(ErrorKind::UpnpError)
-            .message(format!("failed to UPnP action: {name}"))
-            .build())
+        Err(Error::builder().kind(ErrorKind::UpnpError).message(format!("failed to UPnP action: {name}")).build())
     }
 }
 

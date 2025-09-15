@@ -13,8 +13,7 @@ mod tests {
     use testresult::TestResult;
 
     use crate::base::connection::{
-        ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, FramedRecvExt as _, FramedSendExt as _,
-        TcpProxyOption, TcpProxyType,
+        ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, FramedRecvExt as _, FramedSendExt as _, TcpProxyOption, TcpProxyType,
     };
 
     #[tokio::test]

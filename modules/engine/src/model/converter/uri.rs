@@ -34,10 +34,7 @@ impl UriConverter {
 
         match version {
             1 => Self::decode_v1(text),
-            _ => Err(Error::builder()
-                .kind(ErrorKind::UnsupportedVersion)
-                .message("unsupported version")
-                .build()),
+            _ => Err(Error::builder().kind(ErrorKind::UnsupportedVersion).message("unsupported version").build()),
         }
     }
 

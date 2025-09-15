@@ -86,9 +86,7 @@ impl TaskDecoder {
     }
 
     pub async fn cancel(&self, file_id: &str) -> Result<()> {
-        self.file_subscriber_repo
-            .update_file_status(file_id, &SubscribedFileStatus::Canceled)
-            .await?;
+        self.file_subscriber_repo.update_file_status(file_id, &SubscribedFileStatus::Canceled).await?;
 
         let guard = self.current_decoding_file_id.lock();
 
@@ -179,24 +177,16 @@ impl TaskDecoder {
         }
 
         if file.rank == 0 {
-            let blocks = self
-                .file_subscriber_repo
-                .find_blocks_by_root_hash_and_rank(&file.root_hash, file.rank)
-                .await?;
+            let blocks = self.file_subscriber_repo.find_blocks_by_root_hash_and_rank(&file.root_hash, file.rank).await?;
 
             let block_hashes: Vec<OmniHash> = blocks.iter().map(|n| n.block_hash.clone()).collect();
 
             let mut f = File::open(file.file_path).await?;
             self.decode_bytes(&mut f, &file.root_hash, &block_hashes).await?;
 
-            self.file_subscriber_repo
-                .update_file_status(&file.id, &SubscribedFileStatus::Completed)
-                .await?;
+            self.file_subscriber_repo.update_file_status(&file.id, &SubscribedFileStatus::Completed).await?;
         } else {
-            let blocks = self
-                .file_subscriber_repo
-                .find_blocks_by_root_hash_and_rank(&file.root_hash, file.rank)
-                .await?;
+            let blocks = self.file_subscriber_repo.find_blocks_by_root_hash_and_rank(&file.root_hash, file.rank).await?;
 
             let block_hashes: Vec<OmniHash> = blocks.iter().map(|n| n.block_hash.clone()).collect();
 
@@ -250,10 +240,7 @@ impl TaskDecoder {
         for block_hash in block_hashes {
             let key = gen_block_path(root_hash, block_hash);
             let Some(block) = self.blocks_storage.get_value(&key).await? else {
-                return Err(Error::builder()
-                    .kind(ErrorKind::IoError)
-                    .message("decoding error: block is not found")
-                    .build());
+                return Err(Error::builder().kind(ErrorKind::IoError).message("decoding error: block is not found").build());
             };
             writer.write_all(&block).await?;
         }

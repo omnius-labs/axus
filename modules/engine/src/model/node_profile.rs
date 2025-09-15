@@ -44,12 +44,7 @@ impl RocketMessage for NodeProfile {
     where
         Self: Sized,
     {
-        let get_too_large_err = || {
-            RocketPackError::builder()
-                .kind(RocketPackErrorKind::TooLarge)
-                .message("len too large")
-                .build()
-        };
+        let get_too_large_err = || RocketPackError::builder().kind(RocketPackErrorKind::TooLarge).message("len too large").build();
 
         let mut id: Option<Vec<u8>> = None;
         let mut addrs: Option<Vec<OmniAddr>> = None;

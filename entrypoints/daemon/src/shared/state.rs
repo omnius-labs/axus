@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use omnius_axus_engine::service::AxusEngine;
+use omnius_axus_engine::engine::AxusEngine;
 
 use super::{AppConfig, info::AppInfo};
 
@@ -21,13 +21,8 @@ pub struct AppState {
 impl AppState {
     pub async fn new(info: AppInfo, conf: AppConfig) -> Result<Self> {
         let temp_dir = TempDir::new()?;
-        let engine = Arc::new(AxusEngine::new(&conf.state_dir, &temp_dir.path()).await?);
+        let engine = Arc::new(AxusEngine::new(&conf.state_dir, &conf.listen_addr, &temp_dir.path()).await?);
 
-        Ok(Self {
-            info,
-            conf,
-            engine,
-            temp_dir,
-        })
+        Ok(Self { info, conf, engine, temp_dir })
     }
 }

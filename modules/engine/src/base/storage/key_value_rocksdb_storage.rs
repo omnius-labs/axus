@@ -469,8 +469,7 @@ mod tests {
     async fn create_test_storage() -> TestResult<(tempfile::TempDir, KeyValueRocksdbStorage)> {
         let temp_dir = tempdir()?;
         let clock = FakeClockUtc::new(DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")?.into());
-        let tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>> =
-            Arc::new(Mutex::new(TsidProviderImpl::new(clock, FakeRandomBytesProvider::new(), 8)));
+        let tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>> = Arc::new(Mutex::new(TsidProviderImpl::new(clock, FakeRandomBytesProvider::new(), 8)));
         let storage = KeyValueRocksdbStorage::new(temp_dir.path(), tsid_provider.clone()).await?;
         Ok((temp_dir, storage))
     }
@@ -595,12 +594,7 @@ mod tests {
 
         // get_value_with_meta for existing key with meta
         storage
-            .put_value_with_meta(
-                "name_with_meta",
-                Bytes::from_static(b"value_with_meta"),
-                Bytes::from_static(b"meta1"),
-                true,
-            )
+            .put_value_with_meta("name_with_meta", Bytes::from_static(b"value_with_meta"), Bytes::from_static(b"meta1"), true)
             .await?;
         let result = storage.get_value_with_meta("name_with_meta").await?;
         assert!(result.is_some());
@@ -622,12 +616,7 @@ mod tests {
 
         // put_value with meta
         storage
-            .put_value_with_meta(
-                "name_with_meta",
-                Bytes::from_static(b"value_with_meta"),
-                Bytes::from_static(b"meta1"),
-                true,
-            )
+            .put_value_with_meta("name_with_meta", Bytes::from_static(b"value_with_meta"), Bytes::from_static(b"meta1"), true)
             .await?;
         let v = storage.get_value("name_with_meta").await?;
         assert_eq!(v, Some(b"value_with_meta".to_vec()));
@@ -671,12 +660,7 @@ mod tests {
 
         // get_meta for existing key with meta
         storage
-            .put_value_with_meta(
-                "name_with_meta",
-                Bytes::from_static(b"value_with_meta"),
-                Bytes::from_static(b"meta1"),
-                true,
-            )
+            .put_value_with_meta("name_with_meta", Bytes::from_static(b"value_with_meta"), Bytes::from_static(b"meta1"), true)
             .await?;
         let m = storage.get_meta("name_with_meta").await?;
         assert_eq!(m, Some(b"meta1".to_vec()));

@@ -173,12 +173,7 @@ SELECT COUNT(1)
         Ok(res > 0)
     }
 
-    pub async fn commit_file_with_blocks(
-        &self,
-        file: &PublishedCommittedFile,
-        blocks: &[PublishedCommittedBlock],
-        uncommitted_file_id: &str,
-    ) -> Result<()> {
+    pub async fn commit_file_with_blocks(&self, file: &PublishedCommittedFile, blocks: &[PublishedCommittedBlock], uncommitted_file_id: &str) -> Result<()> {
         let mut tx = self.db.begin().await?;
 
         let row = PublishedCommittedFileRow::from(file)?;

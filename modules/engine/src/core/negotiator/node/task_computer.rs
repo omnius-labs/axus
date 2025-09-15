@@ -159,36 +159,24 @@ impl TaskComputer {
         // Wantリクエストを受けたノードに配布する情報
         let mut give_asset_key_locations: HashMap<Arc<AssetKey>, HashSet<Arc<NodeProfile>>> = HashMap::new();
         for asset_key in my_get_push_asset_keys.iter() {
-            give_asset_key_locations
-                .entry(asset_key.clone())
-                .or_default()
-                .insert(my_node_profile.clone());
+            give_asset_key_locations.entry(asset_key.clone()).or_default().insert(my_node_profile.clone());
         }
         for data in received_data_map.values() {
             let iter1 = data.push_asset_key_locations.iter();
             let iter2 = data.give_asset_key_locations.iter();
             for (asset_key, node_profiles) in iter1.chain(iter2) {
-                give_asset_key_locations
-                    .entry(asset_key.clone())
-                    .or_default()
-                    .extend(node_profiles.iter().cloned());
+                give_asset_key_locations.entry(asset_key.clone()).or_default().extend(node_profiles.iter().cloned());
             }
         }
 
         // Kadexの距離が近いノードに配布する情報
         let mut push_asset_key_locations: HashMap<Arc<AssetKey>, HashSet<Arc<NodeProfile>>> = HashMap::new();
         for asset_key in my_get_push_asset_keys.iter() {
-            push_asset_key_locations
-                .entry(asset_key.clone())
-                .or_default()
-                .insert(my_node_profile.clone());
+            push_asset_key_locations.entry(asset_key.clone()).or_default().insert(my_node_profile.clone());
         }
         for data in received_data_map.values() {
             for (asset_key, node_profiles) in data.push_asset_key_locations.iter() {
-                give_asset_key_locations
-                    .entry(asset_key.clone())
-                    .or_default()
-                    .extend(node_profiles.iter().cloned());
+                give_asset_key_locations.entry(asset_key.clone()).or_default().extend(node_profiles.iter().cloned());
             }
         }
 
@@ -205,10 +193,7 @@ impl TaskComputer {
         for (id, data) in received_data_map.iter() {
             for target_key in data.want_asset_keys.iter() {
                 if let Some((target_key, node_profiles)) = give_asset_key_locations.get_key_value(target_key) {
-                    sending_give_asset_key_location_map
-                        .entry(id)
-                        .or_default()
-                        .insert(target_key.clone(), node_profiles);
+                    sending_give_asset_key_location_map.entry(id).or_default().insert(target_key.clone(), node_profiles);
                 }
             }
         }
@@ -217,10 +202,7 @@ impl TaskComputer {
         let mut sending_push_asset_key_location_map: HashMap<&[u8], HashMap<Arc<AssetKey>, &HashSet<Arc<NodeProfile>>>> = HashMap::new();
         for (target_key, node_profiles) in push_asset_key_locations.iter() {
             for id in Kadex::find(&my_node_profile.id, &target_key.hash.value, &ids, 1) {
-                sending_push_asset_key_location_map
-                    .entry(id)
-                    .or_default()
-                    .insert(target_key.clone(), node_profiles);
+                sending_push_asset_key_location_map.entry(id).or_default().insert(target_key.clone(), node_profiles);
             }
         }
 

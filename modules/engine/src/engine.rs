@@ -13,9 +13,7 @@ use omnius_core_omnikit::model::{OmniAddr, OmniSignType, OmniSigner};
 use crate::{
     base::{
         Shutdown,
-        connection::{
-            ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, TcpProxyOption, TcpProxyType,
-        },
+        connection::{ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, TcpProxyOption, TcpProxyType},
     },
     core::{
         negotiator::{NodeFinder, NodeFinderOption, NodeFinderRepo, NodeProfileFetcherImpl},
@@ -30,16 +28,15 @@ pub struct AxusEngine {
 }
 
 impl AxusEngine {
-    pub async fn new<S: AsRef<Path>, T: AsRef<Path>>(state_dir: S, _temp_dir: T) -> Result<Self> {
+    pub async fn new<S: AsRef<Path>, A: AsRef<str>, T: AsRef<Path>>(state_dir: S, listen_addr: A, _temp_dir: T) -> Result<Self> {
         Ok(AxusEngine {
-            node_finder: Self::create_node_finder(state_dir.as_ref(), 6666).await?,
+            node_finder: Self::create_node_finder(state_dir.as_ref(), listen_addr.as_ref()).await?,
         })
     }
 
     #[allow(unused)]
-    async fn create_node_finder(state_dir: &Path, port: u16) -> Result<NodeFinder> {
-        let tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync> =
-            Arc::new(ConnectionTcpAccepterImpl::new(&OmniAddr::create_tcp("127.0.0.1".parse()?, port), false).await?);
+    async fn create_node_finder(state_dir: &Path, listen_addr: &str) -> Result<NodeFinder> {
+        let tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync> = Arc::new(ConnectionTcpAccepterImpl::new(&OmniAddr::from_host_and_port_str(listen_addr)?, false).await?);
         let tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync> = Arc::new(
             ConnectionTcpConnectorImpl::new(TcpProxyOption {
                 typ: TcpProxyType::None,
@@ -53,8 +50,7 @@ impl AxusEngine {
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "TODO")?);
         let random_bytes_provider = Arc::new(Mutex::new(RandomBytesProviderImpl::new()));
 
-        let session_accepter =
-            Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), random_bytes_provider.clone(), sleeper.clone()).await);
+        let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), random_bytes_provider.clone(), sleeper.clone()).await);
         let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, random_bytes_provider));
 
         let node_ref_repo_dir = state_dir.join("repo");

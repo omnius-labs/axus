@@ -11,10 +11,7 @@ impl Kadex {
 
         for element in elements {
             let diff: Vec<u8> = target.iter().zip(*element).map(|(x, y)| x ^ y).collect();
-            list.push(SortEntry {
-                value: element.to_owned(),
-                diff,
-            });
+            list.push(SortEntry { value: element.to_owned(), diff });
         }
 
         let mut results: Vec<&SortEntry<'a>> = Vec::with_capacity(count);
@@ -49,11 +46,7 @@ impl Kadex {
             results[left] = entry;
         }
 
-        results
-            .into_iter()
-            .take_while(|v| v.value != base)
-            .map(|v| v.value)
-            .collect::<Vec<&'a [u8]>>()
+        results.into_iter().take_while(|v| v.value != base).map(|v| v.value).collect::<Vec<&'a [u8]>>()
     }
 
     #[allow(unused)]

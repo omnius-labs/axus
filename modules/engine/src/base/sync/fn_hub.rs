@@ -20,9 +20,7 @@ impl<T, Args> FnHub<T, Args> {
     }
 
     pub fn caller(&self) -> FnCaller<T, Args> {
-        FnCaller {
-            tasks: Arc::clone(&self.tasks),
-        }
+        FnCaller { tasks: Arc::clone(&self.tasks) }
     }
 
     pub fn listener(&self) -> FnListener<T, Args> {

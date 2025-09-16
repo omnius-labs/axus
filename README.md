@@ -1,15 +1,13 @@
 <p align="center">
-<img width="128" src="https://github.com/omnius-labs/axus-ui-desktop-cs/blob/main/docs/logo.png?raw=true" alt="Axus logo">
+<img width="128" src="https://github.com/omnius-labs/axus/blob/main/docs/logo.png?raw=true" alt="Axus logo">
 </p>
 
-<h1 align="center">Axus - Omnius File Exchanger (Desktop UI) (Work in Progress)</h1>
+<h1 align="center">Axus - Omnius File Exchanger (Work in Progress)</h1>
 
-[![test](https://github.com/omnius-labs/axus-ui-desktop-cs/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/omnius-labs/axus-ui-desktop-cs/actions/workflows/test.yml)
+[![test](https://github.com/omnius-labs/axus/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/omnius-labs/axus/actions/workflows/test.yml)
 [![chat](https://badges.gitter.im/omnius-labs.svg)](https://app.gitter.im/#/room/#omnius-labs:gitter.im)
 
 Axus is a peer-to-peer (P2P) file-sharing service.
-
-- Daemon: https://github.com/omnius-labs/axus-daemon-rs
 
 ## Features
 
@@ -27,4 +25,4 @@ This project is released under the MIT License. For more details, please refer t
 
 ## Contribution
 
-If you would like to contribute to this project, please contact us through [Issues](https://github.com/omnius-labs/axus-ui-desktop-cs/issues) or [Pull Requests](https://github.com/omnius-labs/axus-ui-desktop-cs/pulls) on GitHub.
+If you would like to contribute to this project, please contact us through [Issues](https://github.com/omnius-labs/axus/issues) or [Pull Requests](https://github.com/omnius-labs/axus/pulls) on GitHub.

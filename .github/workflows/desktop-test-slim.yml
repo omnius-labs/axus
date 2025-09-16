@@ -1,21 +1,22 @@
-name: test
+name: test-slim
 
 on:
   push:
     branches:
-      - "main"
-      - "releases/*"
-    paths:
       - "**"
-      - "!docs/**"
-      - "!**.md"
+      - "!main"
+      - "!releases/*"
+    paths:
+      - "desktop/**"
+      - "!desktop/docs/**"
+      - "!desktop/**.md"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  StableTest: true
+  StableTest: false
   # ContinuousIntegrationBuild: true
 
 jobs:

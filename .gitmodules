@@ -3,4 +3,4 @@
 	url = git@github.com:omnius-labs/core-rs
 [submodule "desktop/refs/core-cs"]
 	path = desktop/refs/core-cs
-	url = git@github.com:omnius-labs/core-rs
+	url = git@github.com:omnius-labs/core-cs

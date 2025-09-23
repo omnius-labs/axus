@@ -44,7 +44,7 @@ impl RocketMessage for NodeProfile {
     where
         Self: Sized,
     {
-        let get_too_large_err = || RocketPackError::builder().kind(RocketPackErrorKind::TooLarge).message("len too large").build();
+        let get_too_large_err = || RocketPackError::new(RocketPackErrorKind::TooLarge).with_message("len too large");
 
         let mut id: Option<Vec<u8>> = None;
         let mut addrs: Option<Vec<OmniAddr>> = None;
@@ -74,8 +74,8 @@ impl RocketMessage for NodeProfile {
         }
 
         Ok(Self {
-            id: id.ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).build())?,
-            addrs: addrs.ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).build())?,
+            id: id.ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat))?,
+            addrs: addrs.ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat))?,
         })
     }
 }

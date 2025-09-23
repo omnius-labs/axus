@@ -50,7 +50,7 @@ impl RocketMessage for HealthOutput {
         }
 
         Ok(Self {
-            git_tag: git_tag.ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).build())?,
+            git_tag: git_tag.ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat))?,
         })
     }
 }

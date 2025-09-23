@@ -84,12 +84,9 @@ impl SessionAccepter {
         let mut receivers = self.receivers.lock().await;
         let receiver = receivers
             .get_mut(typ)
-            .ok_or_else(|| Error::builder().kind(ErrorKind::UnsupportedType).message("unsupported session type").build())?;
+            .ok_or_else(|| Error::new(ErrorKind::UnsupportedType).with_message("unsupported session type"))?;
 
-        receiver
-            .recv()
-            .await
-            .ok_or_else(|| Error::builder().kind(ErrorKind::EndOfStream).message("receiver is closed").build())
+        receiver.recv().await.ok_or_else(|| Error::new(ErrorKind::EndOfStream).with_message("receiver is closed"))
     }
 }
 
@@ -188,13 +185,13 @@ impl Inner {
             let received_signature_message: V1SignatureMessage = stream.receiver.lock().await.recv_message().await?;
 
             if received_signature_message.cert.verify(send_nonce.as_slice()).is_err() {
-                return Err(Error::builder().kind(ErrorKind::InvalidFormat).message("Invalid signature").build());
+                return Err(Error::new(ErrorKind::InvalidFormat).with_message("Invalid signature"));
             }
 
             let received_session_request_message: V1RequestMessage = stream.receiver.lock().await.recv_message().await?;
             let typ = match received_session_request_message.request_type {
                 V1RequestType::Unknown => {
-                    return Err(Error::builder().kind(ErrorKind::UnsupportedType).message("unsupported request type").build());
+                    return Err(Error::new(ErrorKind::UnsupportedType).with_message("unsupported request type"));
                 }
                 V1RequestType::NodeFinder => SessionType::NodeFinder,
                 V1RequestType::FileExchanger => SessionType::FileExchanger,
@@ -222,10 +219,7 @@ impl Inner {
 
             Ok(())
         } else {
-            Err(Error::builder()
-                .kind(ErrorKind::UnsupportedVersion)
-                .message(format!("Unsupported session version: {version:?}"))
-                .build())
+            Err(Error::new(ErrorKind::UnsupportedType).with_message(format!("Unsupported session version: {}", version.bits())))
         }
     }
 }

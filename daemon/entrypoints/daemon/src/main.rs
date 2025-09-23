@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use clap::Parser as _;
-use omnius_core_base::error::OmniErrorBuilder;
 use shared::{AppConfig, AppInfo, AppState};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use valuable::Valuable;
+
+use omnius_core_base::error::OmniError as _;
 
 mod error;
 mod interface;
@@ -44,10 +45,7 @@ async fn run() -> Result<()> {
 
     let opts = Opts::parse();
     if !opts.config_path.is_file() {
-        return Err(Error::builder()
-            .kind(ErrorKind::NotFound)
-            .message(format!("Config file not found: {}", opts.config_path.display()))
-            .build());
+        return Err(Error::new(ErrorKind::NotFound).with_message(format!("Config file not found: {}", opts.config_path.display())));
     }
 
     let conf = AppConfig::load(opts.config_path).await?;

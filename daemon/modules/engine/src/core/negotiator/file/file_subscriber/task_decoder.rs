@@ -201,7 +201,7 @@ impl TaskDecoder {
             let merkle_layer = MerkleLayer::import(&mut bytes)?;
 
             if merkle_layer.rank != (file.rank - 1) {
-                return Err(Error::builder().kind(ErrorKind::InvalidFormat).build());
+                return Err(Error::new(ErrorKind::InvalidFormat));
             }
 
             let now = self.clock.now();
@@ -240,7 +240,7 @@ impl TaskDecoder {
         for block_hash in block_hashes {
             let key = gen_block_path(root_hash, block_hash);
             let Some(block) = self.blocks_storage.get_value(&key).await? else {
-                return Err(Error::builder().kind(ErrorKind::IoError).message("decoding error: block is not found").build());
+                return Err(Error::new(ErrorKind::IoError).with_message("decoding error: block is not found"));
             };
             writer.write_all(&block).await?;
         }

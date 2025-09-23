@@ -46,8 +46,8 @@ impl RocketMessage for AssetKey {
         }
 
         Ok(Self {
-            typ: typ.ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).build())?,
-            hash: hash.ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).build())?,
+            typ: typ.ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat))?,
+            hash: hash.ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat))?,
         })
     }
 }

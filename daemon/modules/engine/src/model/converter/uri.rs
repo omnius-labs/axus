@@ -34,7 +34,7 @@ impl UriConverter {
 
         match version {
             1 => Self::decode_v1(text),
-            _ => Err(Error::builder().kind(ErrorKind::UnsupportedVersion).message("unsupported version").build()),
+            _ => Err(Error::new(ErrorKind::UnsupportedType).with_message(format!("unsupported version: {version}"))),
         }
     }
 
@@ -46,7 +46,7 @@ impl UriConverter {
         let mut body = Bytes::from(BASE64.decode(body.as_bytes())?);
 
         if crc != CASTAGNOLI.checksum(body.as_ref()).to_le_bytes() {
-            return Err(Error::builder().kind(ErrorKind::InvalidFormat).message("invalid checksum").build());
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("invalid checksum"));
         }
 
         let v = T::import(&mut body)?;
@@ -58,13 +58,13 @@ impl UriConverter {
             let text = text.split_once('/').unwrap().1;
             return Ok(text);
         }
-        Err(Error::builder().kind(ErrorKind::InvalidFormat).message("invalid schema").build())
+        Err(Error::new(ErrorKind::InvalidFormat).with_message("invalid schema"))
     }
 
     fn try_parse_version(text: &str) -> Result<(&str, u32)> {
         let (text, version) = text
             .rsplit_once('.')
-            .ok_or_else(|| Error::builder().kind(ErrorKind::InvalidFormat).message("separator not found").build())?;
+            .ok_or_else(|| Error::new(ErrorKind::InvalidFormat).with_message("separator not found"))?;
         let version: u32 = version.parse()?;
         Ok((text, version))
     }
@@ -72,7 +72,7 @@ impl UriConverter {
     fn try_parse_body(text: &str) -> Result<(&str, &str)> {
         let (crc, body) = text
             .split_once('.')
-            .ok_or_else(|| Error::builder().kind(ErrorKind::InvalidFormat).message("separator not found").build())?;
+            .ok_or_else(|| Error::new(ErrorKind::InvalidFormat).with_message("separator not found"))?;
         Ok((crc, body))
     }
 }

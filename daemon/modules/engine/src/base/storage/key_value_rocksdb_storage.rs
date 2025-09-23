@@ -80,14 +80,14 @@ impl KeyValueRocksdbStorage {
                         txn.put_cf(&cf_names, &new_name, &old_id)?;
                         txn.delete_cf(&cf_names, &old_name)?;
                     } else {
-                        return Err(Error::builder().kind(ErrorKind::AlreadyExists).build());
+                        return Err(Error::new(ErrorKind::AlreadyExists));
                     }
                 } else {
                     txn.put_cf(&cf_names, new_name, &old_id)?;
                     txn.delete_cf(&cf_names, old_name)?;
                 }
             } else {
-                return Err(Error::builder().kind(ErrorKind::NotFound).build());
+                return Err(Error::new(ErrorKind::NotFound));
             }
 
             txn.commit()?;
@@ -143,7 +143,7 @@ impl KeyValueRocksdbStorage {
             if !overwrite {
                 let id = match txn.get_cf(&cf_names, &name)? {
                     Some(id) => id,
-                    None => return Err(Error::builder().kind(ErrorKind::AlreadyExists).build()),
+                    None => return Err(Error::new(ErrorKind::AlreadyExists)),
                 };
 
                 txn.put_cf(&cf_blocks, &id, &block)?;
@@ -219,7 +219,7 @@ impl KeyValueRocksdbStorage {
             if !overwrite {
                 let id = match txn.get_cf(&cf_names, &name)? {
                     Some(id) => id,
-                    None => return Err(Error::builder().kind(ErrorKind::AlreadyExists).build()),
+                    None => return Err(Error::new(ErrorKind::AlreadyExists)),
                 };
 
                 txn.put_cf(&cf_blocks, &id, &block)?;
@@ -286,7 +286,7 @@ impl KeyValueRocksdbStorage {
 
             let id = match txn.get_cf(&cf_names, &name)? {
                 Some(id) => id,
-                None => return Err(Error::builder().kind(ErrorKind::NotFound).message("key is not found").build()),
+                None => return Err(Error::new(ErrorKind::NotFound).with_message("key is not found")),
             };
 
             txn.put_cf(&cf_metas, &id, &meta)?;

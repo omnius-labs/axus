@@ -21,7 +21,7 @@ impl AppConfig {
         let path = path
             .as_ref()
             .to_str()
-            .ok_or_else(|| Error::builder().kind(ErrorKind::UnexpectedError).message("Invalid path").build())?;
+            .ok_or_else(|| Error::new(ErrorKind::UnexpectedError).with_message("Invalid path"))?;
 
         let toml = std::fs::read_to_string(path)?;
         let toml: AppConfigToml = toml::from_str(&toml)?;

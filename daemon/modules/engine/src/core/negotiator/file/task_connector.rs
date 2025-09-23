@@ -204,7 +204,7 @@ impl TaskConnector {
                         .await
                         .send(status)
                         .await
-                        .map_err(|e| Error::builder().kind(ErrorKind::UnexpectedError).source(e).build())?;
+                        .map_err(|e| Error::from_error(e, ErrorKind::UnexpectedError))?;
                     self.connected_node_profiles.lock().insert(node_profile.clone());
 
                     return Ok(());

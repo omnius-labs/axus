@@ -52,10 +52,7 @@ impl ConnectionTcpConnector for ConnectionTcpConnectorImpl {
                     let stream = FramedStream::new(reader, writer);
                     return Ok(stream);
                 }
-                return Err(Error::builder()
-                    .kind(ErrorKind::NetworkError)
-                    .message(format!("failed to connect by socks5: {addr:?}"))
-                    .build());
+                return Err(Error::new(ErrorKind::NetworkError).with_message(format!("failed to connect by socks5: {addr:?}")));
             }
         }
     }

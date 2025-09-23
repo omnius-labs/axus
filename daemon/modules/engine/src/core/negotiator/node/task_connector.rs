@@ -127,7 +127,7 @@ impl TaskConnector {
         let mut rng = ChaCha20Rng::from_os_rng();
         let node_profile = node_profiles
             .choose(&mut rng)
-            .ok_or_else(|| Error::builder().kind(ErrorKind::NotFound).message("node profile is not found").build())?;
+            .ok_or_else(|| Error::new(ErrorKind::NotFound).with_message("node profile is not found"))?;
 
         for addr in node_profile.addrs.iter() {
             if let Ok(session) = self.session_connector.connect(addr, &SessionType::NodeFinder).await {
@@ -137,7 +137,7 @@ impl TaskConnector {
                     .await
                     .send(status)
                     .await
-                    .map_err(|e| Error::builder().kind(ErrorKind::UnexpectedError).source(e).build())?;
+                    .map_err(|e| Error::from_error(e, ErrorKind::UnexpectedError))?;
 
                 self.connected_node_profiles.lock().insert(node_profile.clone());
 

@@ -23,7 +23,7 @@ impl FilePublisherRepo {
         let path = state_dir.as_ref().join("sqlite.db");
         let path = path
             .to_str()
-            .ok_or_else(|| Error::builder().kind(ErrorKind::UnexpectedError).message("Invalid path").build())?;
+            .ok_or_else(|| Error::new(ErrorKind::UnexpectedError).with_message("Invalid path"))?;
 
         let options = sqlx::sqlite::SqliteConnectOptions::new()
             .filename(path)

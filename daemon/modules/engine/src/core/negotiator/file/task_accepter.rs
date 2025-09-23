@@ -91,7 +91,7 @@ impl TaskAccepter {
             .await
             .send(status)
             .await
-            .map_err(|e| Error::builder().kind(ErrorKind::UnexpectedError).source(e).build())?;
+            .map_err(|e| Error::from_error(e, ErrorKind::UnexpectedError))?;
 
         Ok(())
     }

@@ -118,7 +118,7 @@ impl TaskCommunicator {
         {
             let mut sessions = self.sessions.write().await;
             if sessions.contains_key(&other_node_profile.id) {
-                return Err(Error::builder().kind(ErrorKind::AlreadyExists).message("Session already exists").build());
+                return Err(Error::new(ErrorKind::AlreadyExists).with_message("Session already exists"));
             }
             sessions.insert(other_node_profile.id.clone(), status.clone());
         }
@@ -155,7 +155,7 @@ impl TaskCommunicator {
 
             Ok(received_profile_message.node_profile)
         } else {
-            Err(Error::builder().kind(ErrorKind::UnsupportedVersion).message("Invalid version").build())
+            Err(Error::new(ErrorKind::UnsupportedType).with_message(format!("invalid version: {}", version.bits())))
         }
     }
 
@@ -278,8 +278,7 @@ impl RocketMessage for HelloMessage {
     where
         Self: Sized,
     {
-        let version = NodeFinderVersion::from_bits(reader.get_u32()?)
-            .ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).message("invalid version").build())?;
+        let version = NodeFinderVersion::from_bits(reader.get_u32()?).ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat).with_message("invalid version"))?;
 
         Ok(Self { version })
     }
@@ -369,7 +368,7 @@ impl RocketMessage for DataMessage {
     where
         Self: Sized,
     {
-        let get_too_large_err = || RocketPackError::builder().kind(RocketPackErrorKind::TooLarge).message("len too large").build();
+        let get_too_large_err = || RocketPackError::new(RocketPackErrorKind::TooLarge).with_message("len too large");
 
         let len = reader.get_u32()? as usize;
         ensure_err!(len > 128, get_too_large_err);

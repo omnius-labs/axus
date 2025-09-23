@@ -1,33 +1,34 @@
 use std::backtrace::Backtrace;
 
-use omnius_core_base::error::{OmniError, OmniErrorBuilder};
+use omnius_core_base::error::OmniError;
 
 pub struct Error {
     kind: ErrorKind,
     message: Option<String>,
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
-    backtrace: Option<Backtrace>,
-}
-
-pub struct ErrorBuilder {
-    inner: Error,
-}
-
-impl Error {
-    pub fn builder() -> ErrorBuilder {
-        ErrorBuilder {
-            inner: Self {
-                kind: ErrorKind::Unknown,
-                message: None,
-                source: None,
-                backtrace: None,
-            },
-        }
-    }
+    backtrace: Backtrace,
 }
 
 impl OmniError for Error {
     type ErrorKind = ErrorKind;
+
+    fn new(kind: Self::ErrorKind) -> Self {
+        Self {
+            kind,
+            message: None,
+            source: None,
+            backtrace: Backtrace::capture(),
+        }
+    }
+
+    fn from_error<E: Into<Box<dyn std::error::Error + Send + Sync>>>(source: E, kind: Self::ErrorKind) -> Self {
+        Self {
+            kind,
+            message: None,
+            source: Some(source.into()),
+            backtrace: Backtrace::disabled(),
+        }
+    }
 
     fn kind(&self) -> &Self::ErrorKind {
         &self.kind
@@ -37,8 +38,13 @@ impl OmniError for Error {
         self.message.as_deref()
     }
 
-    fn backtrace(&self) -> Option<&Backtrace> {
-        self.backtrace.as_ref()
+    fn backtrace(&self) -> &Backtrace {
+        &self.backtrace
+    }
+
+    fn with_message<S: Into<String>>(mut self, message: S) -> Self {
+        self.message = Some(message.into());
+        self
     }
 }
 
@@ -60,34 +66,6 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl OmniErrorBuilder<Error> for ErrorBuilder {
-    type ErrorKind = ErrorKind;
-
-    fn kind(mut self, kind: Self::ErrorKind) -> Self {
-        self.inner.kind = kind;
-        self
-    }
-
-    fn message<S: Into<String>>(mut self, message: S) -> Self {
-        self.inner.message = Some(message.into());
-        self
-    }
-
-    fn source<E: Into<Box<dyn std::error::Error + Send + Sync>>>(mut self, source: E) -> Self {
-        self.inner.source = Some(source.into());
-        self
-    }
-
-    fn backtrace(mut self) -> Self {
-        self.inner.backtrace = Some(Backtrace::capture());
-        self
-    }
-
-    fn build(self) -> Error {
-        self.inner
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErrorKind {
     Unknown,
@@ -104,12 +82,13 @@ pub enum ErrorKind {
 
     InvalidFormat,
     EndOfStream,
-    UnsupportedVersion,
     UnsupportedType,
     Reject,
     NotFound,
     AlreadyExists,
     RateLimitExceeded,
+    AlreadyConnected,
+    NotConnected,
 }
 
 impl std::fmt::Display for ErrorKind {
@@ -129,103 +108,100 @@ impl std::fmt::Display for ErrorKind {
 
             ErrorKind::InvalidFormat => write!(fmt, "invalid format"),
             ErrorKind::EndOfStream => write!(fmt, "end of stream"),
-            ErrorKind::UnsupportedVersion => write!(fmt, "unsupported version"),
             ErrorKind::UnsupportedType => write!(fmt, "unsupported type"),
             ErrorKind::Reject => write!(fmt, "reject"),
             ErrorKind::NotFound => write!(fmt, "not found"),
             ErrorKind::AlreadyExists => write!(fmt, "already exists"),
             ErrorKind::RateLimitExceeded => write!(fmt, "rate limit exceeded"),
+            ErrorKind::AlreadyConnected => write!(fmt, "already connected"),
+            ErrorKind::NotConnected => write!(fmt, "not_connected"),
         }
     }
 }
 
 impl From<std::convert::Infallible> for Error {
     fn from(_: std::convert::Infallible) -> Self {
-        Error::builder().build()
+        Error::new(ErrorKind::Unknown)
     }
 }
 
 impl From<std::array::TryFromSliceError> for Error {
     fn from(e: std::array::TryFromSliceError) -> Self {
-        Error::builder()
-            .kind(ErrorKind::InvalidFormat)
-            .message("failed to convert slice to array")
-            .source(e)
-            .build()
+        Error::from_error(e, ErrorKind::InvalidFormat).with_message("failed to convert slice to array")
     }
 }
 
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Error {
-        Error::builder().kind(ErrorKind::IoError).message("io error").source(e).build()
+        Error::from_error(e, ErrorKind::IoError).with_message("io error")
     }
 }
 
 impl From<sqlx::Error> for Error {
     fn from(e: sqlx::Error) -> Self {
-        Error::builder().kind(ErrorKind::DatabaseError).message("Database operation failed").source(e).build()
+        Error::from_error(e, ErrorKind::DatabaseError).with_message("Database operation failed")
     }
 }
 
 impl From<ed25519_dalek::pkcs8::Error> for Error {
     fn from(_: ed25519_dalek::pkcs8::Error) -> Self {
-        Error::builder().kind(ErrorKind::InvalidFormat).message("pkcs8 error").build()
+        Error::new(ErrorKind::InvalidFormat).with_message("pkcs8 error")
     }
 }
 
 impl From<ed25519_dalek::pkcs8::spki::Error> for Error {
     fn from(_: ed25519_dalek::pkcs8::spki::Error) -> Self {
-        Error::builder().kind(ErrorKind::InvalidFormat).message("pkcs8 spki error").build()
+        Error::new(ErrorKind::InvalidFormat).with_message("pkcs8 spki error")
     }
 }
 
 impl<T> From<nom::Err<nom::error::Error<T>>> for Error {
     fn from(e: nom::Err<nom::error::Error<T>>) -> Error {
         match e {
-            nom::Err::Incomplete(_) => Error::builder().kind(ErrorKind::InvalidFormat).message("nom incomplete").build(),
-            nom::Err::Error(e) => Error::builder().kind(ErrorKind::InvalidFormat).message(format!("nom error: {:?}", e.code)).build(),
-            nom::Err::Failure(e) => Error::builder().kind(ErrorKind::InvalidFormat).message(format!("nom failure: {:?}", e.code)).build(),
+            nom::Err::Incomplete(_) => Error::new(ErrorKind::InvalidFormat).with_message("nom incomplete"),
+            nom::Err::Error(e) => Error::new(ErrorKind::InvalidFormat).with_message(format!("nom error: {:?}", e.code)),
+            nom::Err::Failure(e) => Error::new(ErrorKind::InvalidFormat).with_message(format!("nom failure: {:?}", e.code)),
         }
     }
 }
 
 impl From<std::num::ParseIntError> for Error {
     fn from(e: std::num::ParseIntError) -> Error {
-        Error::builder().kind(ErrorKind::InvalidFormat).message("int parse error").source(e).build()
+        Error::from_error(e, ErrorKind::InvalidFormat).with_message("int parse error")
     }
 }
 
 impl From<std::net::AddrParseError> for Error {
     fn from(e: std::net::AddrParseError) -> Error {
-        Error::builder().kind(ErrorKind::InvalidFormat).message("addr parse error").source(e).build()
+        Error::from_error(e, ErrorKind::InvalidFormat).with_message("addr parse error")
     }
 }
 
 impl From<hex::FromHexError> for Error {
     fn from(e: hex::FromHexError) -> Self {
-        Error::builder().kind(ErrorKind::InvalidFormat).message("hex decode error").source(e).build()
+        Error::from_error(e, ErrorKind::InvalidFormat).with_message("hex decode error")
     }
 }
 
 impl From<base64::DecodeError> for Error {
     fn from(e: base64::DecodeError) -> Self {
-        Error::builder().kind(ErrorKind::InvalidFormat).message("base64 decode error").source(e).build()
+        Error::from_error(e, ErrorKind::InvalidFormat).with_message("base64 decode error")
     }
 }
 
 impl From<omnius_core_rocketpack::Error> for Error {
     fn from(e: omnius_core_rocketpack::Error) -> Error {
-        Error::builder().kind(ErrorKind::SerdeError).message("rocket pack error").source(e).build()
+        Error::from_error(e, ErrorKind::SerdeError).with_message("rocket pack error")
     }
 }
 
 impl From<omnius_core_migration::Error> for Error {
     fn from(e: omnius_core_migration::Error) -> Self {
         match e.kind() {
-            omnius_core_migration::ErrorKind::Unknown => Error::builder().kind(ErrorKind::Unknown).source(e).build(),
-            omnius_core_migration::ErrorKind::IoError => Error::builder().kind(ErrorKind::IoError).source(e).build(),
-            omnius_core_migration::ErrorKind::DatabaseError => Error::builder().kind(ErrorKind::TimeError).source(e).build(),
-            omnius_core_migration::ErrorKind::InvalidFormat => Error::builder().kind(ErrorKind::InvalidFormat).source(e).build(),
+            omnius_core_migration::ErrorKind::Unknown => Error::from_error(e, ErrorKind::Unknown),
+            omnius_core_migration::ErrorKind::IoError => Error::from_error(e, ErrorKind::IoError),
+            omnius_core_migration::ErrorKind::DatabaseError => Error::from_error(e, ErrorKind::TimeError),
+            omnius_core_migration::ErrorKind::InvalidFormat => Error::from_error(e, ErrorKind::InvalidFormat),
         }
     }
 }
@@ -233,56 +209,58 @@ impl From<omnius_core_migration::Error> for Error {
 impl From<omnius_core_omnikit::Error> for Error {
     fn from(e: omnius_core_omnikit::Error) -> Self {
         match e.kind() {
-            omnius_core_omnikit::ErrorKind::Unknown => Error::builder().kind(ErrorKind::Unknown).source(e).build(),
-            omnius_core_omnikit::ErrorKind::SerdeError => Error::builder().kind(ErrorKind::SerdeError).source(e).build(),
-            omnius_core_omnikit::ErrorKind::IoError => Error::builder().kind(ErrorKind::IoError).source(e).build(),
-            omnius_core_omnikit::ErrorKind::UnexpectedError => Error::builder().kind(ErrorKind::UnexpectedError).source(e).build(),
-            omnius_core_omnikit::ErrorKind::InvalidFormat => Error::builder().kind(ErrorKind::InvalidFormat).source(e).build(),
-            omnius_core_omnikit::ErrorKind::EndOfStream => Error::builder().kind(ErrorKind::EndOfStream).source(e).build(),
-            omnius_core_omnikit::ErrorKind::UnsupportedVersion => Error::builder().kind(ErrorKind::UnsupportedVersion).source(e).build(),
-            omnius_core_omnikit::ErrorKind::UnsupportedType => Error::builder().kind(ErrorKind::UnsupportedType).source(e).build(),
+            omnius_core_omnikit::ErrorKind::Unknown => Error::from_error(e, ErrorKind::Unknown),
+            omnius_core_omnikit::ErrorKind::SerdeError => Error::from_error(e, ErrorKind::SerdeError),
+            omnius_core_omnikit::ErrorKind::IoError => Error::from_error(e, ErrorKind::IoError),
+            omnius_core_omnikit::ErrorKind::UnexpectedError => Error::from_error(e, ErrorKind::UnexpectedError),
+
+            omnius_core_omnikit::ErrorKind::InvalidFormat => Error::from_error(e, ErrorKind::InvalidFormat),
+            omnius_core_omnikit::ErrorKind::EndOfStream => Error::from_error(e, ErrorKind::EndOfStream),
+            omnius_core_omnikit::ErrorKind::UnsupportedType => Error::from_error(e, ErrorKind::UnsupportedType),
+            omnius_core_omnikit::ErrorKind::AlreadyConnected => Error::from_error(e, ErrorKind::AlreadyConnected),
+            omnius_core_omnikit::ErrorKind::NotConnected => Error::from_error(e, ErrorKind::NotConnected),
         }
     }
 }
 
 impl From<std::num::TryFromIntError> for Error {
     fn from(e: std::num::TryFromIntError) -> Self {
-        Error::builder().kind(ErrorKind::InvalidFormat).message("Integer conversion error").source(e).build()
+        Error::from_error(e, ErrorKind::InvalidFormat).with_message("Integer conversion error")
     }
 }
 
 impl From<rupnp::Error> for Error {
     fn from(e: rupnp::Error) -> Self {
-        Error::builder().kind(ErrorKind::UpnpError).message("UPnP operation failed").source(e).build()
+        Error::from_error(e, ErrorKind::UpnpError).with_message("UPnP operation failed")
     }
 }
 
 impl From<local_ip_address::Error> for Error {
     fn from(e: local_ip_address::Error) -> Self {
-        Error::builder().kind(ErrorKind::NetworkError).message("Failed to get local IP address").source(e).build()
+        Error::from_error(e, ErrorKind::NetworkError).with_message("Failed to get local IP address")
     }
 }
 
 impl From<reqwest::Error> for Error {
     fn from(e: reqwest::Error) -> Self {
-        Error::builder().kind(ErrorKind::HttpClientError).message("HTTP request failed").source(e).build()
+        Error::from_error(e, ErrorKind::HttpClientError).with_message("HTTP request failed")
     }
 }
 
 impl From<rocksdb::Error> for Error {
     fn from(e: rocksdb::Error) -> Self {
-        Error::builder().kind(ErrorKind::DatabaseError).message("RocksDB operation failed").source(e).build()
+        Error::from_error(e, ErrorKind::DatabaseError).with_message("RocksDB operation failed")
     }
 }
 
 impl From<fast_socks5::SocksError> for Error {
     fn from(e: fast_socks5::SocksError) -> Self {
-        Error::builder().kind(ErrorKind::NetworkError).message("Socks operation failed").source(e).build()
+        Error::from_error(e, ErrorKind::NetworkError).with_message("Socks operation failed")
     }
 }
 
 impl From<tokio::task::JoinError> for Error {
     fn from(e: tokio::task::JoinError) -> Self {
-        Error::builder().kind(ErrorKind::TaskError).message("join failed").source(e).build()
+        Error::from_error(e, ErrorKind::TaskError).with_message("join failed")
     }
 }

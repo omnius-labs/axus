@@ -29,8 +29,7 @@ impl RocketMessage for HelloMessage {
     where
         Self: Sized,
     {
-        let version =
-            SessionVersion::from_bits(reader.get_u32()?).ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).message("invalid version").build())?;
+        let version = SessionVersion::from_bits(reader.get_u32()?).ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat).with_message("invalid version"))?;
 
         Ok(Self { version })
     }
@@ -98,7 +97,7 @@ impl RocketMessage for V1RequestMessage {
             value
                 .request_type
                 .to_u32()
-                .ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).message("invalid request_type").build())?,
+                .ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat).with_message("invalid request_type"))?,
         );
 
         Ok(())
@@ -108,8 +107,8 @@ impl RocketMessage for V1RequestMessage {
     where
         Self: Sized,
     {
-        let request_type: V1RequestType = FromPrimitive::from_u32(reader.get_u32()?)
-            .ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).message("invalid request_type").build())?;
+        let request_type: V1RequestType =
+            FromPrimitive::from_u32(reader.get_u32()?).ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat).with_message("invalid request_type"))?;
 
         Ok(Self { request_type })
     }
@@ -133,7 +132,7 @@ impl RocketMessage for V1ResultMessage {
             value
                 .result_type
                 .to_u32()
-                .ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).message("invalid request_type").build())?,
+                .ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat).with_message("invalid request_type"))?,
         );
 
         Ok(())
@@ -143,8 +142,8 @@ impl RocketMessage for V1ResultMessage {
     where
         Self: Sized,
     {
-        let result_type: V1ResultType = FromPrimitive::from_u32(reader.get_u32()?)
-            .ok_or_else(|| RocketPackError::builder().kind(RocketPackErrorKind::InvalidFormat).message("invalid request_type").build())?;
+        let result_type: V1ResultType =
+            FromPrimitive::from_u32(reader.get_u32()?).ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat).with_message("invalid request_type"))?;
 
         Ok(Self { result_type })
     }

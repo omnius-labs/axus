@@ -8,6 +8,12 @@
     },
     {
       "path": "./desktop"
+    },
+    {
+      "path": "./daemon/refs/core-rs"
+    },
+    {
+      "path": "./desktop/refs/core-cs"
     }
   ],
   "settings": {}

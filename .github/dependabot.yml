@@ -1,17 +1,19 @@
 version: 2
 updates:
-  - package-ecosystem: cargo
+  - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
     labels:
       - "dependabot"
+    ignore:
+      - dependency-name: "dtolnay/rust-toolchain"
     groups:
       dependencies:
         patterns:
           - "*"
-  - package-ecosystem: nuget
-    directory: "/"
+  - package-ecosystem: cargo
+    directory: "/daemon"
     schedule:
       interval: "weekly"
     labels:
@@ -20,14 +22,12 @@ updates:
       dependencies:
         patterns:
           - "*"
-  - package-ecosystem: github-actions
-    directory: "/"
+  - package-ecosystem: nuget
+    directory: "/ui-desktop"
     schedule:
-      interval: "daily"
+      interval: "weekly"
     labels:
       - "dependabot"
-    ignore:
-      - dependency-name: "dtolnay/rust-toolchain"
     groups:
       dependencies:
         patterns:

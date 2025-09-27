@@ -1,6 +1,7 @@
-name: test-slim
+name: daemon-test-slim
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - "**"
@@ -9,23 +10,26 @@ on:
     paths:
       - "daemon/**"
       - "!daemon/docs/**"
-      - "!daemon/**.md"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: ./daemon
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           submodules: "recursive"
 
       - name: Setup rust toolchain
-        uses: dtolnay/rust-toolchain@1.84.0
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - name: Setup cargo make
@@ -42,12 +46,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           submodules: "recursive"
 
       - name: Setup rust toolchain
-        uses: dtolnay/rust-toolchain@1.84.0
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - name: Setup cargo make

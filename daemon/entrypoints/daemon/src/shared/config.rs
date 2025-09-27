@@ -18,10 +18,7 @@ struct AppConfigToml {
 
 impl AppConfig {
     pub async fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path
-            .as_ref()
-            .to_str()
-            .ok_or_else(|| Error::new(ErrorKind::UnexpectedError).with_message("Invalid path"))?;
+        let path = path.as_ref().to_str().ok_or_else(|| Error::new(ErrorKind::UnexpectedError).with_message("Invalid path"))?;
 
         let toml = std::fs::read_to_string(path)?;
         let toml: AppConfigToml = toml::from_str(&toml)?;

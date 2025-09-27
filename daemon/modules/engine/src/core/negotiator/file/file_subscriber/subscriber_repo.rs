@@ -20,9 +20,7 @@ pub struct FileSubscriberRepo {
 impl FileSubscriberRepo {
     pub async fn new<P: AsRef<Path>>(state_dir: P, clock: Arc<dyn Clock<Utc> + Send + Sync>) -> Result<Self> {
         let path = state_dir.as_ref().join("sqlite.db");
-        let path = path
-            .to_str()
-            .ok_or_else(|| Error::new(ErrorKind::UnexpectedError).with_message("Invalid path"))?;
+        let path = path.to_str().ok_or_else(|| Error::new(ErrorKind::UnexpectedError).with_message("Invalid path"))?;
 
         let options = sqlx::sqlite::SqliteConnectOptions::new()
             .filename(path)

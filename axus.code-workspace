@@ -7,13 +7,13 @@
       "path": "./daemon"
     },
     {
-      "path": "./desktop"
+      "path": "./ui-desktop"
     },
     {
       "path": "./daemon/refs/core-rs"
     },
     {
-      "path": "./desktop/refs/core-cs"
+      "path": "./ui-desktop/refs/core-cs"
     }
   ],
   "settings": {}

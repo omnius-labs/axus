@@ -36,24 +36,24 @@ rand_core = "0.9.3"
 rand_chacha = "0.9.0"
 reqwest = { version = "0.12.23", features = ["json"] }
 anyhow = { version = "1.0.99", features = ["backtrace"] }
-async-trait = "0.1.88"
-chrono = { version = "0.4.41", features = ["serde"] }
-serde = { version = "1.0.219", features = ["derive", "rc"] }
-serde_json = "1.0.142"
+async-trait = "0.1.89"
+chrono = { version = "0.4.42", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+serde_json = "1.0.145"
 testcontainers = "0.25.0"
 tokio = { version = "1.47.1", features = ["full"] }
 tokio-util = { version = "0.7.16", features = ["full"] }
 tokio-stream = "0.1.17"
-tokio-postgres = { version = "0.7.13", features = ["with-chrono-0_4"] }
+tokio-postgres = { version = "0.7.14", features = ["with-chrono-0_4"] }
 tracing = { version = "0.1.41", features = ["valuable"] }
-tracing-subscriber = { version = "0.3.19", features = [
+tracing-subscriber = { version = "0.3.20", features = [
   "fmt",
   "json",
   "valuable",
   "env-filter",
 ] }
 valuable = { version = "0.1.1", features = ["derive"] }
-uuid = { version = "1.18.0", features = ["serde", "v4"] }
+uuid = { version = "1.18.1", features = ["serde", "v4"] }
 sqlx = { version = "0.8.6", features = [
   "postgres",
   "sqlite",
@@ -68,9 +68,9 @@ utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
 ring = "0.17.14"
 hex = "0.4.3"
 urlencoding = "2.1.3"
-hyper = "1.6.0"
+hyper = "1.7.0"
 tower = "0.5.2"
-thiserror = "2.0.14"
+thiserror = "2.0.17"
 jsonwebtoken = "9.3.1"
 validator = { version = "0.20", features = ["derive"] }
 headers = "0.4.1"
@@ -87,13 +87,13 @@ fast-socks5 = "0.10.0"
 rocksdb = { version = "0.24.0", default-features = false }
 sha3 = "0.10.8"
 ciborium = "0.2.2"
-bitflags = { version = "2.9.1", features = ["serde"] }
-tempfile = "3.20.0"
+bitflags = { version = "2.9.4", features = ["serde"] }
+tempfile = "3.23.0"
 crc = "3.3.0"
 testresult = "0.4.1"
 hkdf = "0.12.4"
 aes-gcm = "0.10.3"
-parking_lot = "0.12.4"
+parking_lot = "0.12.5"
 x25519-dalek = { version = "=3.0.0-pre.0", features = ["static_secrets"] }
 ed25519-dalek = { version = "=3.0.0-pre.0", features = [
   "alloc",
@@ -104,8 +104,8 @@ ed25519-dalek = { version = "=3.0.0-pre.0", features = [
 num-traits = "0.2.19"
 num-derive = "0.4.2"
 async-stream = "0.3.6"
-clap = { version = "4.5.44", features = ["wrap_help", "derive"] }
+clap = { version = "4.5.48", features = ["wrap_help", "derive"] }
 yamux = "0.13.6"
-toml = "0.9.5"
-backtrace = "0.3.75"
+toml = "0.9.7"
+backtrace = "0.3.76"
 strum = { version = "0.27.2", features = ["derive"] }

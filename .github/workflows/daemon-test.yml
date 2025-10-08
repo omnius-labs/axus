@@ -49,7 +49,7 @@ jobs:
       - name: Setup rust cache
         uses: Swatinem/rust-cache@v2.8.0
         with:
-          shared-key: test
+          shared-key: " ${{ matrix.os }}-test"
 
       - name: Lint
         run: cargo make lint

@@ -25,15 +25,16 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - name: Install LLVM and Clang
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "20.1"
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: "recursive"
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "20.1"
+          directory: ${{ runner.temp }}/llvm
 
       - name: Setup rust toolchain
         uses: dtolnay/rust-toolchain@stable

@@ -24,8 +24,11 @@ defaults:
     working-directory: ./ui-desktop
 
 jobs:
-  linux:
-    runs-on: ubuntu-latest
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Checkout branch
         uses: actions/checkout@v4
@@ -39,45 +42,12 @@ jobs:
 
       - name: Setup dotnet tool
         run: dotnet tool restore
+
       - name: Install dependencies
         run: dotnet restore
+
       - name: format check
         run: dotnet format --verify-no-changes
-      - name: Test
-        run: dotnet test --no-restore
 
-  windows:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout branch
-        uses: actions/checkout@v4
-        with:
-          submodules: "recursive"
-
-      - name: Setup dotnet
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 9.x
-
-      - name: Install dependencies
-        run: dotnet restore
-      - name: Test
-        run: dotnet test --no-restore
-
-  macos:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout branch
-        uses: actions/checkout@v4
-        with:
-          submodules: "recursive"
-
-      - name: Setup dotnet
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 9.x
-
-      - name: Install dependencies
-        run: dotnet restore
       - name: Test
         run: dotnet test --no-restore

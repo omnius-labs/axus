@@ -1,24 +1,27 @@
 use omnius_core_rocketpack::{EmptyRocketMessage, RocketMessage, RocketMessageReader, RocketMessageWriter};
 
-use crate::{prelude::*, shared::AppState};
+use crate::{
+    interface::adapter::{ApiRequest, ApiResult},
+    prelude::*,
+    shared::AppState,
+};
 
-pub async fn health(state: &AppState, _: EmptyRocketMessage) -> HealthOutput {
-    let res = HealthOutput {
+pub async fn health(state: &AppState, _: ApiRequest<EmptyRocketMessage>) -> ApiResult<HealthResult> {
+    ApiResult::Ok(HealthResult {
         git_tag: state.info.git_tag.to_string(),
-    };
-    res
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HealthOutput {
+pub struct HealthResult {
     pub git_tag: String,
 }
 
-impl HealthOutput {
+impl HealthResult {
     pub const MAX_GIH_TAG_LENGTH: usize = 256;
 }
 
-impl RocketMessage for HealthOutput {
+impl RocketMessage for HealthResult {
     fn pack(writer: &mut RocketMessageWriter, value: &Self, _depth: u32) -> RocketPackResult<()> {
         writer.put_u32(1);
         writer.put_str(&value.git_tag);

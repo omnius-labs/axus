@@ -1,25 +1,22 @@
 use tokio::net::TcpListener;
-
-use omnius_core_omnikit::service::remoting::{OmniRemotingDefaultErrorMessage, OmniRemotingListener};
 use tracing::warn;
 
-use crate::{prelude::*, shared::AppState};
+use omnius_core_omnikit::service::remoting::OmniRemotingListener;
 
-use super::features;
+use crate::{
+    interface::{adapter::OmniRemotingListenerAdapter, features},
+    prelude::*,
+    shared::AppState,
+};
 
+#[repr(u32)]
 #[derive(Debug, Clone, strum::FromRepr)]
 enum FunctionId {
-    Health,
+    Health = 0,
 
-    ConfigGet,
-    ConfigSet,
-
-    PublishedFile,
-
-    SubscribedFile,
-
-    SubscribedFileGet,
+    Other = 1,
 }
+
 pub struct RpcServer;
 
 impl RpcServer {
@@ -29,17 +26,17 @@ impl RpcServer {
                 error!(error = ?e)
             },
             _ = tokio::signal::ctrl_c() => {
-               Self::shutdown(&state).await;
+                Self::shutdown(&state).await;
             }
         }
         Ok(())
     }
 
     async fn shutdown(state: &AppState) {
-        state.engine.shutdown().await;
+        state.engine.as_ref().shutdown().await;
     }
 
-    async fn run(state: &AppState) -> Result<()> {
+    pub async fn run(state: &AppState) -> Result<()> {
         let tcp_listener = TcpListener::bind(state.conf.listen_addr.clone()).await?;
         info!(addr = state.conf.listen_addr, "listen");
 
@@ -47,18 +44,17 @@ impl RpcServer {
             let (tcp_stream, _) = tcp_listener.accept().await?;
             let (reader, writer) = tokio::io::split(tcp_stream);
 
-            let mut remoting_listener = OmniRemotingListener::<_, _, OmniRemotingDefaultErrorMessage>::new(reader, writer, 1024 * 1024);
-            remoting_listener.handshake().await?;
+            let remoting_listener = OmniRemotingListenerAdapter::new(OmniRemotingListener::<_, _>::new(reader, writer, 1024 * 1024).await?);
 
-            let function_id = remoting_listener.function_id()?;
-            let Some(function_id) = FunctionId::from_repr(function_id as usize) else {
+            let function_id = remoting_listener.function_id();
+            let Some(function_id) = FunctionId::from_repr(function_id) else {
                 warn!("unknown function id: {}", function_id);
                 continue;
             };
 
             match function_id {
-                FunctionId::Health => remoting_listener.listen_unary(async |p| features::health(state, p).await).await?,
-                _ => warn!("not supported"),
+                FunctionId::Health => remoting_listener.listen_unary(async |param| features::health(state, param).await).await?,
+                _ => warn!("not supported: {:?}", function_id),
             }
         }
     }

@@ -1,11 +1,12 @@
-name: ui-desktop-test
+name: test-ui-desktop-slim
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - "main"
-      - "releases/*"
+      - "**"
+      - "!main"
+      - "!releases/*"
     paths:
       - "ui-desktop/**"
       - "!ui-desktop/docs/**"
@@ -15,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  StableTest: true
+  StableTest: false
   # ContinuousIntegrationBuild: true
 
 defaults:

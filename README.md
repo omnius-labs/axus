@@ -4,8 +4,8 @@
 
 <h1 align="center">Axus - Omnius File Exchanger (Work in Progress)</h1>
 
-[![daemon-test](https://github.com/omnius-labs/axus/actions/workflows/daemon-test.yml/badge.svg)](https://github.com/omnius-labs/axus/actions/workflows/daemon-test.yml)
-[![ui-desktop-test](https://github.com/omnius-labs/axus/actions/workflows/ui-desktop-test.yml/badge.svg)](https://github.com/omnius-labs/axus/actions/workflows/ui-desktop-test.yml)
+[![test-daemon-all](https://github.com/omnius-labs/axus/actions/workflows/test-daemon-all.yml/badge.svg)](https://github.com/omnius-labs/axus/actions/workflows/test-daemon-all.yml)
+[![test-ui-desktop-all](https://github.com/omnius-labs/axus/actions/workflows/test-ui-desktop-all.yml/badge.svg)](https://github.com/omnius-labs/axus/actions/workflows/test-ui-desktop-all.yml)
 
 Axus is a peer-to-peer (P2P) file-sharing service.
 

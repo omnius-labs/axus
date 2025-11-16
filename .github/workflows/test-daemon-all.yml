@@ -1,12 +1,11 @@
-name: daemon-test-slim
+name: test-daemon-all
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - "**"
-      - "!main"
-      - "!release/*"
+      - "main"
+      - "release/*"
     paths:
       - "daemon/**"
       - "!daemon/docs/**"
@@ -26,10 +25,27 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
+
+      - name: Maximize build space (Linux)
+        if: runner.os == 'Linux'
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 1024
+          temp-reserve-mb: 4096
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           submodules: "recursive"
+
+      - name: restore timestamps
+        uses: chetan/git-restore-mtime-action@v2
 
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v2
@@ -48,12 +64,15 @@ jobs:
           version: latest
 
       - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2.8.1
+        uses: Swatinem/rust-cache@v2.8.0
         with:
-          shared-key: " ${{ matrix.os }}-test-slim"
+          shared-key: "${{ matrix.os }}-test"
+          cache-workspace-crates: "true"
+          workspaces: |
+            daemon -> target
 
       - name: Lint
         run: cargo make lint
 
       - name: Test
-        run: cargo test
+        run: cargo test --features "stable-test"

@@ -101,7 +101,7 @@ impl NodeFinder {
 
     fn gen_id() -> Vec<u8> {
         let mut rng = ChaCha20Rng::from_os_rng();
-        let mut id = [0_u8, 32];
+        let mut id = [0_u8; 32];
         rng.fill_bytes(&mut id);
         id.to_vec()
     }

@@ -24,7 +24,7 @@ impl std::str::FromStr for NodeProfile {
     }
 }
 
-impl RocketMessage for NodeProfile {
+impl RocketPackStruct for NodeProfile {
     fn pack(writer: &mut RocketMessageWriter, value: &Self, _depth: u32) -> RocketPackResult<()> {
         writer.put_u32(1);
         writer.put_bytes(&value.id);

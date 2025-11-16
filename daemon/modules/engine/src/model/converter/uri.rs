@@ -2,8 +2,6 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as BASE64};
 use crc::{CRC_32_ISCSI, Crc};
 use tokio_util::bytes::Bytes;
 
-use omnius_core_rocketpack::RocketMessage;
-
 use crate::prelude::*;
 
 const CASTAGNOLI: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
@@ -11,7 +9,7 @@ const CASTAGNOLI: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
 pub struct UriConverter;
 
 impl UriConverter {
-    pub fn encode<T: RocketMessage>(typ: &str, v: &T) -> Result<String> {
+    pub fn encode<T: RocketPackStruct>(typ: &str, v: &T) -> Result<String> {
         let body = v.export()?;
         let crc = CASTAGNOLI.checksum(&body).to_le_bytes();
 
@@ -28,7 +26,7 @@ impl UriConverter {
         Ok(s)
     }
 
-    pub fn decode<T: RocketMessage>(typ: &str, text: &str) -> Result<T> {
+    pub fn decode<T: RocketPackStruct>(typ: &str, text: &str) -> Result<T> {
         let text = Self::try_parse_schema(typ, text)?;
         let (text, version) = Self::try_parse_version(text)?;
 
@@ -38,7 +36,7 @@ impl UriConverter {
         }
     }
 
-    fn decode_v1<T: RocketMessage>(text: &str) -> Result<T> {
+    fn decode_v1<T: RocketPackStruct>(text: &str) -> Result<T> {
         let (crc, body) = Self::try_parse_body(text)?;
 
         let crc_bytes = BASE64.decode(crc)?;

@@ -2,6 +2,8 @@ use std::backtrace::Backtrace;
 
 use omnius_core_base::error::OmniError;
 
+use crate::prelude::*;
+
 pub struct Error {
     kind: ErrorKind,
     message: Option<String>,
@@ -189,9 +191,15 @@ impl From<base64::DecodeError> for Error {
     }
 }
 
-impl From<omnius_core_rocketpack::Error> for Error {
-    fn from(e: omnius_core_rocketpack::Error) -> Error {
-        Error::from_error(e, ErrorKind::SerdeError).with_message("rocket pack error")
+impl From<RocketPackEncoderError> for Error {
+    fn from(e: RocketPackEncoderError) -> Self {
+        Error::from_error(e, ErrorKind::SerdeError).with_message("rocket pack encode error")
+    }
+}
+
+impl From<RocketPackDecoderError> for Error {
+    fn from(e: RocketPackDecoderError) -> Self {
+        Error::from_error(e, ErrorKind::SerdeError).with_message("rocket pack decode error")
     }
 }
 

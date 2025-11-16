@@ -15,7 +15,6 @@ mod tests {
 
     use omnius_core_base::{random_bytes::RandomBytesProviderImpl, sleeper::FakeSleeper};
     use omnius_core_omnikit::model::{OmniAddr, OmniSignType, OmniSigner};
-    use omnius_core_rocketpack::{Result as RocketPackResult, RocketMessage, RocketMessageReader, RocketMessageWriter};
 
     use crate::{
         base::{
@@ -23,6 +22,7 @@ mod tests {
             connection::{ConnectionTcpAccepterImpl, ConnectionTcpConnectorImpl, FramedRecvExt as _, FramedSendExt as _, TcpProxyOption, TcpProxyType},
         },
         core::session::{SessionAccepter, SessionConnector, model::SessionType},
+        prelude::*,
     };
 
     #[tokio::test]
@@ -75,20 +75,16 @@ mod tests {
         pub value: String,
     }
 
-    impl RocketMessage for TestMessage {
-        fn pack(writer: &mut RocketMessageWriter, value: &Self, _depth: u32) -> RocketPackResult<()> {
-            writer.put_str(&value.value);
-
-            Ok(())
+    impl RocketPackStruct for TestMessage {
+        fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
+            todo!()
         }
 
-        fn unpack(reader: &mut RocketMessageReader, _depth: u32) -> RocketPackResult<Self>
+        fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
         where
             Self: Sized,
         {
-            let value = reader.get_string(1024)?;
-
-            Ok(Self { value })
+            todo!()
         }
     }
 }

@@ -907,6 +907,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "enumflags2"
+version = "0.7.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1027f7680c853e056ebcec683615fb6fbbc07dbaa13b4d5d9442b146ded4ecef"
+dependencies = [
+ "enumflags2_derive",
+]
+
+[[package]]
+name = "enumflags2_derive"
+version = "0.7.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67c78a4d8fdf9953a5c9d458f9efe940fd97a0cab0941c075a813ac594733827"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2233,11 +2253,11 @@ dependencies = [
  "async-trait",
  "backtrace",
  "base64 0.22.1",
- "bitflags 2.9.1",
  "chrono",
  "ciborium",
  "crc",
  "ed25519-dalek",
+ "enumflags2",
  "fast-socks5",
  "futures",
  "futures-util",
@@ -2265,6 +2285,7 @@ dependencies = [
  "serial_test",
  "sha3",
  "sqlx",
+ "strum",
  "tempfile",
  "testcontainers",
  "testresult",
@@ -2323,11 +2344,11 @@ dependencies = [
  "aes-gcm",
  "async-trait",
  "base64 0.22.1",
- "bitflags 2.9.1",
  "chrono",
  "ciborium",
  "crc",
  "ed25519-dalek",
+ "enumflags2",
  "fast-socks5",
  "futures",
  "futures-util",
@@ -2348,6 +2369,7 @@ dependencies = [
  "serial_test",
  "sha3",
  "sqlx",
+ "strum",
  "tempfile",
  "testcontainers",
  "testresult",

@@ -1,4 +1,3 @@
-use omnius_core_base::ensure_err;
 use omnius_core_omnikit::model::OmniHash;
 
 use crate::prelude::*;
@@ -8,34 +7,50 @@ pub struct MerkleLayer {
     pub hashes: Vec<OmniHash>,
 }
 
-impl RocketMessage for MerkleLayer {
-    fn pack(writer: &mut RocketMessageWriter, value: &Self, depth: u32) -> RocketPackResult<()> {
-        writer.put_u32(value.rank);
+impl RocketPackStruct for MerkleLayer {
+    fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
+        encoder.write_map(2)?;
 
-        writer.put_u32(value.hashes.len() as u32);
-        for v in &value.hashes {
-            OmniHash::pack(writer, v, depth + 1)?;
+        encoder.write_u64(0)?;
+        encoder.write_u32(&value.rank)?;
+
+        encoder.write_u64(1)?;
+        encoder.write_array(value.hashes.len())?;
+
+        for v in value.hashes.iter() {
+            encoder.write_struct(v)?;
         }
 
         Ok(())
     }
 
-    fn unpack(reader: &mut RocketMessageReader, depth: u32) -> RocketPackResult<Self>
+    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
     where
         Self: Sized,
     {
-        let get_too_large_err = || RocketPackError::new(RocketPackErrorKind::TooLarge).with_message("len too large");
+        let mut rank: Option<u32> = None;
+        let mut hashes: Vec<OmniHash> = Vec::new();
 
-        let rank = reader.get_u32()?;
+        let count = decoder.read_map()?;
 
-        let len = reader.get_u32()?;
-        ensure_err!(len > 128, get_too_large_err);
-
-        let mut hashes = Vec::with_capacity(len as usize);
-        for _ in 0..len {
-            hashes.push(OmniHash::unpack(reader, depth + 1)?);
+        for _ in 0..count {
+            match decoder.read_u64()? {
+                0 => rank = Some(decoder.read_u32()?),
+                1 => {
+                    let count = decoder.read_array()?;
+                    let mut vs: Vec<String> = Vec::with_capacity(count as usize);
+                    for _ in 0..count {
+                        vs.push(decoder.read_struct()?);
+                    }
+                    hashes = Some(vs);
+                }
+                _ => decoder.skip_field()?,
+            }
         }
 
-        Ok(Self { rank, hashes })
+        Ok(Self {
+            rank: rank.ok_or(RocketPackDecoderError::Other("missing field: rank"))?,
+            hashes: hashes.ok_or(RocketPackDecoderError::Other("missing field: hashes"))?,
+        })
     }
 }

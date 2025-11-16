@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use bitflags::bitflags;
+use enumflags2::BitFlags;
 use futures::FutureExt;
 use parking_lot::Mutex;
 use tokio::{
@@ -11,7 +11,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use omnius_core_base::{ensure_err, sleeper::Sleeper};
+use omnius_core_base::sleeper::Sleeper;
 
 use crate::{
     base::{
@@ -255,32 +255,44 @@ impl TaskReceiver {
     }
 }
 
-bitflags! {
-    #[derive(Debug, PartialEq, Eq )]
-      struct NodeFinderVersion: u32 {
-        const V1 = 1;
-    }
+#[repr(u32)]
+#[enumflags2::bitflags]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::AsRefStr, strum::Display, strum::FromRepr)]
+enum NodeFinderVersion {
+    V1 = 1,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct HelloMessage {
-    pub version: NodeFinderVersion,
+    pub version: BitFlags<NodeFinderVersion>,
 }
 
-impl RocketMessage for HelloMessage {
-    fn pack(writer: &mut RocketMessageWriter, value: &Self, _depth: u32) -> RocketPackResult<()> {
-        writer.put_u32(value.version.bits());
+impl RocketPackStruct for HelloMessage {
+    fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
+        encoder.write_map(1)?;
 
-        Ok(())
+        encoder.write_u64(0)?;
+        encoder.write_u32(value.version.bits())?;
     }
 
-    fn unpack(reader: &mut RocketMessageReader, _depth: u32) -> RocketPackResult<Self>
+    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
     where
         Self: Sized,
     {
-        let version = NodeFinderVersion::from_bits(reader.get_u32()?).ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat).with_message("invalid version"))?;
+        let mut version: Option<BitFlags<NodeFinderVersion>> = None;
 
-        Ok(Self { version })
+        let count = decoder.read_map()?;
+
+        for _ in 0..count {
+            match decoder.read_u64()? {
+                0 => version = Some(BitFlags::<NodeFinderVersion>::from_bits_truncate(decoder.read_u32()?)),
+                _ => decoder.skip_field()?,
+            }
+        }
+
+        Ok(Self {
+            version: version.ok_or(RocketPackDecoderError::Other("missing field: version"))?,
+        })
     }
 }
 
@@ -289,20 +301,16 @@ struct ProfileMessage {
     pub node_profile: NodeProfile,
 }
 
-impl RocketMessage for ProfileMessage {
-    fn pack(writer: &mut RocketMessageWriter, value: &Self, depth: u32) -> RocketPackResult<()> {
-        NodeProfile::pack(writer, &value.node_profile, depth + 1)?;
-
-        Ok(())
+impl RocketPackStruct for ProfileMessage {
+    fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
+        todo!()
     }
 
-    fn unpack(reader: &mut RocketMessageReader, depth: u32) -> RocketPackResult<Self>
+    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
     where
         Self: Sized,
     {
-        let node_profile = NodeProfile::unpack(reader, depth + 1)?;
-
-        Ok(Self { node_profile })
+        todo!()
     }
 }
 
@@ -331,98 +339,15 @@ impl Default for DataMessage {
     }
 }
 
-impl RocketMessage for DataMessage {
-    fn pack(writer: &mut RocketMessageWriter, value: &Self, depth: u32) -> RocketPackResult<()> {
-        writer.put_u32(value.push_node_profiles.len() as u32);
-        for v in &value.push_node_profiles {
-            NodeProfile::pack(writer, v, depth + 1)?;
-        }
-
-        writer.put_u32(value.want_asset_keys.len() as u32);
-        for v in &value.want_asset_keys {
-            AssetKey::pack(writer, v, depth + 1)?;
-        }
-
-        writer.put_u32(value.give_asset_key_locations.len() as u32);
-        for (key, vs) in &value.give_asset_key_locations {
-            AssetKey::pack(writer, key, depth + 1)?;
-            writer.put_u32(vs.len() as u32);
-            for v in vs {
-                NodeProfile::pack(writer, v, depth + 1)?;
-            }
-        }
-
-        writer.put_u32(value.push_asset_key_locations.len() as u32);
-        for (key, vs) in &value.push_asset_key_locations {
-            AssetKey::pack(writer, key, depth + 1)?;
-            writer.put_u32(vs.len() as u32);
-            for v in vs {
-                NodeProfile::pack(writer, v, depth + 1)?;
-            }
-        }
-
-        Ok(())
+impl RocketPackStruct for DataMessage {
+    fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
+        todo!()
     }
 
-    fn unpack(reader: &mut RocketMessageReader, depth: u32) -> RocketPackResult<Self>
+    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
     where
         Self: Sized,
     {
-        let get_too_large_err = || RocketPackError::new(RocketPackErrorKind::TooLarge).with_message("len too large");
-
-        let len = reader.get_u32()? as usize;
-        ensure_err!(len > 128, get_too_large_err);
-
-        let mut push_node_profiles = Vec::with_capacity(len);
-        for _ in 0..len {
-            push_node_profiles.push(Arc::new(NodeProfile::unpack(reader, depth + 1)?));
-        }
-
-        let len = reader.get_u32()? as usize;
-        ensure_err!(len > 128, get_too_large_err);
-
-        let mut want_asset_keys = Vec::with_capacity(len);
-        for _ in 0..len {
-            want_asset_keys.push(Arc::new(AssetKey::unpack(reader, depth + 1)?));
-        }
-
-        let len = reader.get_u32()? as usize;
-        ensure_err!(len > 128, get_too_large_err);
-
-        let mut give_asset_key_locations: HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>> = HashMap::new();
-        for _ in 0..len {
-            let key = Arc::new(AssetKey::unpack(reader, depth + 1)?);
-            let len = reader.get_u32()? as usize;
-            ensure_err!(len > 128, get_too_large_err);
-
-            let mut vs = Vec::with_capacity(len);
-            for _ in 0..len {
-                vs.push(Arc::new(NodeProfile::unpack(reader, depth + 1)?));
-            }
-            give_asset_key_locations.entry(key).or_default().extend(vs);
-        }
-
-        let len = reader.get_u32()? as usize;
-        ensure_err!(len > 128, get_too_large_err);
-
-        let mut push_asset_key_locations: HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>> = HashMap::new();
-        for _ in 0..len {
-            let key = Arc::new(AssetKey::unpack(reader, depth + 1)?);
-            let len = reader.get_u32()? as usize;
-            ensure_err!(len > 128, get_too_large_err);
-
-            let mut vs = Vec::with_capacity(len);
-            for _ in 0..len {
-                vs.push(Arc::new(NodeProfile::unpack(reader, depth + 1)?));
-            }
-            push_asset_key_locations.entry(key).or_default().extend(vs);
-        }
-
-        Ok(Self {
-            push_node_profiles,
-            want_asset_keys,
-            give_asset_key_locations,
-            push_asset_key_locations,
-        })
+        todo!()
     }
 }

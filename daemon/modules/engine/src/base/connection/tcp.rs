@@ -9,11 +9,14 @@ pub use upnp_client::*;
 #[cfg(test)]
 mod tests {
     use omnius_core_omnikit::model::OmniAddr;
-    use omnius_core_rocketpack::{Result as RocketPackResult, RocketMessage, RocketMessageReader, RocketMessageWriter};
     use testresult::TestResult;
 
-    use crate::base::connection::{
-        ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, FramedRecvExt as _, FramedSendExt as _, TcpProxyOption, TcpProxyType,
+    use crate::{
+        base::connection::{
+            ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, FramedRecvExt as _, FramedSendExt as _, TcpProxyOption,
+            TcpProxyType,
+        },
+        prelude::*,
     };
 
     #[tokio::test]
@@ -49,20 +52,34 @@ mod tests {
         pub value: String,
     }
 
-    impl RocketMessage for TestMessage {
-        fn pack(writer: &mut RocketMessageWriter, value: &Self, _depth: u32) -> RocketPackResult<()> {
-            writer.put_str(&value.value);
+    impl RocketPackStruct for TestMessage {
+        fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
+            encoder.write_map(1)?;
+
+            encoder.write_u64(0)?;
+            encoder.write_string(value.value.as_str())?;
 
             Ok(())
         }
 
-        fn unpack(reader: &mut RocketMessageReader, _depth: u32) -> RocketPackResult<Self>
+        fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
         where
             Self: Sized,
         {
-            let value = reader.get_string(1024)?;
+            let count = decoder.read_map()?;
 
-            Ok(Self { value })
+            let mut value: Option<String> = None;
+
+            for _ in 0..count {
+                match decoder.read_u64()? {
+                    0 => value = Some(decoder.read_string()?),
+                    _ => decoder.skip_field()?,
+                }
+            }
+
+            Ok(Self {
+                value: value.ok_or(RocketPackDecoderError::Other("missing field: test"))?,
+            })
         }
     }
 }

@@ -1,101 +1,91 @@
-use omnius_core_rocketpack::{RocketMessage, RocketMessageWriter};
-
 use crate::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiRequest<T>
 where
-    T: RocketMessage + Send + Sync + 'static,
+    T: RocketPackStruct + Send + Sync + 'static,
 {
     pub header: ApiRequestHeader,
     pub body: T,
 }
 
-impl<T> RocketMessage for ApiRequest<T>
+impl<T> RocketPackStruct for ApiRequest<T>
 where
-    T: RocketMessage + Send + Sync + 'static,
+    T: RocketPackStruct + Send + Sync + 'static,
 {
-    fn pack(writer: &mut RocketMessageWriter, value: &Self, depth: u32) -> RocketPackResult<()> {
-        writer.put_u32(1);
-        ApiRequestHeader::pack(writer, &value.header, depth + 1)?;
+    fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
+        encoder.write_map(2)?;
 
-        writer.put_u32(2);
-        T::pack(writer, &value.body, depth + 1)?;
+        encoder.write_u64(0)?;
+        encoder.write_struct(&value.header)?;
 
-        writer.put_u32(0);
+        encoder.write_u64(1)?;
+        encoder.write_struct(&value.body)?;
 
         Ok(())
     }
 
-    fn unpack(reader: &mut RocketMessageReader, depth: u32) -> RocketPackResult<Self>
+    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
     where
         Self: Sized,
     {
         let mut header: Option<ApiRequestHeader> = None;
         let mut body: Option<T> = None;
 
-        loop {
-            let field_id = reader.get_u32()?;
-            if field_id == 0 {
-                break;
-            }
+        let count = decoder.read_map()?;
 
-            match field_id {
-                1 => {
-                    header = Some(ApiRequestHeader::unpack(reader, depth + 1)?);
-                }
-                2 => {
-                    body = Some(T::unpack(reader, depth + 1)?);
-                }
-                _ => {}
+        for _ in 0..count {
+            match decoder.read_u64()? {
+                0 => header = Some(decoder.read_struct::<ApiRequestHeader>()?),
+                1 => body = Some(decoder.read_struct::<T>()?),
+                _ => decoder.skip_field()?,
             }
         }
 
         Ok(Self {
-            header: header.ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat))?,
-            body: body.ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat))?,
+            header: header.ok_or(RocketPackDecoderError::Other("missing field: header"))?,
+            body: body.ok_or(RocketPackDecoderError::Other("missing field: body"))?,
         })
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ApiRequestHeader {
-    request_id: String,
+    request_id: Option<String>,
 }
 
-impl RocketMessage for ApiRequestHeader {
-    fn pack(writer: &mut RocketMessageWriter, value: &Self, _depth: u32) -> RocketPackResult<()> {
-        writer.put_u32(1);
-        writer.put_str(&value.request_id);
+impl RocketPackStruct for ApiRequestHeader {
+    fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
+        let mut count = 0;
+        if value.request_id.is_some() {
+            count += 1;
+        }
 
-        writer.put_u32(0);
+        encoder.write_map(count)?;
+
+        if let Some(request_id) = &value.request_id {
+            encoder.write_u64(0)?;
+            encoder.write_string(request_id)?;
+        }
 
         Ok(())
     }
 
-    fn unpack(reader: &mut RocketMessageReader, _depth: u32) -> RocketPackResult<Self>
+    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
     where
         Self: Sized,
     {
         let mut request_id: Option<String> = None;
 
-        loop {
-            let field_id = reader.get_u32()?;
-            if field_id == 0 {
-                break;
-            }
+        let count = decoder.read_map()?;
 
-            #[allow(clippy::single_match)]
-            match field_id {
-                1 => {
-                    request_id = Some(reader.get_string(1024)?);
-                }
-                _ => {}
+        for _ in 0..count {
+            match decoder.read_u64()? {
+                0 => request_id = Some(decoder.read_string()?),
+                _ => decoder.skip_field()?,
             }
         }
 
-        Ok(Self {
-            request_id: request_id.ok_or_else(|| RocketPackError::new(RocketPackErrorKind::InvalidFormat))?,
-        })
+        Ok(Self { request_id })
     }
 }

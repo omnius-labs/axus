@@ -12,7 +12,7 @@ impl RocketPackStruct for MerkleLayer {
         encoder.write_map(2)?;
 
         encoder.write_u64(0)?;
-        encoder.write_u32(&value.rank)?;
+        encoder.write_u32(value.rank)?;
 
         encoder.write_u64(1)?;
         encoder.write_array(value.hashes.len())?;
@@ -29,7 +29,7 @@ impl RocketPackStruct for MerkleLayer {
         Self: Sized,
     {
         let mut rank: Option<u32> = None;
-        let mut hashes: Vec<OmniHash> = Vec::new();
+        let mut hashes: Option<Vec<OmniHash>> = None;
 
         let count = decoder.read_map()?;
 
@@ -38,7 +38,7 @@ impl RocketPackStruct for MerkleLayer {
                 0 => rank = Some(decoder.read_u32()?),
                 1 => {
                     let count = decoder.read_array()?;
-                    let mut vs: Vec<String> = Vec::with_capacity(count as usize);
+                    let mut vs: Vec<OmniHash> = Vec::with_capacity(count as usize);
                     for _ in 0..count {
                         vs.push(decoder.read_struct()?);
                     }

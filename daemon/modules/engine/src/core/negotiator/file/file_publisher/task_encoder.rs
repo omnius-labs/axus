@@ -215,8 +215,7 @@ impl TaskEncoder {
             };
 
             let bytes = merkle_layer.export()?;
-            let bytes_slice = bytes.as_ref();
-            let cursor = Cursor::new(bytes_slice);
+            let cursor = Cursor::new(bytes);
             let mut reader = BufReader::new(cursor);
 
             uncommitted_blocks = self.encode_bytes(&mut reader, &uncommitted_file.id, uncommitted_file.block_size, rank).await?;

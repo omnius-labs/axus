@@ -1,16 +1,12 @@
-use bitflags::bitflags;
-use num_derive::{FromPrimitive, ToPrimitive};
-use num_traits::{FromPrimitive, ToPrimitive};
-
 use omnius_core_omnikit::model::OmniCert;
 
 use crate::prelude::*;
 
-bitflags! {
-    #[derive(Debug, PartialEq, Eq)]
-    pub struct SessionVersion: u32 {
-        const V1 = 1;
-    }
+#[repr(u32)]
+#[enumflags2::bitflags]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::AsRefStr, strum::Display, strum::FromRepr)]
+pub enum SessionVersion {
+    V1 = 1,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -67,7 +63,8 @@ impl RocketPackStruct for V1SignatureMessage {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::AsRefStr, strum::Display, strum::FromRepr)]
 pub enum V1RequestType {
     Unknown = 0,
     NodeFinder = 1,
@@ -92,7 +89,8 @@ impl RocketPackStruct for V1RequestMessage {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::AsRefStr, strum::Display, strum::FromRepr)]
 pub enum V1ResultType {
     Unknown,
     Accept,

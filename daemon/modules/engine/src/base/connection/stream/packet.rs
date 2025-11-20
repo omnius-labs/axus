@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use tokio_util::bytes::Bytes;
+
 use omnius_core_omnikit::service::connection::codec::{FramedRecv, FramedSend};
 
 use crate::prelude::*;
@@ -31,7 +33,7 @@ where
     T: ?Sized + Send + Unpin,
 {
     async fn send_message<TItem: RocketPackStruct + Send + Sync>(&mut self, item: &TItem) -> Result<()> {
-        let b = item.export()?;
+        let b = Bytes::from(item.export()?);
         self.send(b).await?;
         Ok(())
     }

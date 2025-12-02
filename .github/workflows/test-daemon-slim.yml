@@ -36,7 +36,7 @@ jobs:
           remove-haskell: true
 
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           submodules: "recursive"
 
@@ -60,7 +60,7 @@ jobs:
           version: latest
 
       - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2.8.1
+        uses: Swatinem/rust-cache@v2.8.2
         with:
           shared-key: "${{ matrix.os }}-test-slim"
           cache-workspace-crates: "true"

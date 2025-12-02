@@ -77,14 +77,32 @@ mod tests {
 
     impl RocketPackStruct for TestMessage {
         fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
-            todo!()
+            encoder.write_map(1)?;
+
+            encoder.write_u64(0)?;
+            encoder.write_string(value.value.as_str())?;
+
+            Ok(())
         }
 
         fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
         where
             Self: Sized,
         {
-            todo!()
+            let mut value: Option<String> = None;
+
+            let count = decoder.read_map()?;
+
+            for _ in 0..count {
+                match decoder.read_u64()? {
+                    0 => value = Some(decoder.read_string()?),
+                    _ => decoder.skip_field()?,
+                }
+            }
+
+            Ok(Self {
+                value: value.ok_or(RocketPackDecoderError::Other("missing field: value"))?,
+            })
         }
     }
 }

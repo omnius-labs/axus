@@ -15,6 +15,25 @@ Axus is a peer-to-peer (P2P) file-sharing service.
 - **File Search and Publishing**: Files can be searched and published with protection provided by a Web of Trust system, ensuring security and integrity.
 - **Bulletin Board Functionality**: Provides a platform within the network for users to safely exchange and share information.
 
+## Development
+
+### Repository Setup
+
+Please initialize the submodules right after cloning.
+
+```sh
+git submodule update --init
+```
+
+### Installing Required Dependencies
+
+#### Debian and Ubuntu
+
+```sh
+sudo apt-get install -y libclang-dev
+```
+This package is required for RocksDB.
+
 ## Links
 
 - Official Documentation: https://docs.omnius-labs.com/

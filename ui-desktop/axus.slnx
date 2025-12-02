@@ -10,7 +10,6 @@
     <Project Path="refs/core-cs/src/Core.Net.Upnp/Core.Net.Upnp.csproj" />
     <Project Path="refs/core-cs/src/Core.Omnikit/Core.Omnikit.csproj" />
     <Project Path="refs/core-cs/src/Core.Pipelines/Core.Pipelines.csproj" />
-    <Project Path="refs/core-cs/src/Core.RocketPack.DefinitionCompiler/Core.RocketPack.DefinitionCompiler.csproj" />
     <Project Path="refs/core-cs/src/Core.RocketPack/Core.RocketPack.csproj" />
     <Project Path="refs/core-cs/src/Core.Serialization/Core.Serialization.csproj" />
     <Project Path="refs/core-cs/src/Core.Sql/Core.Sql.csproj" />
@@ -24,7 +23,6 @@
     <Project Path="refs/core-cs/test/Core.Net.Upnp.Tests/Core.Net.Upnp.Tests.csproj" />
     <Project Path="refs/core-cs/test/Core.Omnikit.Tests/Core.Omnikit.Tests.csproj" />
     <Project Path="refs/core-cs/test/Core.Pipelines.Tests/Core.Pipelines.Tests.csproj" />
-    <Project Path="refs/core-cs/test/Core.RocketPack.DefinitionCompiler.Tests/Core.RocketPack.DefinitionCompiler.Tests.csproj" />
     <Project Path="refs/core-cs/test/Core.RocketPack.Tests/Core.RocketPack.Tests.csproj" />
     <Project Path="refs/core-cs/test/Core.Serialization.Tests/Core.Serialization.Tests.csproj" />
     <Project Path="refs/core-cs/test/Core.Storages.Tests/Core.Storages.Tests.csproj" />

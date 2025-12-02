@@ -1,6 +1,8 @@
 [submodule "daemon/refs/core-rs"]
 	path = daemon/refs/core-rs
 	url = git@github.com:omnius-labs/core-rs
+    branch = main
 [submodule "ui-desktop/refs/core-cs"]
 	path = ui-desktop/refs/core-cs
 	url = git@github.com:omnius-labs/core-cs
+    branch = main

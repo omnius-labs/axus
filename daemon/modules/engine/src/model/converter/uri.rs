@@ -41,13 +41,13 @@ impl UriConverter {
 
         let crc_bytes = BASE64.decode(crc)?;
         let crc: [u8; 4] = crc_bytes.as_slice().try_into()?;
-        let mut body = Bytes::from(BASE64.decode(body.as_bytes())?);
+        let body = Bytes::from(BASE64.decode(body.as_bytes())?);
 
         if crc != CASTAGNOLI.checksum(body.as_ref()).to_le_bytes() {
             return Err(Error::new(ErrorKind::InvalidFormat).with_message("invalid checksum"));
         }
 
-        let v = T::import(&mut body)?;
+        let v = T::import(&body)?;
         Ok(v)
     }
 

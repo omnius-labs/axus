@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use enumflags2::BitFlags;
+use enumflags2::{BitFlags, make_bitflags};
 use futures::FutureExt;
 use parking_lot::Mutex;
 use tokio::{
@@ -140,7 +140,9 @@ impl TaskCommunicator {
     }
 
     pub async fn handshake(session: &Session, node_profile: &NodeProfile) -> Result<NodeProfile> {
-        let send_hello_message = HelloMessage { version: NodeFinderVersion::V1 };
+        let send_hello_message = HelloMessage {
+            version: make_bitflags!(NodeFinderVersion::V1),
+        };
         session.stream.sender.lock().await.send_message(&send_hello_message).await?;
         let received_hello_message: HelloMessage = session.stream.receiver.lock().await.recv_message().await?;
 
@@ -273,6 +275,8 @@ impl RocketPackStruct for HelloMessage {
 
         encoder.write_u64(0)?;
         encoder.write_u32(value.version.bits())?;
+
+        Ok(())
     }
 
     fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
@@ -303,14 +307,32 @@ struct ProfileMessage {
 
 impl RocketPackStruct for ProfileMessage {
     fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
-        todo!()
+        encoder.write_map(1)?;
+
+        encoder.write_u64(0)?;
+        encoder.write_struct(&value.node_profile)?;
+
+        Ok(())
     }
 
     fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
     where
         Self: Sized,
     {
-        todo!()
+        let mut node_profile: Option<NodeProfile> = None;
+
+        let count = decoder.read_map()?;
+
+        for _ in 0..count {
+            match decoder.read_u64()? {
+                0 => node_profile = Some(decoder.read_struct::<NodeProfile>()?),
+                _ => decoder.skip_field()?,
+            }
+        }
+
+        Ok(Self {
+            node_profile: node_profile.ok_or(RocketPackDecoderError::Other("missing field: node_profile"))?,
+        })
     }
 }
 
@@ -341,13 +363,109 @@ impl Default for DataMessage {
 
 impl RocketPackStruct for DataMessage {
     fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
-        todo!()
+        encoder.write_map(4)?;
+
+        encoder.write_u64(0)?;
+        encoder.write_array(value.push_node_profiles.len())?;
+        for profile in value.push_node_profiles.iter() {
+            encoder.write_struct(profile.as_ref())?;
+        }
+
+        encoder.write_u64(1)?;
+        encoder.write_array(value.want_asset_keys.len())?;
+        for asset_key in value.want_asset_keys.iter() {
+            encoder.write_struct(asset_key.as_ref())?;
+        }
+
+        encoder.write_u64(2)?;
+        encoder.write_map(value.give_asset_key_locations.len())?;
+        for (asset_key, profiles) in value.give_asset_key_locations.iter() {
+            encoder.write_struct(asset_key.as_ref())?;
+            encoder.write_array(profiles.len())?;
+            for profile in profiles.iter() {
+                encoder.write_struct(profile.as_ref())?;
+            }
+        }
+
+        encoder.write_u64(3)?;
+        encoder.write_map(value.push_asset_key_locations.len())?;
+        for (asset_key, profiles) in value.push_asset_key_locations.iter() {
+            encoder.write_struct(asset_key.as_ref())?;
+            encoder.write_array(profiles.len())?;
+            for profile in profiles.iter() {
+                encoder.write_struct(profile.as_ref())?;
+            }
+        }
+
+        Ok(())
     }
 
     fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
     where
         Self: Sized,
     {
-        todo!()
+        let mut push_node_profiles: Option<Vec<Arc<NodeProfile>>> = None;
+        let mut want_asset_keys: Option<Vec<Arc<AssetKey>>> = None;
+        let mut give_asset_key_locations: Option<HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>>> = None;
+        let mut push_asset_key_locations: Option<HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>>> = None;
+
+        let count = decoder.read_map()?;
+
+        for _ in 0..count {
+            match decoder.read_u64()? {
+                0 => {
+                    let count = decoder.read_array()?;
+                    let mut profiles = Vec::with_capacity(count as usize);
+                    for _ in 0..count {
+                        profiles.push(Arc::new(decoder.read_struct::<NodeProfile>()?));
+                    }
+                    push_node_profiles = Some(profiles);
+                }
+                1 => {
+                    let count = decoder.read_array()?;
+                    let mut asset_keys = Vec::with_capacity(count as usize);
+                    for _ in 0..count {
+                        asset_keys.push(Arc::new(decoder.read_struct::<AssetKey>()?));
+                    }
+                    want_asset_keys = Some(asset_keys);
+                }
+                2 => {
+                    let count = decoder.read_map()?;
+                    let mut map = HashMap::with_capacity(count as usize);
+                    for _ in 0..count {
+                        let key = Arc::new(decoder.read_struct::<AssetKey>()?);
+                        let count = decoder.read_array()?;
+                        let mut profiles = Vec::with_capacity(count as usize);
+                        for _ in 0..count {
+                            profiles.push(Arc::new(decoder.read_struct::<NodeProfile>()?));
+                        }
+                        map.insert(key, profiles);
+                    }
+                    give_asset_key_locations = Some(map);
+                }
+                3 => {
+                    let count = decoder.read_map()?;
+                    let mut map = HashMap::with_capacity(count as usize);
+                    for _ in 0..count {
+                        let key = Arc::new(decoder.read_struct::<AssetKey>()?);
+                        let count = decoder.read_array()?;
+                        let mut profiles = Vec::with_capacity(count as usize);
+                        for _ in 0..count {
+                            profiles.push(Arc::new(decoder.read_struct::<NodeProfile>()?));
+                        }
+                        map.insert(key, profiles);
+                    }
+                    push_asset_key_locations = Some(map);
+                }
+                _ => decoder.skip_field()?,
+            }
+        }
+
+        Ok(Self {
+            push_node_profiles: push_node_profiles.ok_or(RocketPackDecoderError::Other("missing field: push_node_profiles"))?,
+            want_asset_keys: want_asset_keys.ok_or(RocketPackDecoderError::Other("missing field: want_asset_keys"))?,
+            give_asset_key_locations: give_asset_key_locations.ok_or(RocketPackDecoderError::Other("missing field: give_asset_key_locations"))?,
+            push_asset_key_locations: push_asset_key_locations.ok_or(RocketPackDecoderError::Other("missing field: push_asset_key_locations"))?,
+        })
     }
 }

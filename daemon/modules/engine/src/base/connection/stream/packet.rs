@@ -16,8 +16,8 @@ where
     T: ?Sized + Send + Unpin,
 {
     async fn recv_message<TItem: RocketPackStruct>(&mut self) -> Result<TItem> {
-        let mut b = self.recv().await?;
-        let item = TItem::import(&mut b)?;
+        let b = self.recv().await?;
+        let item = TItem::import(&b)?;
         Ok(item)
     }
 }

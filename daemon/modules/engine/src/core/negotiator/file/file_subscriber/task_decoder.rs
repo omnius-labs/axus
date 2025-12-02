@@ -197,8 +197,8 @@ impl TaskDecoder {
 
             let cursor = writer.into_inner();
             let bytes = cursor.into_inner();
-            let mut bytes = Bytes::from(bytes);
-            let merkle_layer = MerkleLayer::import(&mut bytes)?;
+            let bytes = Bytes::from(bytes);
+            let merkle_layer = MerkleLayer::import(&bytes)?;
 
             if merkle_layer.rank != (file.rank - 1) {
                 return Err(Error::new(ErrorKind::InvalidFormat));

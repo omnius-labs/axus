@@ -185,12 +185,6 @@ impl From<toml::de::Error> for Error {
     }
 }
 
-impl From<omnius_core_rocketpack::Error> for Error {
-    fn from(e: omnius_core_rocketpack::Error) -> Error {
-        Error::from_error(e, ErrorKind::SerdeError).with_message("rocket pack error")
-    }
-}
-
 impl From<omnius_core_omnikit::Error> for Error {
     fn from(e: omnius_core_omnikit::Error) -> Self {
         match e.kind() {

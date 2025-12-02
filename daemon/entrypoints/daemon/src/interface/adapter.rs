@@ -48,15 +48,15 @@ where
 
     pub async fn listen_unary<TRequestMessage, TResultMessage, F>(&self, callback: F) -> Result<()>
     where
-        TRequestMessage: RocketMessage + Send + Sync + 'static,
-        TResultMessage: RocketMessage + Send + Sync + 'static,
+        TRequestMessage: RocketPackStruct + std::fmt::Debug + Send + Sync + 'static,
+        TResultMessage: RocketPackStruct + std::fmt::Debug + Send + Sync + 'static,
         F: AsyncFnOnce(ApiRequest<TRequestMessage>) -> ApiResult<TResultMessage>,
     {
         self.listen_stream(async |stream| {
             let request = match stream.recv_request::<TRequestMessage>().await {
                 Ok(input) => input,
                 Err(_) => {
-                    let _ = stream.send_result(ApiResult::<TResultMessage>::Err(ApiError::new(ApiErrorKind::InvalidArgument))).await;
+                    let _ = stream.send_result(ApiResult::<TResultMessage>::Err(ApiError::new(ApiErrorKind::InvalidInput))).await;
                     return;
                 }
             };
@@ -88,17 +88,28 @@ where
 
     pub async fn send_result<T>(&self, message: ApiResult<T>) -> Result<()>
     where
-        T: RocketMessage + Send + Sync + 'static,
+        T: RocketPackStruct + std::fmt::Debug + Send + Sync + 'static,
     {
+        trace!(
+            request_type = std::any::type_name::<T>(),
+            result = ?message,
+            "rpc send request"
+        );
         self.stream.send(message).await?;
         Ok(())
     }
 
     pub async fn recv_request<T>(&self) -> Result<ApiRequest<T>>
     where
-        T: RocketMessage + Send + Sync + 'static,
+        T: RocketPackStruct + std::fmt::Debug + Send + Sync + 'static,
     {
         let message = self.stream.recv::<ApiRequest<T>>().await?;
+        trace!(
+            request_type = std::any::type_name::<T>(),
+            header = ?message.header,
+            body = ?message.body,
+            "rpc recv request"
+        );
         Ok(message)
     }
 }

@@ -1,5 +1,5 @@
 mod adapter;
-mod features;
 mod server;
+mod v1;
 
 pub use server::RpcServer;

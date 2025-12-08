@@ -52,7 +52,7 @@
     <PackageVersion Include="Projektanker.Icons.Avalonia.FontAwesome" Version="9.0.1" />
     <PackageVersion Include="ReactiveProperty" Version="9.8.0" />
     <PackageVersion Include="RocksDB" Version="9.4.0.50294" />
-    <PackageVersion Include="SharpCompress" Version="0.41.0" />
+    <PackageVersion Include="SharpCompress" Version="0.42.1" />
     <PackageVersion Include="SixLabors.ImageSharp" Version="3.1.12" />
     <PackageVersion Include="SpacedGrid-Avalonia" Version="11.0.0" />
     <PackageVersion Include="Sprache" Version="2.3.1" />

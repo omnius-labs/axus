@@ -1,0 +1,30 @@
+name: add-to-project
+
+on:
+  issues:
+    types: [opened, reopened]
+  pull_request:
+    types: [opened, reopened]
+
+permissions: {}
+
+jobs:
+  add-issue-to-project:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add issue to GitHub Project
+        uses: actions/add-to-project@v1.0.2
+        with:
+          project-url: https://github.com/orgs/omnius-labs/projects/8
+          github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
+
+  add-pr-to-project:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add PR to GitHub Project
+        uses: actions/add-to-project@v1.0.2
+        with:
+          project-url: https://github.com/orgs/omnius-labs/projects/8
+          github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}

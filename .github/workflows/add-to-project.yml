@@ -6,8 +6,6 @@ on:
   pull_request:
     types: [opened, reopened]
 
-permissions: {}
-
 jobs:
   add-issue-to-project:
     if: github.event_name == 'issues'
@@ -16,7 +14,7 @@ jobs:
       - name: Add issue to GitHub Project
         uses: actions/add-to-project@v1.0.2
         with:
-          project-url: https://github.com/orgs/omnius-labs/projects/8
+          project-url: ${{ vars.ADD_TO_PROJECT_URL }}
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
 
   add-pr-to-project:
@@ -26,5 +24,5 @@ jobs:
       - name: Add PR to GitHub Project
         uses: actions/add-to-project@v1.0.2
         with:
-          project-url: https://github.com/orgs/omnius-labs/projects/8
+          project-url: ${{ vars.ADD_TO_PROJECT_URL }}
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}

@@ -4,7 +4,7 @@ use tracing::warn;
 use omnius_core_omnikit::service::remoting::OmniRemotingListener;
 
 use crate::{
-    interface::{adapter::OmniRemotingListenerAdapter, v1},
+    interface::{adapter::OmniRemotingListenerAdapter, features},
     prelude::*,
     shared::AppState,
 };
@@ -53,7 +53,7 @@ impl RpcServer {
             };
 
             match function_id {
-                FunctionId::Health => remoting_listener.listen_unary(async |param| v1::features::health(state, param).await).await?,
+                FunctionId::Health => remoting_listener.listen_unary(async |param| features::health(state, param).await).await?,
                 _ => warn!("not supported: {:?}", function_id),
             }
         }

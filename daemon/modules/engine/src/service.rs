@@ -23,13 +23,13 @@ use crate::{
 };
 
 #[allow(unused)]
-pub struct AxusEngine {
+pub struct AxusService {
     node_finder: NodeFinder,
 }
 
-impl AxusEngine {
+impl AxusService {
     pub async fn new<S: AsRef<Path>, A: AsRef<str>, T: AsRef<Path>>(state_dir: S, listen_addr: A, _temp_dir: T) -> Result<Self> {
-        Ok(AxusEngine {
+        Ok(AxusService {
             node_finder: Self::create_node_finder(state_dir.as_ref(), listen_addr.as_ref()).await?,
         })
     }

@@ -13,6 +13,7 @@
         "dalek",
         "Deque",
         "diffie",
+        "enumflags",
         "exif",
         "hasher",
         "hashset",

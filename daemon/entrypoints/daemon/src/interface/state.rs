@@ -4,9 +4,10 @@ use tempfile::TempDir;
 
 use omnius_axus_engine::service::AxusService;
 
-use super::{AppConfig, info::AppInfo};
-
-use crate::prelude::*;
+use crate::{
+    prelude::*,
+    shared::{AppConfig, AppInfo},
+};
 
 pub struct AppState {
     pub info: AppInfo,

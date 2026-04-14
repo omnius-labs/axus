@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser as _;
-use shared::{AppConfig, AppInfo, AppState};
+use shared::{AppConfig, AppInfo};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use valuable::Valuable;

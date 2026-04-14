@@ -1,9 +1,11 @@
 use omnius_core_rocketpack::EmptyRocketMessage;
 
 use crate::{
-    interface::adapter::{ApiRequest, ApiResult},
+    interface::{
+        adapter::{ApiRequest, ApiResult},
+        state::AppState,
+    },
     prelude::*,
-    shared::AppState,
 };
 
 pub async fn health(state: &AppState, _: ApiRequest<EmptyRocketMessage>) -> ApiResult<HealthResult> {

@@ -4,9 +4,8 @@ use tracing::warn;
 use omnius_core_omnikit::service::remoting::OmniRemotingListener;
 
 use crate::{
-    interface::{adapter::OmniRemotingListenerAdapter, features},
+    interface::{adapter::OmniRemotingListenerAdapter, features, state::AppState},
     prelude::*,
-    shared::AppState,
 };
 
 #[repr(u32)]

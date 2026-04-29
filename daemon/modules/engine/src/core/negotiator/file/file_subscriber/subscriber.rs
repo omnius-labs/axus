@@ -10,7 +10,7 @@ use omnius_core_base::{clock::Clock, sleeper::Sleeper, tsid::TsidProvider};
 use omnius_core_omnikit::model::OmniHash;
 
 use crate::{
-    base::{Shutdown, storage::KeyValueRocksdbStorage},
+    base::{runtime::Shutdown, storage::KeyValueRocksdbStorage},
     prelude::*,
 };
 

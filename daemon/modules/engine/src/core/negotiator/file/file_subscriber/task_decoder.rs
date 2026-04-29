@@ -16,7 +16,7 @@ use omnius_core_base::{clock::Clock, sleeper::Sleeper, tsid::TsidProvider};
 use omnius_core_omnikit::model::OmniHash;
 
 use crate::{
-    base::{Shutdown, storage::KeyValueRocksdbStorage, sync::EventListener},
+    base::{runtime::Shutdown, storage::KeyValueRocksdbStorage, sync::EventListener},
     core::negotiator::file::model::SubscribedFile,
     prelude::*,
 };

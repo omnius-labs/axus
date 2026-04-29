@@ -22,7 +22,7 @@ use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 use omnius_core_omnikit::model::OmniHash;
 
 use crate::{
-    base::{Shutdown, collections::VolatileHashSet},
+    base::{collections::VolatileHashSet, runtime::Shutdown},
     core::{
         negotiator::NodeFinder,
         session::{

@@ -11,7 +11,7 @@ use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc};
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 
 use crate::{
-    base::{Shutdown, collections::VolatileHashSet, sync::FnHub},
+    base::{collections::VolatileHashSet, runtime::Shutdown, sync::FnHub},
     core::session::{SessionAccepter, SessionConnector},
     model::{AssetKey, NodeProfile},
     prelude::*,

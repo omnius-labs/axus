@@ -10,7 +10,7 @@ use omnius_core_base::net::Reachable;
 use omnius_core_omnikit::model::OmniAddr;
 
 use crate::{
-    base::{Shutdown, connection::FramedStream},
+    base::{connection::FramedStream, runtime::Shutdown},
     prelude::*,
 };
 

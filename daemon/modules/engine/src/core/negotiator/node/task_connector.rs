@@ -18,7 +18,7 @@ use tracing::warn;
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 
 use crate::{
-    base::{Shutdown, collections::VolatileHashSet},
+    base::{runtime::Shutdown, collections::VolatileHashSet},
     core::session::{
         SessionConnector,
         model::{SessionHandshakeType, SessionType},

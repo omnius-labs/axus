@@ -16,7 +16,7 @@ use tracing::warn;
 use omnius_core_base::sleeper::Sleeper;
 
 use crate::{
-    base::{Shutdown, sync::FnCaller},
+    base::{runtime::Shutdown, sync::FnCaller},
     model::{AssetKey, NodeProfile},
     prelude::*,
 };

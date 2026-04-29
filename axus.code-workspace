@@ -1,20 +1,14 @@
 {
   "folders": [
     {
-      "path": "./"
+      "path": "./",
     },
     {
-      "path": "./daemon"
+      "path": "./daemon",
     },
     {
-      "path": "./ui-desktop"
+      "path": "./daemon/refs/core-rs",
     },
-    {
-      "path": "./daemon/refs/core-rs"
-    },
-    {
-      "path": "./ui-desktop/refs/core-cs"
-    }
   ],
-  "settings": {}
+  "settings": {},
 }

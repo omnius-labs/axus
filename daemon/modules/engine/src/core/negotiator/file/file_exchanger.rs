@@ -26,6 +26,7 @@ pub struct FileExchanger {
     tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
+    rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     option: FileExchangerOption,
 
     session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
@@ -61,6 +62,7 @@ impl FileExchanger {
         tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>>,
         clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
+        rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         option: FileExchangerOption,
     ) -> Result<Self> {
         let (tx, rx) = mpsc::channel(20);
@@ -72,6 +74,7 @@ impl FileExchanger {
             tsid_provider,
             clock: clock.clone(),
             sleeper,
+            rng,
             option,
 
             session_receiver: Arc::new(TokioMutex::new(rx)),
@@ -116,6 +119,7 @@ impl FileExchanger {
                 self.connected_node_profiles.clone(),
                 self.clock.clone(),
                 self.sleeper.clone(),
+                self.rng.clone(),
                 self.option.clone(),
             )
             .await?;

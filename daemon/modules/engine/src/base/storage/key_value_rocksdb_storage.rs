@@ -457,11 +457,16 @@ impl Iterator for BlobStorageKeyIterator<'_> {
 #[cfg(test)]
 mod tests {
     use chrono::DateTime;
+    use rand::{
+        SeedableRng as _,
+        rngs::{ChaCha20Rng, SysRng},
+    };
+    use rand_core::UnwrapErr;
     use tempfile::tempdir;
     use testresult::TestResult;
     use tokio_util::bytes::Bytes;
 
-    use omnius_core_base::{clock::FakeClockUtc, random_bytes::FakeRandomBytesProvider, tsid::TsidProviderImpl};
+    use omnius_core_base::{clock::FakeClockUtc, tsid::TsidProviderImpl};
 
     use super::*;
 
@@ -469,7 +474,7 @@ mod tests {
     async fn create_test_storage() -> TestResult<(tempfile::TempDir, KeyValueRocksdbStorage)> {
         let temp_dir = tempdir()?;
         let clock = FakeClockUtc::new(DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")?.into());
-        let tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>> = Arc::new(Mutex::new(TsidProviderImpl::new(clock, FakeRandomBytesProvider::new(), 8)));
+        let tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>> = Arc::new(Mutex::new(TsidProviderImpl::new(clock, ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng)), 8)));
         let storage = KeyValueRocksdbStorage::new(temp_dir.path(), tsid_provider.clone()).await?;
         Ok((temp_dir, storage))
     }

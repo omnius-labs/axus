@@ -5,15 +5,19 @@ use parking_lot::Mutex;
 
 use omnius_core_base::{
     clock::{Clock, ClockUtc},
-    random_bytes::RandomBytesProviderImpl,
     sleeper::{Sleeper, SleeperImpl},
 };
 use omnius_core_omnikit::model::{OmniAddr, OmniSignType, OmniSigner};
+use rand::{
+    SeedableRng,
+    rngs::{ChaCha20Rng, SysRng},
+};
+use rand_core::UnwrapErr;
 
 use crate::{
     base::{
-        Shutdown,
         connection::{ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, TcpProxyOption, TcpProxyType},
+        runtime::Shutdown,
     },
     core::{
         negotiator::{NodeFinder, NodeFinderOption, NodeFinderRepo, NodeProfileFetcherImpl},
@@ -48,10 +52,10 @@ impl AxusService {
         let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
         let sleeper: Arc<dyn Sleeper + Send + Sync> = Arc::new(SleeperImpl);
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "TODO")?);
-        let random_bytes_provider = Arc::new(Mutex::new(RandomBytesProviderImpl::new()));
+        let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
 
-        let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), random_bytes_provider.clone(), sleeper.clone()).await);
-        let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, random_bytes_provider));
+        let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), sleeper.clone(), rng.clone()).await);
+        let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, rng.clone()));
 
         let node_ref_repo_dir = state_dir.join("repo");
         tokio::fs::create_dir_all(&node_ref_repo_dir).await?;
@@ -69,6 +73,7 @@ impl AxusService {
             node_profile_fetcher,
             clock,
             sleeper,
+            rng,
             NodeFinderOption {
                 state_dir: node_finder_dir.as_os_str().to_str().unwrap().to_string(),
                 max_connected_session_count: 3,

@@ -11,7 +11,7 @@ use tokio::{
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 
 use crate::{
-    base::Shutdown,
+    base::runtime::Shutdown,
     core::session::{
         SessionAccepter,
         model::{SessionHandshakeType, SessionType},

@@ -11,15 +11,20 @@ mod tests {
     use std::sync::Arc;
 
     use parking_lot::Mutex;
+    use rand::{
+        SeedableRng as _,
+        rngs::{ChaCha20Rng, SysRng},
+    };
+    use rand_core::UnwrapErr;
     use testresult::TestResult;
 
-    use omnius_core_base::{random_bytes::RandomBytesProviderImpl, sleeper::FakeSleeper};
+    use omnius_core_base::sleeper::FakeSleeper;
     use omnius_core_omnikit::model::{OmniAddr, OmniSignType, OmniSigner};
 
     use crate::{
         base::{
-            Shutdown,
             connection::{ConnectionTcpAccepterImpl, ConnectionTcpConnectorImpl, FramedRecvExt as _, FramedSendExt as _, TcpProxyOption, TcpProxyType},
+            runtime::Shutdown,
         },
         core::session::{SessionAccepter, SessionConnector, model::SessionType},
         prelude::*,
@@ -38,11 +43,11 @@ mod tests {
         );
 
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
-        let random_bytes_provider = Arc::new(Mutex::new(RandomBytesProviderImpl::new()));
+        let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
         let sleeper = Arc::new(FakeSleeper);
 
-        let session_accepter = SessionAccepter::new(tcp_accepter.clone(), signer.clone(), random_bytes_provider.clone(), sleeper.clone()).await;
-        let session_connector = SessionConnector::new(tcp_connector, signer, random_bytes_provider);
+        let session_accepter = SessionAccepter::new(tcp_accepter.clone(), signer.clone(), sleeper.clone(), rng.clone()).await;
+        let session_connector = SessionConnector::new(tcp_connector, signer, rng);
 
         let client = Arc::new(
             session_connector

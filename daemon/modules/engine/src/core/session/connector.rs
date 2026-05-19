@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use omnius_core_base::random_bytes::RandomBytesProvider;
 use omnius_core_omnikit::model::{OmniAddr, OmniSigner};
 use parking_lot::Mutex;
+use rand::RngExt;
 
 use crate::{
     base::connection::{ConnectionTcpConnector, FramedRecvExt as _, FramedSendExt as _},
@@ -18,20 +18,12 @@ use super::{
 pub struct SessionConnector {
     tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync>,
     signer: Arc<OmniSigner>,
-    random_bytes_provider: Arc<Mutex<dyn RandomBytesProvider + Send + Sync>>,
+    rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
 }
 
 impl SessionConnector {
-    pub fn new(
-        tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync>,
-        signer: Arc<OmniSigner>,
-        random_bytes_provider: Arc<Mutex<dyn RandomBytesProvider + Send + Sync>>,
-    ) -> Self {
-        Self {
-            tcp_connector,
-            signer,
-            random_bytes_provider,
-        }
+    pub fn new(tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync>, signer: Arc<OmniSigner>, rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>) -> Self {
+        Self { tcp_connector, signer, rng }
     }
 
     pub async fn connect(&self, addr: &OmniAddr, typ: &SessionType) -> Result<Session> {
@@ -44,7 +36,7 @@ impl SessionConnector {
         let version = send_hello_message.version | received_hello_message.version;
 
         if version.contains(SessionVersion::V1) {
-            let send_nonce: [u8; 32] = self.random_bytes_provider.lock().get_bytes(32).as_slice().try_into()?;
+            let send_nonce: [u8; 32] = self.rng.lock().random();
             let send_challenge_message = V1ChallengeMessage { nonce: send_nonce };
             stream.sender.lock().await.send_message(&send_challenge_message).await?;
             let receive_challenge_message: V1ChallengeMessage = stream.receiver.lock().await.recv_message().await?;

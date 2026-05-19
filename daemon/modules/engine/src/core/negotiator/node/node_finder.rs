@@ -4,8 +4,7 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use futures::future::join_all;
 use parking_lot::Mutex;
-use rand::{RngCore, SeedableRng};
-use rand_chacha::ChaCha20Rng;
+use rand::RngExt;
 use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc};
 
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
@@ -28,6 +27,7 @@ pub struct NodeFinder {
     node_profile_fetcher: Arc<dyn NodeProfileFetcher + Send + Sync>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
+    rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     option: NodeFinderOption,
 
     session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
@@ -60,13 +60,14 @@ impl NodeFinder {
         node_profile_fetcher: Arc<dyn NodeProfileFetcher + Send + Sync>,
         clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
+        rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         option: NodeFinderOption,
     ) -> Result<Self> {
         let (tx, rx) = mpsc::channel(20);
 
         let v = Self {
             my_node_profile: Arc::new(Mutex::new(NodeProfile {
-                id: Self::gen_id(),
+                id: rng.clone().lock().random::<[u8; 32]>().to_vec(),
                 addrs: Vec::new(),
             })),
             session_connector,
@@ -75,6 +76,7 @@ impl NodeFinder {
             node_profile_fetcher,
             clock: clock.clone(),
             sleeper,
+            rng,
             option,
 
             session_receiver: Arc::new(TokioMutex::new(rx)),
@@ -99,13 +101,6 @@ impl NodeFinder {
         self.sessions.read().await.len()
     }
 
-    fn gen_id() -> Vec<u8> {
-        let mut rng = ChaCha20Rng::from_os_rng();
-        let mut id = [0_u8; 32];
-        rng.fill_bytes(&mut id);
-        id.to_vec()
-    }
-
     async fn start(&self) -> Result<()> {
         for _ in 0..3 {
             let task = TaskConnector::new(
@@ -116,6 +111,7 @@ impl NodeFinder {
                 self.node_profile_repo.clone(),
                 self.clock.clone(),
                 self.sleeper.clone(),
+                self.rng.clone(),
                 self.option.clone(),
             )
             .await?;
@@ -143,6 +139,7 @@ impl NodeFinder {
             self.get_want_asset_keys_fn.caller(),
             self.get_push_asset_keys_fn.caller(),
             self.sleeper.clone(),
+            self.rng.clone(),
             self.option.clone(),
         )
         .await?;
@@ -217,10 +214,14 @@ mod tests {
     use chrono::Utc;
     use omnius_core_base::{
         clock::{Clock, ClockUtc},
-        random_bytes::RandomBytesProviderImpl,
         sleeper::{Sleeper, SleeperImpl},
     };
     use parking_lot::Mutex;
+    use rand::{
+        SeedableRng as _,
+        rngs::{ChaCha20Rng, SysRng},
+    };
+    use rand_core::UnwrapErr;
     use testresult::TestResult;
     use tracing::info;
 
@@ -291,10 +292,10 @@ mod tests {
         let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
         let sleeper: Arc<dyn Sleeper + Send + Sync> = Arc::new(SleeperImpl);
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, name)?);
-        let random_bytes_provider = Arc::new(Mutex::new(RandomBytesProviderImpl::new()));
+        let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
 
-        let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), random_bytes_provider.clone(), sleeper.clone()).await);
-        let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, random_bytes_provider));
+        let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), sleeper.clone(), rng.clone()).await);
+        let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, rng.clone()));
 
         let node_ref_repo_dir = state_dir.join(name).join("repo");
         fs::create_dir_all(&node_ref_repo_dir)?;
@@ -315,6 +316,7 @@ mod tests {
             node_profile_fetcher,
             clock,
             sleeper,
+            rng,
             NodeFinderOption {
                 state_dir: node_finder_dir.as_os_str().to_str().unwrap().to_string(),
                 max_connected_session_count: 3,

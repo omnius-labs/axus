@@ -15,8 +15,8 @@ use omnius_core_base::sleeper::Sleeper;
 
 use crate::{
     base::{
-        Shutdown,
         connection::{FramedRecvExt as _, FramedSendExt as _},
+        runtime::Shutdown,
     },
     core::session::model::Session,
     model::{AssetKey, NodeProfile},

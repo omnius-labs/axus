@@ -7,8 +7,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use futures::FutureExt;
 use parking_lot::Mutex;
-use rand::{SeedableRng, seq::IndexedRandom as _};
-use rand_chacha::ChaCha20Rng;
+use rand::seq::IndexedRandom;
 use tokio::{
     sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc},
     task::JoinHandle,
@@ -18,7 +17,7 @@ use tracing::warn;
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 
 use crate::{
-    base::{runtime::Shutdown, collections::VolatileHashSet},
+    base::{collections::VolatileHashSet, runtime::Shutdown},
     core::session::{
         SessionConnector,
         model::{SessionHandshakeType, SessionType},
@@ -38,6 +37,7 @@ pub struct TaskConnector {
     node_profile_repo: Arc<NodeFinderRepo>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
+    rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     option: NodeFinderOption,
     join_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
 }
@@ -62,6 +62,7 @@ impl TaskConnector {
         node_profile_repo: Arc<NodeFinderRepo>,
         clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
+        rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         option: NodeFinderOption,
     ) -> Result<Arc<Self>> {
         let v = Arc::new(Self {
@@ -73,6 +74,7 @@ impl TaskConnector {
             clock,
             sleeper,
             option,
+            rng,
             join_handle: Arc::new(TokioMutex::new(None)),
         });
 
@@ -124,10 +126,12 @@ impl TaskConnector {
             .filter(|n| !connected_ids.contains(&n.id))
             .collect();
 
-        let mut rng = ChaCha20Rng::from_os_rng();
-        let node_profile = node_profiles
-            .choose(&mut rng)
-            .ok_or_else(|| Error::new(ErrorKind::NotFound).with_message("node profile is not found"))?;
+        let node_profile = {
+            let mut rng = self.rng.lock();
+            node_profiles
+                .choose(&mut *rng)
+                .ok_or_else(|| Error::new(ErrorKind::NotFound).with_message("node profile is not found"))?
+        };
 
         for addr in node_profile.addrs.iter() {
             if let Ok(session) = self.session_connector.connect(addr, &SessionType::NodeFinder).await {

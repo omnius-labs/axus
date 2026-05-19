@@ -32,6 +32,7 @@ pub struct TaskComputer {
     get_want_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
     get_push_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
+    rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     #[allow(unused)]
     option: NodeFinderOption,
     join_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
@@ -57,6 +58,7 @@ impl TaskComputer {
         get_want_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
         get_push_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
+        rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         option: NodeFinderOption,
     ) -> Result<Arc<Self>> {
         let v = Arc::new(Self {
@@ -67,6 +69,7 @@ impl TaskComputer {
             get_want_asset_keys_fn,
             get_push_asset_keys_fn,
             sleeper,
+            rng,
             option,
             join_handle: Arc::new(TokioMutex::new(None)),
         });
@@ -128,10 +131,12 @@ impl TaskComputer {
                 let mut push_asset_key_locations: Vec<(Arc<AssetKey>, Vec<Arc<NodeProfile>>)> =
                     data.push_asset_key_locations.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect();
 
-                let mut rng = rand::rng();
-                want_asset_keys.shuffle(&mut rng);
-                give_asset_key_locations.shuffle(&mut rng);
-                push_asset_key_locations.shuffle(&mut rng);
+                {
+                    let mut rng = self.rng.lock();
+                    want_asset_keys.shuffle(&mut rng);
+                    give_asset_key_locations.shuffle(&mut rng);
+                    push_asset_key_locations.shuffle(&mut rng);
+                }
 
                 let tmp = ReceivedTempDataMessage {
                     want_asset_keys,

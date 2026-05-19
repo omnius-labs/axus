@@ -7,11 +7,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use futures::FutureExt;
 use parking_lot::Mutex;
-use rand::{
-    SeedableRng,
-    seq::{IndexedRandom as _, SliceRandom},
-};
-use rand_chacha::ChaCha20Rng;
+use rand::seq::SliceRandom;
 use tokio::{
     sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc},
     task::JoinHandle,
@@ -47,6 +43,7 @@ pub struct TaskConnector {
     connected_node_profiles: Arc<Mutex<VolatileHashSet<Arc<NodeProfile>>>>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
+    rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     option: FileExchangerOption,
     join_handles: Arc<TokioMutex<Vec<JoinHandle<()>>>>,
 }
@@ -73,6 +70,7 @@ impl TaskConnector {
         connected_node_profiles: Arc<Mutex<VolatileHashSet<Arc<NodeProfile>>>>,
         clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
+        rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         option: FileExchangerOption,
     ) -> Result<Arc<Self>> {
         let v = Arc::new(Self {
@@ -83,8 +81,9 @@ impl TaskConnector {
             file_publisher,
             file_subscriber,
             connected_node_profiles,
-            sleeper,
             clock,
+            sleeper,
+            rng,
             option,
             join_handles: Arc::new(TokioMutex::new(vec![])),
         });
@@ -179,35 +178,38 @@ impl TaskConnector {
             v1.into_iter().chain(v2.into_iter()).collect()
         };
 
-        let mut asset_keys: Vec<AssetKey> = root_hashes.into_iter().map(|hash| AssetKey { typ: "file".to_string(), hash }).collect();
-
-        let mut rng = ChaCha20Rng::from_os_rng();
-        asset_keys.shuffle(&mut rng);
+        let asset_keys = {
+            let mut rng = self.rng.lock();
+            let mut asset_keys: Vec<AssetKey> = root_hashes.into_iter().map(|hash| AssetKey { typ: "file".to_string(), hash }).collect();
+            asset_keys.shuffle(&mut rng);
+            asset_keys
+        };
 
         for asset_key in asset_keys {
-            let node_profiles: Vec<Arc<NodeProfile>> = self
-                .node_finder
-                .find_node_profile(&asset_key)
-                .await?
-                .into_iter()
-                .filter(|n| !connected_ids.contains(&n.id))
-                .collect();
-            let Some(node_profile) = node_profiles.choose(&mut rng) else {
-                continue;
-            };
+            // let asset_keys = {
+            //     let mut rng = self.rng.lock();
+            //     let mut asset_keys: Vec<AssetKey> = root_hashes.into_iter().map(|hash| AssetKey { typ: "file".to_string(), hash }).collect();
+            //     asset_keys.shuffle(&mut rng);
+            //     asset_keys
+            // };
 
-            for addr in node_profile.addrs.iter() {
-                if let Ok(session) = self.session_connector.connect(addr, &SessionType::FileExchanger).await {
-                    let status = SessionStatus::new(exchange_type, session, Some(asset_key.hash.clone()), self.clock.clone());
-                    self.session_sender
-                        .lock()
-                        .await
-                        .send(status)
-                        .await
-                        .map_err(|e| Error::from_error(e, ErrorKind::UnexpectedError))?;
-                    self.connected_node_profiles.lock().insert(node_profile.clone());
+            let node_profiles = self.node_finder.find_node_profile(&asset_key).await?;
+            let node_profiles: Vec<Arc<NodeProfile>> = node_profiles.into_iter().filter(|n| !connected_ids.contains(&n.id)).collect();
 
-                    return Ok(());
+            for node_profile in node_profiles {
+                for addr in node_profile.addrs.iter() {
+                    if let Ok(session) = self.session_connector.connect(addr, &SessionType::FileExchanger).await {
+                        let status = SessionStatus::new(exchange_type, session, Some(asset_key.hash.clone()), self.clock.clone());
+                        self.session_sender
+                            .lock()
+                            .await
+                            .send(status)
+                            .await
+                            .map_err(|e| Error::from_error(e, ErrorKind::UnexpectedError))?;
+                        self.connected_node_profiles.lock().insert(node_profile.clone());
+
+                        return Ok(());
+                    }
                 }
             }
         }

@@ -3,19 +3,20 @@ use std::{collections::HashMap, sync::Arc};
 use async_trait::async_trait;
 use futures::{FutureExt, future::join_all};
 use parking_lot::Mutex;
+use rand::RngExt;
 use tokio::{
     sync::{Mutex as TokioMutex, mpsc},
     task::JoinHandle,
 };
 use tracing::warn;
 
-use omnius_core_base::{random_bytes::RandomBytesProvider, sleeper::Sleeper};
+use omnius_core_base::sleeper::Sleeper;
 use omnius_core_omnikit::model::{OmniAddr, OmniSigner};
 
 use crate::{
     base::{
-        Shutdown,
         connection::{ConnectionTcpAccepter, FramedRecvExt as _, FramedSendExt as _},
+        runtime::Shutdown,
     },
     core::session::message::{HelloMessage, SessionVersion, V1ChallengeMessage, V1RequestMessage, V1SignatureMessage},
     prelude::*,
@@ -29,8 +30,8 @@ use super::{
 pub struct SessionAccepter {
     tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
     signer: Arc<OmniSigner>,
-    random_bytes_provider: Arc<Mutex<dyn RandomBytesProvider + Send + Sync>>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
+    rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     receivers: Arc<TokioMutex<HashMap<SessionType, mpsc::Receiver<Session>>>>,
     senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<Session>>>>,
     task_acceptors: Arc<TokioMutex<Vec<TaskAccepter>>>,
@@ -40,8 +41,8 @@ impl SessionAccepter {
     pub async fn new(
         tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
         signer: Arc<OmniSigner>,
-        random_bytes_provider: Arc<Mutex<dyn RandomBytesProvider + Send + Sync>>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
+        rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     ) -> Self {
         let senders = Arc::new(TokioMutex::new(HashMap::<SessionType, mpsc::Sender<Session>>::new()));
         let receivers = Arc::new(TokioMutex::new(HashMap::<SessionType, mpsc::Receiver<Session>>::new()));
@@ -55,7 +56,7 @@ impl SessionAccepter {
         let result = Self {
             tcp_accepter,
             signer,
-            random_bytes_provider,
+            rng,
             sleeper,
             receivers,
             senders,
@@ -68,13 +69,7 @@ impl SessionAccepter {
 
     async fn run(&self) {
         for _ in 0..3 {
-            let task = TaskAccepter::new(
-                self.senders.clone(),
-                self.tcp_accepter.clone(),
-                self.signer.clone(),
-                self.random_bytes_provider.clone(),
-                self.sleeper.clone(),
-            );
+            let task = TaskAccepter::new(self.senders.clone(), self.tcp_accepter.clone(), self.signer.clone(), self.rng.clone(), self.sleeper.clone());
             task.run().await;
             self.task_acceptors.lock().await.push(task);
         }
@@ -113,14 +108,14 @@ impl TaskAccepter {
         senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<Session>>>>,
         tcp_connector: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
         signer: Arc<OmniSigner>,
-        random_bytes_provider: Arc<Mutex<dyn RandomBytesProvider + Send + Sync>>,
+        rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
     ) -> Self {
         let inner = Inner {
             senders,
             tcp_connector,
             signer,
-            random_bytes_provider,
+            rng,
         };
         Self {
             inner,
@@ -160,7 +155,7 @@ struct Inner {
     senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<Session>>>>,
     tcp_connector: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
     signer: Arc<OmniSigner>,
-    random_bytes_provider: Arc<Mutex<dyn RandomBytesProvider + Send + Sync>>,
+    rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
 }
 
 impl Inner {
@@ -174,7 +169,7 @@ impl Inner {
         let version = send_hello_message.version | received_hello_message.version;
 
         if version.contains(SessionVersion::V1) {
-            let send_nonce: [u8; 32] = self.random_bytes_provider.lock().get_bytes(32).as_slice().try_into()?;
+            let send_nonce: [u8; 32] = self.rng.lock().random();
             let send_challenge_message = V1ChallengeMessage { nonce: send_nonce };
             stream.sender.lock().await.send_message(&send_challenge_message).await?;
             let receive_challenge_message: V1ChallengeMessage = stream.receiver.lock().await.recv_message().await?;

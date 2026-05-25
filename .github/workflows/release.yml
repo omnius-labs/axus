@@ -42,7 +42,7 @@ jobs:
         run: |
           cd ./pub/linux-x64 && zip -r ../../pxna-linux-x64-${{ steps.variables.outputs.release_version }}.zip ./*
       - name: Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             pxna-linux-x64-${{ steps.variables.outputs.release_version }}.zip
@@ -79,7 +79,7 @@ jobs:
           files: ./pub/win-x64
           dest: pxna-win-x64-${{ steps.variables.outputs.release_version }}.zip
       - name: Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             pxna-win-x64-${{ steps.variables.outputs.release_version }}.zip

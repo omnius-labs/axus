@@ -1,0 +1,78 @@
+openapi: 3.0.3
+info:
+    title: Axus
+    version: 0.2.0
+    description: |
+        Axus daemon API.
+    license:
+        name: MIT
+
+servers:
+    - url: http://localhost:6050/api/v1
+      description: Local development daemon
+
+tags:
+    - name: Health
+      description: Daemon liveness checks.
+
+paths:
+    /health:
+        get:
+            tags:
+                - Health
+            summary: Check daemon health
+            operationId: getHealth
+            security: []
+            responses:
+                "200":
+                    description: The daemon is running.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/HealthResponse"
+                            example:
+                                result: true
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+components:
+    responses:
+        InternalServerError:
+            description: Internal server error.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: InternalServerError
+                        message: Unexpected server error.
+
+    schemas:
+        HealthResponse:
+            type: object
+            required:
+                - result
+            properties:
+                result:
+                    type: boolean
+
+        ErrorResponse:
+            type: object
+            required:
+                - kind
+            properties:
+                kind:
+                    $ref: "#/components/schemas/ErrorKind"
+                message:
+                    type: string
+                requestId:
+                    type: string
+                    description: Optional request identifier for server logs.
+
+        ErrorKind:
+            type: string
+            enum:
+                - InternalServerError
+                - InvalidRequest
+                - NotFound
+                - Forbidden

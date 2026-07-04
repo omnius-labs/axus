@@ -136,10 +136,10 @@ impl Executor {
                 tokio::select! {
                     result = tokio::signal::ctrl_c() => {
                         if result.is_ok() {
-                            cancellation.cancel();
+                            token.cancel();
                         }
                     }
-                    _ = cancellation.cancelled() => {}
+                    _ = token.cancelled() => {}
                 }
             }))
         }

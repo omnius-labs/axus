@@ -175,7 +175,7 @@ impl TaskConnector {
         let connected_ids: HashSet<Vec<u8>> = {
             let v1: Vec<Vec<u8>> = self.connected_node_profiles.lock().iter().map(|n| n.id.to_owned()).collect();
             let v2: Vec<Vec<u8>> = self.sessions.read().await.iter().map(|n| n.0.to_owned()).collect();
-            v1.into_iter().chain(v2.into_iter()).collect()
+            v1.into_iter().chain(v2).collect()
         };
 
         let asset_keys = {

@@ -77,9 +77,9 @@ CREATE TABLE IF NOT EXISTS uncommitted_blocks (
     block_hash TEXT NOT NULL,
     rank INTEGER NOT NULL,
     `index` INTEGER NOT NULL,
-    PRIMARY KEY (root_hash, block_hash, rank, `index`)
+    PRIMARY KEY (file_id, block_hash, rank, `index`)
 );
-CREATE INDEX IF NOT EXISTS index_root_hash_rank_index_for_committed_blocks ON committed_blocks (root_hash, rank ASC, `index` ASC);
+CREATE INDEX IF NOT EXISTS index_file_id_rank_index_for_uncommitted_blocks ON committed_blocks (file_id, rank ASC, `index` ASC);
 "#
             .to_string(),
         }];
@@ -379,6 +379,23 @@ UPDATE uncommitted_files
         Ok(())
     }
 
+    pub async fn update_uncommitted_file_as_failed(&self, id: &str, reason: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+UPDATE uncommitted_files
+    SET status = ?, failed_reason = ?
+    WHERE id = ?
+"#,
+        )
+        .bind(PublishedUncommittedFileStatus::Failed)
+        .bind(reason)
+        .bind(id)
+        .execute(self.db.as_ref())
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn delete_uncommitted_file(&self, id: &str) -> Result<()> {
         let mut tx = self.db.begin().await?;
 
@@ -424,6 +441,22 @@ SELECT COUNT(1)
         Ok(res > 0)
     }
 
+    pub async fn get_uncommitted_blocks(&self, limit: i64) -> Result<Vec<PublishedUncommittedBlock>> {
+        let res: Vec<PublishedUncommittedBlockRow> = sqlx::query_as(
+            r#"
+SELECT file_id, block_hash, rank, `index`
+    FROM uncommitted_blocks
+    LIMIT ?
+"#,
+        )
+        .bind(limit)
+        .fetch_all(self.db.as_ref())
+        .await?;
+
+        let res: Vec<PublishedUncommittedBlock> = res.into_iter().filter_map(|r| r.into().ok()).collect();
+        Ok(res)
+    }
+
     pub async fn find_uncommitted_blocks_by_file_id(&self, file_id: &str) -> Result<Vec<PublishedUncommittedBlock>> {
         let res: Vec<PublishedUncommittedBlockRow> = sqlx::query_as(
             r#"
@@ -454,6 +487,31 @@ INSERT OR IGNORE INTO uncommitted_blocks (file_id, block_hash, rank, `index`)
         .bind(row.index)
         .execute(self.db.as_ref())
         .await?;
+
+        Ok(())
+    }
+
+    pub async fn delete_uncommitted_blocks(&self, blocks: &[PublishedUncommittedBlock]) -> Result<()> {
+        let mut tx = self.db.begin().await?;
+
+        let rows: Vec<PublishedUncommittedBlockRow> = blocks.iter().filter_map(|b| PublishedUncommittedBlockRow::from(b).ok()).collect();
+
+        for r in rows {
+            sqlx::query(
+                r#"
+DELETE FROM uncommitted_blocks
+    WHERE file_id = ? AND block_hash = ? AND rank = ? AND `index` = ?
+"#,
+            )
+            .bind(r.file_id)
+            .bind(r.block_hash)
+            .bind(r.rank)
+            .bind(r.index)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
 
         Ok(())
     }

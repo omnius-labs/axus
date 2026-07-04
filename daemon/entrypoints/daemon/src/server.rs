@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{prelude::*, state::DaemonState};
 
 pub struct ApiServer {
+    #[allow(unused)]
     state: Arc<DaemonState>,
 }
 

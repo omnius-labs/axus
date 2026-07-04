@@ -22,13 +22,3 @@ updates:
       dependencies:
         patterns:
           - "*"
-  - package-ecosystem: nuget
-    directory: "/ui-desktop"
-    schedule:
-      interval: "weekly"
-    labels:
-      - "dependabot"
-    groups:
-      dependencies:
-        patterns:
-          - "*"

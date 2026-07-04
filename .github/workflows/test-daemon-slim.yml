@@ -7,9 +7,6 @@ on:
       - "**"
       - "!main"
       - "!release/*"
-    paths:
-      - "daemon/**"
-      - "!daemon/docs/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -26,7 +23,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-
       - name: Maximize build space
         if: runner.os == 'Linux'
         uses: AdityaGarg8/remove-unwanted-software@v5

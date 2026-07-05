@@ -181,7 +181,7 @@ impl TaskComputer {
         }
         for data in received_data_map.values() {
             for (asset_key, node_profiles) in data.push_asset_key_locations.iter() {
-                give_asset_key_locations.entry(asset_key.clone()).or_default().extend(node_profiles.iter().cloned());
+                push_asset_key_locations.entry(asset_key.clone()).or_default().extend(node_profiles.iter().cloned());
             }
         }
 

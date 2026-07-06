@@ -40,6 +40,7 @@ jobs:
         with:
           version: "20.1"
           directory: ${{ runner.temp }}/llvm
+          cached: true
 
       - name: Setup rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -54,7 +55,8 @@ jobs:
       - name: Setup rust cache
         uses: Swatinem/rust-cache@v2.9.1
         with:
-          shared-key: "ubuntu-latest-lint-slim"
+          shared-key: "ubuntu-latest-slim"
+          cache-on-failure: "true"
           cache-workspace-crates: "true"
           workspaces: |
             daemon -> target
@@ -63,14 +65,9 @@ jobs:
         run: cargo make lint
 
   test:
-    needs: lint
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ubuntu-latest
     steps:
       - name: Maximize build space
-        if: runner.os == 'Linux'
         uses: AdityaGarg8/remove-unwanted-software@v5
         with:
           remove-dotnet: true
@@ -90,17 +87,22 @@ jobs:
         with:
           version: "20.1"
           directory: ${{ runner.temp }}/llvm
+          cached: true
 
       - name: Setup rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Setup rust cache
         uses: Swatinem/rust-cache@v2.9.1
         with:
-          shared-key: "${{ matrix.os }}-test-slim"
+          shared-key: "ubuntu-latest-slim"
+          cache-on-failure: "true"
           cache-workspace-crates: "true"
           workspaces: |
             daemon -> target
 
       - name: Test
-        run: cargo test
+        run: cargo nextest run

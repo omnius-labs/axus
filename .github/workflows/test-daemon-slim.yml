@@ -40,7 +40,6 @@ jobs:
         with:
           version: "20.1"
           directory: ${{ runner.temp }}/llvm
-          cached: true
 
       - name: Setup rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -87,7 +86,6 @@ jobs:
         with:
           version: "20.1"
           directory: ${{ runner.temp }}/llvm
-          cached: true
 
       - name: Setup rust toolchain
         uses: dtolnay/rust-toolchain@stable

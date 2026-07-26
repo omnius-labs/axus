@@ -33,6 +33,11 @@ sudo apt-get install -y libclang-dev
 ```
 This package is required for RocksDB.
 
+## Docs
+
+- [DESIGN.md](./docs/DESIGN.md)
+- [ISSUES.md](./docs/ISSUES.md)
+
 ## Links
 
 - Official Documentation: https://docs.omnius-labs.com/

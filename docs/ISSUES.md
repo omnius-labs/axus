@@ -1,7 +1,7 @@
 # Axus 既知の不具合
 
 本書は、コードを読んで確認した明確な不具合を扱う。
-設計上の未決事項は扱わず、[DESIGN.md §12.2](./DESIGN.md#122-保留) に置く。
+設計上の未決事項は扱わず、[DESIGN.md §13.2](./DESIGN.md#132-保留) に置く。
 
 ## この文書の使い方
 
@@ -103,7 +103,7 @@ I-1 により FileExchanger が daemon から構築されないため、現在�
 ### 対応方針
 
 対象 table と model に合わせて索引、primary key、列名を修正する。
-既存 MigrationRequest を直接修正できるかは、[DESIGN.md §9.4](./DESIGN.md#94-schema-migration) に従って判断する。
+既存 MigrationRequest を直接修正できるかは、[DESIGN.md §10.4](./DESIGN.md#104-schema-migration) に従って判断する。
 適用済み環境が存在しないことを確認できた場合に限り、既存 MigrationRequest を直接修正する。
 適用済み環境が存在する場合、または存在しないことを確認できない場合は、新しい MigrationRequest を追加する。
 修正後は publisher と subscriber の初期化 test を追加する。
@@ -189,7 +189,7 @@ encoder と decoder は異なる意味で実装されている。
 
 ### 対応方針
 
-[DESIGN.md §12.2](./DESIGN.md#merklelayerrank-の意味) で rank の意味を決める。
+[DESIGN.md §13.2](./DESIGN.md#merklelayerrank-の意味) で rank の意味を決める。
 決定した意味に合わせて encoder と decoder を同時に修正する。
 encode から decode までの round-trip test で契約を固定する。
 
@@ -276,7 +276,7 @@ V2 以降を追加すると、接続成立後に message の解釈が食い違�
 
 3 箇所の `|` を `&` に変更する。
 積集合が空の場合は、対応 version がないことを示す error を返す。
-複数の共通 version から 1 つを選ぶ規則は [DESIGN.md §12.2](./DESIGN.md#session-の-version-選択) で決める。
+複数の共通 version から 1 つを選ぶ規則は [DESIGN.md §13.2](./DESIGN.md#session-の-version-選択) で決める。
 共通 version がない場合と複数ある場合の test を追加する。
 
 <a id="i-7"></a>
@@ -307,7 +307,7 @@ session 層の相互認証で node ごとの鍵を識別できない。
 
 ### 対応方針
 
-[DESIGN.md §12.2](./DESIGN.md#nodeprofileid-と署名鍵の結合) で node identity と署名鍵の関係を決める。
+[DESIGN.md §13.2](./DESIGN.md#nodeprofileid-と署名鍵の結合) で node identity と署名鍵の関係を決める。
 決定した identity に基づいて signer の識別子と永続化方法を実装する。
 node ごとに異なる鍵が生成または復元されることを test する。
 
@@ -425,10 +425,10 @@ I-8 の設定ファイル名変更も同じ test で検証する。
 
 | 項目                                        | 参照                                                         |
 | ------------------------------------------- | ------------------------------------------------------------ |
-| session の secure channel がない            | [DESIGN.md §12.2](./DESIGN.md#session-の-secure-channel)     |
-| FileExchanger の block 交換 protocol がない | [DESIGN.md §8.4](./DESIGN.md#84-接続相手と-block-の検証)     |
-| 購読開始の入口がない                        | [DESIGN.md §13.1](./DESIGN.md#131-現状)                      |
-| NodeFinder の能動探索がない                 | [DESIGN.md §12.2](./DESIGN.md#nodefinder-の能動探索と冗長度) |
-| Web of Trust が未設計である                 | [DESIGN.md §12.2](./DESIGN.md#web-of-trust-の単位と伝播)     |
-| Profile と memo が未実装である              | [DESIGN.md §11.2](./DESIGN.md#112-層ごとの責務)              |
-| 長時間 REST 操作の表現が未決である          | [DESIGN.md §12.2](./DESIGN.md#長時間-rest-操作の表現)        |
+| session の secure channel がない            | [DESIGN.md §13.2](./DESIGN.md#session-の-secure-channel)     |
+| FileExchanger の block 交換 protocol がない | [DESIGN.md §9.4](./DESIGN.md#94-接続相手と-block-の検証)     |
+| 購読開始の入口がない                        | [DESIGN.md §14.1](./DESIGN.md#141-現状)                      |
+| NodeFinder の能動探索がない                 | [DESIGN.md §13.2](./DESIGN.md#nodefinder-の能動探索と冗長度) |
+| Web of Trust が未設計である                 | [DESIGN.md §13.2](./DESIGN.md#web-of-trust-の単位と伝播)     |
+| Profile と memo が未実装である              | [DESIGN.md §12.2](./DESIGN.md#122-層ごとの責務)              |
+| 長時間 REST 操作の表現が未決である          | [DESIGN.md §13.2](./DESIGN.md#長時間-rest-操作の表現)        |

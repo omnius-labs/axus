@@ -54,7 +54,7 @@ jobs:
           version: latest
 
       - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2.9.1
+        uses: Swatinem/rust-cache@v2.9.2
         with:
           shared-key: "ubuntu-latest-all-lint"
           cache-on-failure: "true"
@@ -100,7 +100,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2.9.1
+        uses: Swatinem/rust-cache@v2.9.2
         with:
           shared-key: "${{ matrix.os }}-all-test"
           cache-on-failure: "true"

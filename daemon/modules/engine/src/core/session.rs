@@ -19,7 +19,8 @@ mod tests {
     use testresult::TestResult;
 
     use omnius_core_base::sleeper::FakeSleeper;
-    use omnius_core_omnikit::model::{OmniAddr, OmniSignType, OmniSigner};
+    use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
+    use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
     use crate::{
         base::{

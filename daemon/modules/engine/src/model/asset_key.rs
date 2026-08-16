@@ -1,4 +1,4 @@
-use omnius_core_omnikit::model::OmniHash;
+use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
 use crate::prelude::*;
 

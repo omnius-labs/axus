@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 
-use omnius_core_omnikit::model::OmniHash;
+use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
 #[derive(Clone)]
 pub struct PublishedUncommittedFile {

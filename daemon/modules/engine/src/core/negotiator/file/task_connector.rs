@@ -15,7 +15,7 @@ use tokio::{
 use tracing::warn;
 
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
-use omnius_core_omnikit::model::OmniHash;
+use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
 use crate::{
     base::{collections::VolatileHashSet, runtime::Shutdown},

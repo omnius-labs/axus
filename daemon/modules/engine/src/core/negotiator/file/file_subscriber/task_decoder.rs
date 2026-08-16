@@ -13,7 +13,7 @@ use tokio::{
 use tokio_util::bytes::Bytes;
 
 use omnius_core_base::{clock::Clock, sleeper::Sleeper, tsid::TsidProvider};
-use omnius_core_omnikit::model::OmniHash;
+use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
 use crate::{
     base::{runtime::Shutdown, storage::KeyValueRocksdbStorage, sync::EventListener},

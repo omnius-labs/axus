@@ -5,7 +5,7 @@ use sqlx::{QueryBuilder, sqlite::SqlitePool};
 
 use omnius_core_base::clock::Clock;
 use omnius_core_migration::sqlite::{MigrationRequest, SqliteMigrator};
-use omnius_core_omnikit::model::OmniHash;
+use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
 use crate::prelude::*;
 

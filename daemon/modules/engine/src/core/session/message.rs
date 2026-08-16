@@ -1,4 +1,4 @@
-use omnius_core_omnikit::model::OmniCert;
+use omnius_core_omnikit::generated::omni_sign::OmniCert;
 
 use crate::prelude::*;
 

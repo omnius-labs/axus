@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use tokio::net::TcpListener;
 
 use omnius_core_base::net::Reachable;
-use omnius_core_omnikit::model::OmniAddr;
+use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
 use crate::{
     base::{connection::FramedStream, runtime::Shutdown},

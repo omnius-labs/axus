@@ -11,7 +11,8 @@ use tokio::{
 use tracing::warn;
 
 use omnius_core_base::sleeper::Sleeper;
-use omnius_core_omnikit::model::{OmniAddr, OmniSigner};
+use omnius_core_omnikit::generated::omni_sign::OmniSigner;
+use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
 use crate::{
     base::{

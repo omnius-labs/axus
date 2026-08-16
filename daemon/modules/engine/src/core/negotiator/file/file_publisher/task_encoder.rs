@@ -17,7 +17,7 @@ use tokio_util::{bytes::Bytes, sync::CancellationToken};
 use tracing::warn;
 
 use omnius_core_base::{clock::Clock, sleeper::Sleeper, tsid::TsidProvider};
-use omnius_core_omnikit::model::{OmniHash, OmniHashAlgorithmType};
+use omnius_core_omnikit::generated::omni_hash::{OmniHash, OmniHashAlgorithmType};
 
 use crate::{
     base::{runtime::Shutdown, storage::KeyValueRocksdbStorage, sync::EventListener},

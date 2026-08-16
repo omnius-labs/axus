@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use omnius_core_omnikit::model::{OmniAddr, OmniSigner};
+use omnius_core_omnikit::generated::omni_sign::OmniSigner;
+use omnius_core_omnikit::model::omni_addr::OmniAddr;
 use parking_lot::Mutex;
 use rand::RngExt;
 

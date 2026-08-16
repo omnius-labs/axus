@@ -8,7 +8,7 @@ pub use upnp_client::*;
 
 #[cfg(test)]
 mod tests {
-    use omnius_core_omnikit::model::OmniAddr;
+    use omnius_core_omnikit::model::omni_addr::OmniAddr;
     use testresult::TestResult;
 
     use crate::{

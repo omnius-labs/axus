@@ -1,4 +1,4 @@
-use omnius_core_omnikit::model::OmniHash;
+use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
 pub fn gen_uncommitted_block_path(id: &str, block_hash: &OmniHash) -> String {
     format!("U/{id}/{block_hash}")

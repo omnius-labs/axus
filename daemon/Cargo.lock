@@ -2579,7 +2579,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "ed25519-dalek",
- "enumflags2",
  "futures-util",
  "hex",
  "hkdf",
@@ -2590,7 +2589,6 @@ dependencies = [
  "rand 0.10.1",
  "rand_core 0.10.1",
  "sha3",
- "strum",
  "testresult",
  "tokio",
  "tokio-stream",
@@ -2605,11 +2603,8 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "hex",
- "omnius-core-base",
- "serde",
  "testresult",
  "thiserror 2.0.18",
- "tracing",
 ]
 
 [[package]]

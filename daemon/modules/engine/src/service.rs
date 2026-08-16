@@ -7,7 +7,8 @@ use omnius_core_base::{
     clock::{Clock, ClockUtc},
     sleeper::{Sleeper, SleeperImpl},
 };
-use omnius_core_omnikit::model::{OmniAddr, OmniSignType, OmniSigner};
+use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
+use omnius_core_omnikit::model::omni_addr::OmniAddr;
 use rand::{
     SeedableRng,
     rngs::{ChaCha20Rng, SysRng},

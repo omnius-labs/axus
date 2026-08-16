@@ -1,4 +1,4 @@
-use omnius_core_omnikit::model::OmniAddr;
+use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
 use crate::{model::converter::UriConverter, prelude::*};
 

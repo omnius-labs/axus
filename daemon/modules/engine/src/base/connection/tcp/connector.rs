@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use fast_socks5::client::Socks5Stream;
-use omnius_core_omnikit::model::OmniAddr;
+use omnius_core_omnikit::model::omni_addr::OmniAddr;
 use tokio::net::TcpStream;
 
 use crate::{base::connection::FramedStream, prelude::*};

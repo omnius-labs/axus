@@ -3,6 +3,9 @@
 /bin
 /state
 
+config/*
+!config/axus.toml
+
 # Visual Studio Code
 .vscode/*
 !.vscode/tasks.json

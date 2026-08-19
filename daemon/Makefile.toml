@@ -15,6 +15,7 @@ workspace = false
 dependencies = ["fmt-check", "clippy"]
 
 [tasks.test]
+workspace = false
 command = "cargo"
-args = ["test", "--all-features"]
+args = ["nextest", "run", "--all-features"]
 dependencies = ["lint"]

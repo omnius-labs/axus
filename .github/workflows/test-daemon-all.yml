@@ -95,6 +95,13 @@ jobs:
 
       - name: Setup rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Setup cargo make
+        uses: davidB/rust-cargo-make@v1
+        with:
+          version: latest
 
       - name: Install cargo nextest
         uses: taiki-e/install-action@nextest
@@ -109,4 +116,4 @@ jobs:
             daemon -> target
 
       - name: Test
-        run: cargo nextest run --features "stable-test"
+        run: cargo make test

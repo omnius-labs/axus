@@ -60,7 +60,7 @@ impl DaemonConfig {
     }
 
     async fn load_toml(dir: &Path) -> Result<DaemonConfigToml> {
-        let toml_path = dir.join("pxna.toml");
+        let toml_path = dir.join("axus.toml");
         let toml = tokio::fs::read_to_string(toml_path).await?;
         Ok(toml::from_str(&toml)?)
     }
@@ -68,15 +68,12 @@ impl DaemonConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write as _;
-
     use testresult::TestResult;
 
     use super::*;
 
-    #[ignore]
     #[tokio::test]
-    async fn secret_reader_test() -> TestResult {
+    async fn load_config_test() -> TestResult {
         let toml = r#"
             [core]
             state_dir = "./state"
@@ -88,13 +85,26 @@ mod tests {
         "#;
 
         let tempdir = tempfile::tempdir()?;
-        let config_path = tempdir.path().join("pxna.toml");
-        std::fs::File::create(&config_path)?.write_all(toml.as_bytes())?;
+        std::fs::write(tempdir.path().join("axus.toml"), toml)?;
 
         let conf = DaemonConfig::load(tempdir.path()).await?;
 
-        assert_eq!(conf.core.listen_addr, "0.0.0.0:6050");
+        assert_eq!(conf.core.listen_addr, "0.0.0.0:6051");
         assert_eq!(conf.core.state_dir, tempdir.path().join("./state"));
+        assert_eq!(conf.logging.level, "info");
+        assert!(!conf.logging.json);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn load_repository_sample_test() -> TestResult {
+        let config_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config");
+
+        let conf = DaemonConfig::load(&config_dir).await?;
+
+        assert_eq!(conf.core.listen_addr, "127.0.0.1:5050");
+        assert_eq!(conf.core.state_dir, config_dir.join("./state"));
         assert_eq!(conf.logging.level, "info");
         assert!(!conf.logging.json);
 

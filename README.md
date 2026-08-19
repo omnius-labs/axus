@@ -33,6 +33,17 @@ sudo apt-get install -y libclang-dev
 ```
 This package is required for RocksDB.
 
+### Daemon Configuration
+
+The daemon selects its configuration directory from `AXUS_DAEMON_CONFIG_DIR`, `~/.config/axus`, then `.config/axus`.
+The selected directory must contain [axus.toml](./daemon/config/axus.toml).
+
+Run the repository's development configuration with:
+
+```sh
+cargo run --manifest-path daemon/Cargo.toml -p omnius-axus-daemon -- start --config-dir daemon/config
+```
+
 ## Docs
 
 - [DESIGN.md](./docs/DESIGN.md)

@@ -23,13 +23,9 @@
 | [I-5](#i-5)   | FileExchanger 要求で受理 task が panic し、受信が停止する     | 高     | 未起票 |
 | [I-6](#i-6)   | version 交渉が積集合ではなく和集合になっている                | 中     | 未起票 |
 | [I-7](#i-7)   | 署名鍵の識別子が `"TODO"` 固定である                          | 中     | 未起票 |
-| [I-8](#i-8)   | 設定ファイル名が `pxna.toml` のままである                     | 低     | 未起票 |
-| [I-9](#i-9)   | `axus-config.toml` が現在の parser と整合しない               | 低     | 未起票 |
-| [I-10](#i-10) | 設定 test が期待値不一致のまま無効化されている                | 低     | 未起票 |
 
 I-1 は P2P component を daemon から実行するための前提である。
 I-2、I-3、I-4 はファイル公開と購読の同じ経路にあるため、結線前にまとめて修正する。
-I-8、I-9、I-10 は設定ファイルの命名、sample、test に関する同じ経路にあるため、同時に修正する。
 
 <a id="i-1"></a>
 ## I-1. `DaemonState` が `AxusService` を生成せず、P2P 層が起動しない
@@ -310,113 +306,6 @@ session 層の相互認証で node ごとの鍵を識別できない。
 [DESIGN.md §13.2](./DESIGN.md#nodeprofileid-と署名鍵の結合) で node identity と署名鍵の関係を決める。
 決定した identity に基づいて signer の識別子と永続化方法を実装する。
 node ごとに異なる鍵が生成または復元されることを test する。
-
-<a id="i-8"></a>
-## I-8. 設定ファイル名が `pxna.toml` のままである
-
-**深刻度: 低**
-
-### 症状
-
-Axus daemon は `axus.toml` ではなく `pxna.toml` という名前の設定ファイルを要求する。
-利用者が Axus の名前から設定ファイルを推測できない。
-
-### 該当箇所
-
-[config.rs:63](../daemon/entrypoints/daemon/src/config.rs#L63) が固定ファイル名を指定している。
-
-```rust
-let toml_path = dir.join("pxna.toml");
-```
-
-[config.rs:91](../daemon/entrypoints/daemon/src/config.rs#L91) の test fixture も同じ名前を使う。
-
-### 原因
-
-設定ファイルの固定名が `pxna.toml` のまま残っている。
-この名前を採用した理由はコードに記録されていない。
-
-### 影響
-
-利用者は Axus と異なる名前の設定ファイルを配置する必要がある。
-README に固定名の説明がないため、設定方法を発見しにくい。
-
-### 対応方針
-
-固定名を `axus.toml` に変更する。
-test fixture と README の設定手順も同じ名前へ更新する。
-I-9 と I-10 を同時に修正する。
-
-<a id="i-9"></a>
-## I-9. `axus-config.toml` が現在の parser と整合しない
-
-**深刻度: 低**（通常の設定読込経路では未顕在）
-
-### 症状
-
-repository にある `axus-config.toml` を現在の parser へ渡すと parse error になる。
-CLI はこのファイルを自動では読み込まない。
-
-### 該当箇所
-
-[axus-config.toml:1](../daemon/axus-config.toml#L1) は section を持たない。
-
-```toml
-listen_addr = "127.0.0.1:5050"
-state_dir = "./state"
-```
-
-[config.rs:8](../daemon/entrypoints/daemon/src/config.rs#L8) の `DaemonConfigToml` は `core` と `logging` を要求する。
-[config.rs:63](../daemon/entrypoints/daemon/src/config.rs#L63) は config directory 配下の固定名ファイルだけを読む。
-
-### 原因
-
-repository 直下の設定例が古い schema と配置方法のまま残っている。
-
-### 影響
-
-通常の設定読込経路ではこのファイルを読まないため、daemon の動作には影響しない。
-repository を読んだ利用者には有効な設定例に見えるため、設定方法を誤解させる。
-
-### 対応方針
-
-現在の schema に合わせた `axus.toml.example` へ置き換える。
-README に sample を config directory へコピーする手順を記載する。
-I-8 で変更する固定名と一致させる。
-
-<a id="i-10"></a>
-## I-10. 設定 test が期待値不一致のまま無効化されている
-
-**深刻度: 低**（`#[ignore]` により現時点では未顕在）
-
-### 症状
-
-通常の test 実行では設定読込 test が実行されない。
-ignore を外して実行すると、fixture と期待値の不一致により失敗する。
-
-### 該当箇所
-
-[config.rs:77](../daemon/entrypoints/daemon/src/config.rs#L77) が test に `#[ignore]` を付けている。
-[config.rs:83](../daemon/entrypoints/daemon/src/config.rs#L83) は `listen_addr` に `0.0.0.0:6051` を設定する。
-[config.rs:96](../daemon/entrypoints/daemon/src/config.rs#L96) は `0.0.0.0:6050` を期待する。
-[config.rs:79](../daemon/entrypoints/daemon/src/config.rs#L79) の test 名は内容と一致しない。
-
-### 原因
-
-期待値と fixture の不一致が修正されないまま、test 全体が ignore されている。
-test 名も以前の用途を示す `secret_reader_test` のままである。
-
-### 影響
-
-CI は設定読込の regression を検出できない。
-現在の test が失敗することも CI から見えない。
-
-### 対応方針
-
-期待値を fixture に合わせる。
-test 名を `load_config_test` へ変更する。
-`#[ignore]` を外して CI で常時実行する。
-I-8 の設定ファイル名変更も同じ test で検証する。
 
 ## ここに含めていないもの
 

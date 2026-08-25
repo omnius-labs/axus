@@ -44,14 +44,18 @@ impl SessionAccepter {
         signer: Arc<OmniSigner>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
         rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
+        supported_types: &[SessionType],
     ) -> Self {
-        let senders = Arc::new(TokioMutex::new(HashMap::<SessionType, mpsc::Sender<Session>>::new()));
-        let receivers = Arc::new(TokioMutex::new(HashMap::<SessionType, mpsc::Receiver<Session>>::new()));
+        let mut senders = HashMap::<SessionType, mpsc::Sender<Session>>::new();
+        let mut receivers = HashMap::<SessionType, mpsc::Receiver<Session>>::new();
 
-        for typ in [SessionType::NodeFinder].iter() {
+        for typ in supported_types {
+            if senders.contains_key(typ) {
+                continue;
+            }
             let (tx, rx) = mpsc::channel(20);
-            senders.lock().await.insert(typ.clone(), tx);
-            receivers.lock().await.insert(typ.clone(), rx);
+            senders.insert(typ.clone(), tx);
+            receivers.insert(typ.clone(), rx);
         }
 
         let result = Self {
@@ -59,8 +63,8 @@ impl SessionAccepter {
             signer,
             rng,
             sleeper,
-            receivers,
-            senders,
+            receivers: Arc::new(TokioMutex::new(receivers)),
+            senders: Arc::new(TokioMutex::new(senders)),
             task_acceptors: Arc::new(TokioMutex::new(Vec::new())),
         };
         result.run().await;
@@ -186,20 +190,24 @@ impl Inner {
 
             let received_session_request_message: V1RequestMessage = stream.receiver.lock().await.recv_message().await?;
             let typ = match received_session_request_message.request_type {
-                V1RequestType::Unknown => {
-                    return Err(Error::new(ErrorKind::UnsupportedType).with_message("unsupported request type"));
-                }
-                V1RequestType::NodeFinder => SessionType::NodeFinder,
-                V1RequestType::FileExchanger => SessionType::FileExchanger,
+                V1RequestType::Unknown => None,
+                V1RequestType::NodeFinder => Some(SessionType::NodeFinder),
+                V1RequestType::FileExchanger => Some(SessionType::FileExchanger),
             };
-            if let Ok(permit) = self.senders.lock().await.get(&typ).unwrap().try_reserve() {
+
+            let permit = match typ.as_ref() {
+                Some(typ) => self.senders.lock().await.get(typ).cloned().and_then(|sender| sender.try_reserve_owned().ok()),
+                None => None,
+            };
+
+            if let (Some(typ), Some(permit)) = (typ, permit) {
                 let send_session_result_message = V1ResultMessage {
                     result_type: V1ResultType::Accept,
                 };
                 stream.sender.lock().await.send_message(&send_session_result_message).await?;
 
                 let session = Session {
-                    typ: typ.clone(),
+                    typ,
                     address: OmniAddr::new(format!("tcp({addr})").as_str()),
                     handshake_type: SessionHandshakeType::Accepted,
                     cert: received_signature_message.cert,

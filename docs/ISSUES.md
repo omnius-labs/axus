@@ -20,7 +20,6 @@
 | [I-2](#i-2)   | ファイル関連の SQLite schema が初期化時にエラーになる         | 高     | 未起票 |
 | [I-3](#i-3)   | SQL が存在しない列 `property` を参照している                  | 高     | 未起票 |
 | [I-4](#i-4)   | `MerkleLayer.rank` の解釈が encoder と decoder で 1 ずれる    | 高     | 未起票 |
-| [I-5](#i-5)   | FileExchanger 要求で受理 task が panic し、受信が停止する     | 高     | 未起票 |
 | [I-6](#i-6)   | version 交渉が積集合ではなく和集合になっている                | 中     | 未起票 |
 | [I-7](#i-7)   | 署名鍵の識別子が `"TODO"` 固定である                          | 中     | 未起票 |
 
@@ -49,7 +48,7 @@ HTTP server だけが待ち受ける。
 ### 影響
 
 daemon の通常の起動経路から P2P component を利用できない。
-I-2 から I-7 の経路を daemon として実行する前提も成立しない。
+I-2 から I-4、I-6、I-7 の経路を daemon として実行する前提も成立しない。
 
 ### 対応方針
 
@@ -188,54 +187,6 @@ encoder と decoder は異なる意味で実装されている。
 [DESIGN.md §13.2](./DESIGN.md#merklelayerrank-の意味) で rank の意味を決める。
 決定した意味に合わせて encoder と decoder を同時に修正する。
 encode から decode までの round-trip test で契約を固定する。
-
-<a id="i-5"></a>
-## I-5. FileExchanger 要求で受理 task が panic し、受信が停止する
-
-**深刻度: 高**（通常の daemon では I-1 により未顕在、AxusService 起動時は外部から誘発可能）
-
-### 症状
-
-`AxusService` を起動したノードへ `SessionType::FileExchanger` の接続要求を 3 回送ると、着信を処理する task がすべて停止する。
-process は生存するが、それ以降の着信を受理できない。
-
-### 該当箇所
-
-[accepter.rs:50](../daemon/modules/engine/src/core/session/accepter.rs#L50) は `NodeFinder` 用の受理 queue だけを作る。
-
-```rust
-for typ in [SessionType::NodeFinder].iter() {
-    let (tx, rx) = mpsc::channel(20);
-}
-```
-
-[accepter.rs:194](../daemon/modules/engine/src/core/session/accepter.rs#L194) は request された種別の queue を `unwrap()` で取り出す。
-
-```rust
-if let Ok(permit) = self.senders.lock().await.get(&typ).unwrap().try_reserve() {
-```
-
-`typ` が `FileExchanger` の場合、`get()` は `None` を返す。
-その結果、`unwrap()` が panic する。
-
-### 原因
-
-SessionType の追加と受理 queue の初期化対象が同期していない。
-外部 request から決まる値に対して `unwrap()` を使っている。
-
-### 影響
-
-`TaskAccepter` は 3 本あり、1 回の panic で 1 本ずつ停止する。
-3 回の要求で着信用 task がすべて停止する。
-[AxusService::create_node_finder](../daemon/modules/engine/src/service.rs#L41) は SessionAccepter を構築するため、AxusService を起動する経路では外部から誘発できる。
-通常の daemon は I-1 により AxusService を構築しないため、現在の通常起動では未顕在である。
-
-### 対応方針
-
-1. 受理 queue をすべての SessionType に対して初期化する。
-2. `unwrap()` を除去し、queue がない種別には `Reject` を返す。
-3. SessionType の追加漏れを compile 時に検出できるよう、全 variant を列挙して初期化する。
-4. FileExchanger request を繰り返しても task が停止しないことを test する。
 
 <a id="i-6"></a>
 ## I-6. version 交渉が積集合ではなく和集合になっている

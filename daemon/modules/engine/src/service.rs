@@ -22,7 +22,7 @@ use crate::{
     },
     core::{
         negotiator::{NodeFinder, NodeFinderOption, NodeFinderRepo, NodeProfileFetcherImpl},
-        session::{SessionAccepter, SessionConnector},
+        session::{SessionAccepter, SessionConnector, model::SessionType},
     },
     prelude::*,
 };
@@ -55,7 +55,7 @@ impl AxusService {
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "TODO")?);
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
 
-        let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), sleeper.clone(), rng.clone()).await);
+        let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), sleeper.clone(), rng.clone(), &[SessionType::NodeFinder]).await);
         let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, rng.clone()));
 
         let node_ref_repo_dir = state_dir.join("repo");

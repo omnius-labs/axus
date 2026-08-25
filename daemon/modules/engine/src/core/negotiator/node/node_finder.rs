@@ -230,7 +230,7 @@ mod tests {
 
     use crate::{
         base::connection::{ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, TcpProxyOption, TcpProxyType},
-        core::negotiator::NodeProfileFetcherMock,
+        core::{negotiator::NodeProfileFetcherMock, session::model::SessionType},
     };
 
     use super::*;
@@ -295,7 +295,7 @@ mod tests {
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, name)?);
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
 
-        let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), sleeper.clone(), rng.clone()).await);
+        let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), sleeper.clone(), rng.clone(), &[SessionType::NodeFinder]).await);
         let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, rng.clone()));
 
         let node_ref_repo_dir = state_dir.join(name).join("repo");

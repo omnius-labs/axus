@@ -97,7 +97,7 @@ impl Executor {
             error!(?error, "console server stopped");
         }
 
-        // state.engine.shutdown().await;
+        state.shutdown().await;
 
         Ok(())
     }

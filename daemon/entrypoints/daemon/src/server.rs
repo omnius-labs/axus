@@ -6,6 +6,11 @@ use headers::Host;
 use http::Method;
 use tokio_util::sync::CancellationToken;
 
+use omnius_axus_interface::{
+    apis::health::{GetHealthResponse, Health},
+    models::HealthResponse,
+};
+
 use crate::{prelude::*, state::DaemonState};
 
 pub struct ApiServer {
@@ -15,9 +20,9 @@ pub struct ApiServer {
 
 #[allow(unused_variables)]
 #[async_trait]
-impl omnius_axus_interface::apis::health::Health for ApiServer {
-    async fn get_health(&self, method: &Method, host: &Host, cookies: &CookieJar) -> std::result::Result<omnius_axus_interface::apis::health::GetHealthResponse, ()> {
-        todo!()
+impl Health for ApiServer {
+    async fn get_health(&self, method: &Method, host: &Host, cookies: &CookieJar) -> std::result::Result<GetHealthResponse, ()> {
+        Ok(GetHealthResponse::Status200_TheDaemonIsRunning(HealthResponse::new(true)))
     }
 }
 

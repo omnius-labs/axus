@@ -27,7 +27,6 @@ use crate::{
     prelude::*,
 };
 
-#[allow(unused)]
 pub struct AxusService {
     node_finder: NodeFinder,
 }
@@ -39,7 +38,6 @@ impl AxusService {
         })
     }
 
-    #[allow(unused)]
     async fn create_node_finder(state_dir: &Path, listen_addr: &str) -> Result<NodeFinder> {
         let tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync> = Arc::new(ConnectionTcpAccepterImpl::new(&OmniAddr::from_host_and_port_str(listen_addr)?, false).await?);
         let tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync> = Arc::new(

@@ -6,6 +6,11 @@ use headers::Host;
 use http::Method;
 use tokio_util::sync::CancellationToken;
 
+use omnius_axus_interface::{
+    apis::health::{GetHealthResponse, Health},
+    models::HealthResponse,
+};
+
 use crate::{prelude::*, state::DaemonState};
 
 pub struct ApiServer {
@@ -15,9 +20,9 @@ pub struct ApiServer {
 
 #[allow(unused_variables)]
 #[async_trait]
-impl omnius_axus_interface::apis::health::Health for ApiServer {
-    async fn get_health(&self, method: &Method, host: &Host, cookies: &CookieJar) -> std::result::Result<omnius_axus_interface::apis::health::GetHealthResponse, ()> {
-        todo!()
+impl Health for ApiServer {
+    async fn get_health(&self, method: &Method, host: &Host, cookies: &CookieJar) -> std::result::Result<GetHealthResponse, ()> {
+        Ok(GetHealthResponse::Status200_TheDaemonIsRunning(HealthResponse::new(true)))
     }
 }
 
@@ -29,8 +34,8 @@ impl ApiServer {
 
         let app = omnius_axus_interface::server::new(Arc::new(server));
 
-        let listener = tokio::net::TcpListener::bind(state.conf.core.listen_addr.clone()).await?;
-        info!(addr = state.conf.core.listen_addr, "listen start");
+        let listener = tokio::net::TcpListener::bind(state.conf.api.listen_addr.clone()).await?;
+        info!(addr = state.conf.api.listen_addr, "listen start");
         axum::serve(listener, app).with_graceful_shutdown(token.cancelled_owned()).await?;
 
         Ok(())

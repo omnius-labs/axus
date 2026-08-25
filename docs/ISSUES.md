@@ -16,51 +16,18 @@
 
 | ID            | 概要                                                          | 深刻度 | Issue  |
 | ------------- | ------------------------------------------------------------- | ------ | ------ |
-| [I-1](#i-1)   | `DaemonState` が `AxusService` を生成せず、P2P 層が起動しない | 高     | 未起票 |
 | [I-2](#i-2)   | ファイル関連の SQLite schema が初期化時にエラーになる         | 高     | 未起票 |
 | [I-3](#i-3)   | SQL が存在しない列 `property` を参照している                  | 高     | 未起票 |
 | [I-4](#i-4)   | `MerkleLayer.rank` の解釈が encoder と decoder で 1 ずれる    | 高     | 未起票 |
 | [I-6](#i-6)   | version 交渉が積集合ではなく和集合になっている                | 中     | 未起票 |
 | [I-7](#i-7)   | 署名鍵の識別子が `"TODO"` 固定である                          | 中     | 未起票 |
 
-I-1 は P2P component を daemon から実行するための前提である。
-I-2、I-3、I-4 はファイル公開と購読の同じ経路にあるため、結線前にまとめて修正する。
-
-<a id="i-1"></a>
-## I-1. `DaemonState` が `AxusService` を生成せず、P2P 層が起動しない
-
-**深刻度: 高**
-
-### 症状
-
-daemon を起動しても P2P 通信が行われない。
-HTTP server だけが待ち受ける。
-
-### 該当箇所
-
-- [state.rs:24](../daemon/entrypoints/daemon/src/state.rs#L24)：`DaemonState::new` は `conf` と `temp_dir` だけを保持して返す。
-- [executor.rs:100](../daemon/entrypoints/daemon/src/executor.rs#L100)：`state.engine.shutdown()` はコメントアウトされている。
-
-### 原因
-
-`DaemonState` が `AxusService` を生成して保持する処理がない。
-
-### 影響
-
-daemon の通常の起動経路から P2P component を利用できない。
-I-2 から I-4、I-6、I-7 の経路を daemon として実行する前提も成立しない。
-
-### 対応方針
-
-`DaemonState` に `AxusService` を保持させる。
-`Executor::handle_start` の終了時に `AxusService::shutdown()` を呼ぶ。
-HTTP API と P2P の待ち受けアドレスは [DESIGN.md §5.2](./DESIGN.md#52-設定の境界) に従って分離する。
-FileExchanger の結線は I-2、I-3、I-4 の修正後に行う。
+I-2、I-3、I-4 はファイル公開と購読の同じ経路にあるため、まとめて修正する。
 
 <a id="i-2"></a>
 ## I-2. ファイル関連の SQLite schema が初期化時にエラーになる
 
-**深刻度: 高**（I-1 により現時点では未顕在）
+**深刻度: 高**（FileExchanger が構築されないため現時点では未顕在）
 
 ### 症状
 
@@ -93,7 +60,7 @@ migration の SQL と、対象 table および model の名前が一致してい
 ### 影響
 
 ファイル公開と購読の repository を初期化できない。
-I-1 により FileExchanger が daemon から構築されないため、現在の通常起動では顕在化しない。
+`AxusService` は NodeFinder だけを構築し FileExchanger を所有しないため、現在の通常起動では顕在化しない。
 
 ### 対応方針
 
@@ -106,7 +73,7 @@ I-1 により FileExchanger が daemon から構築されないため、現在�
 <a id="i-3"></a>
 ## I-3. SQL が存在しない列 `property` を参照している
 
-**深刻度: 高**（I-1 と I-2 により現時点では未顕在）
+**深刻度: 高**（I-2 により現時点では未顕在）
 
 ### 症状
 

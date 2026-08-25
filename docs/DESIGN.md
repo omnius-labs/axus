@@ -730,7 +730,7 @@ FilePublisher と FileSubscriber の public operation が daemon 層に接続さ
 
 | 領域               | コードで確認した現状                                                                                                                         |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| daemon と REST API | Executor は config、file lock、signal、HTTP server を組み立てるが、DaemonState は AxusService を保持せず、health handler は `todo!()` である |
+| daemon と REST API | Executor は config、file lock、signal、HTTP server を組み立て、DaemonState は AxusService を所有して停止まで管理する。API と P2P は別の待ち受けアドレスを持ち、health handler は稼働を返す |
 | AxusService        | NodeFinder だけを構築して shutdown し、FileExchanger を所有しない                                                                            |
 | session            | version、challenge、signature、用途選択の message があり、Session は暗号化されていない FramedStream を保持する                               |
 | NodeFinder         | 接続、受理、計算、通信の task と SQLite repo があり、lookup は接続中 Session の受信状態だけを走査する                                        |
@@ -751,12 +751,11 @@ FilePublisher と FileSubscriber の public operation が daemon 層に接続さ
 
 | 番号 | 内容                                                                                 | 前提とする依存                                            |
 | ---- | ------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| 1    | HTTP と P2P の設定を分離し、DaemonState が AxusService を所有して停止まで管理する    | §13.2 の secure channel は後から決められる                |
-| 2    | session と NodeFinder を daemon の起動経路から結合試験する                           | 1、関連する既知の不具合の解消                             |
-| 3    | publisher と subscriber の schema を修正し、初期化、符号化、復号を実データで検証する | 適用済み migration の有無の確認                           |
-| 4    | FileExchanger の block 交換 protocol と hash 検証を定義して実装する                  | 2、3、secure channel の判断                               |
-| 5    | 公開、購読、進捗、cancel の REST API を定義する                                      | 4、§13.2 の長時間操作の判断                               |
-| 6    | identity、Web of Trust、Profile、memo を順に定義する                                 | §13.2 の identity と trust の判断、FileRef を解決できる 4 |
-| 7    | 手書きの RocketPack 型を rpf へ移し、生成物へ置き換える                              | §13.2 の core-rs 型の扱いの判断                           |
+| 1    | session と NodeFinder を daemon の起動経路から結合試験する                           | 関連する既知の不具合の解消                                |
+| 2    | publisher と subscriber の schema を修正し、初期化、符号化、復号を実データで検証する | 適用済み migration の有無の確認                           |
+| 3    | FileExchanger の block 交換 protocol と hash 検証を定義して実装する                  | 1、2、secure channel の判断                               |
+| 4    | 公開、購読、進捗、cancel の REST API を定義する                                      | 3、§13.2 の長時間操作の判断                               |
+| 5    | identity、Web of Trust、Profile、memo を順に定義する                                 | §13.2 の identity と trust の判断、FileRef を解決できる 3 |
+| 6    | 手書きの RocketPack 型を rpf へ移し、生成物へ置き換える                              | §13.2 の core-rs 型の扱いの判断                           |
 
 確認済みの不具合と修正方針は [ISSUES.md](./ISSUES.md) を参照する。

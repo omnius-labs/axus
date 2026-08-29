@@ -8,7 +8,7 @@ command = "cargo"
 workspace = false
 install_crate = "clippy"
 command = "cargo"
-args = ["clippy", "--", "-D", "warnings", "-A", "unused"]
+args = ["clippy", "--", "-D", "warnings"]
 
 [tasks.lint-style]
 workspace = false

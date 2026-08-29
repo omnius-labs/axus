@@ -1,0 +1,5 @@
+# 検査対象から外す path。docs/coding/rust.md の「1.2 適用範囲」の表と対応する。
+exclude = [
+  "refs",
+  "entrypoints/interface",
+]

@@ -8,11 +8,16 @@ command = "cargo"
 workspace = false
 install_crate = "clippy"
 command = "cargo"
-args = ["clippy", "--", "-D", "warnings", "-A", "unused"]
+args = ["clippy", "--", "-D", "warnings"]
+
+[tasks.lint-style]
+workspace = false
+command = "cargo"
+args = ["run", "--quiet", "--package", "omnius-core-lint-style"]
 
 [tasks.lint]
 workspace = false
-dependencies = ["fmt-check", "clippy"]
+dependencies = ["fmt-check", "clippy", "lint-style"]
 
 [tasks.test]
 workspace = false

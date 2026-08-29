@@ -24,6 +24,7 @@ struct Args {
     command: SubCommand,
 }
 
+// omnius-lint:debt(free-fn) Executor の関連関数へ移す変更を、規約の導入と分ける
 fn default_config_dir() -> PathBuf {
     std::env::var_os("AXUS_DAEMON_CONFIG_DIR")
         .map(PathBuf::from)
@@ -31,6 +32,7 @@ fn default_config_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".config/axus"))
 }
 
+// omnius-lint:debt(free-fn) OS ごとの home directory を包む境界を Executor の関連関数へ移す変更を、規約の導入と分ける
 fn get_home_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     return std::env::var_os("USERPROFILE").map(PathBuf::from);

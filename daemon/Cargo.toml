@@ -8,6 +8,7 @@ members = [
   "./refs/core-rs/modules/omnikit",
   "./refs/core-rs/modules/rocketpack",
   "./refs/core-rs/modules/testkit",
+  "./refs/core-rs/entrypoints/lint-style",
 
   "./entrypoints/daemon",
   "./modules/engine",

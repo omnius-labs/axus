@@ -117,8 +117,28 @@ node A と B が互いへ同時に接続すると、A と B はそれぞれ先�
 **決める条件**
 自 node の NodeProfile に待ち受けアドレスを載せる前に決める。
 
+#### 自 node の待ち受けアドレスの広告
+
+**現状**
+自 node の NodeProfile は待ち受けアドレスを持たず、ほかの node は bootstrap に指定された NodeProfile にしか接続できない。
+不具合としての追跡は [node-profile-without-address.md](../issues/node-profile-without-address.md) が持つ。
+
+候補は次の 2 つである。
+
+1. 設定した待ち受けアドレスと、UPnP で得た外部アドレスを載せると追加の message が要らないが、`0.0.0.0` で待ち受ける場合や UPnP のない NAT の内側では、到達できるアドレスを node 自身が知らない。
+2. 接続先から見えた接続元アドレスを handshake で返してもらうと NAT の外側のアドレスを知れるが、handshake の message が増え、相手の申告を検証する手段も必要になる。
+
+**なぜ今決めないか**
+daemon には bootstrap の設定がなく、NAT を越える構成での到達性を試していないためである。
+
+**決める条件**
+FileExchanger が lookup で得た NodeProfile へ接続する処理を実装する前に決める。
+
 ## 7. 現状と残作業
 
 接続、受理、計算、通信の task と SQLite repo があり、lookup は接続中 Session の受信状態だけを走査する。
+AxusService の起動経路から 2 node を起動し、Session の確立と AssetKey の lookup を結合試験で確認している。
+各 task の周期は NodeFinderOption で指定し、結合試験では短い周期を使う。
+
+自 node の待ち受けアドレスの広告と、双方向の同時接続で重複した Session の解消規則を決める。
 複数 hop の到達率と遅延を測定し、能動探索と冗長度を決める。
-双方向の同時接続で重複した Session の解消規則を決める。

@@ -25,13 +25,11 @@
 
 | 項目 | 深刻度 | 調査日 | Issue |
 | --- | --- | --- | --- |
-| [ファイル関連の SQLite schema が初期化時にエラーになる](./issues/file-schema-initialization-fails.md) | 高 | 2026-09-02 | - |
-| [SQL が存在しない列 `property` を参照している](./issues/file-query-column-mismatch.md) | 高 | 2026-09-02 | - |
-| [`MerkleLayer.rank` の解釈が encoder と decoder で 1 ずれる](./issues/merkle-layer-rank-mismatch.md) | 高 | 2026-09-02 | - |
+| [自 node の NodeProfile が待ち受けアドレスを持たない](./issues/node-profile-without-address.md) | 高 | 2026-09-24 | - |
 | [署名鍵の識別子が `"TODO"` 固定である](./issues/fixed-signer-identifier.md) | 中 | 2026-09-02 | - |
 
-最初の 3 件は file の公開と購読の同じ経路にあるため、schema の初期化、query、Merkle layer の round-trip をまとめて検証する。
-署名鍵の識別子は設計判断に依存するが、現在の実装が将来の contract を満たさない点は確認済みである。
+2 件とも設計判断に依存するが、現在の実装が将来の contract を満たさない点は確認済みである。
+自 node のアドレスは FileExchanger が lookup の結果へ接続する前提であり、block 交換の前に解消する。
 
 ## 3. ここに含めていないもの
 
@@ -39,7 +37,7 @@
 | --- | --- |
 | Session の secure channel がない | [session.md](./design/session.md#5-設計判断) |
 | FileExchanger の block 交換 protocol がない | [file-transfer.md](./design/file-transfer.md#7-現状と残作業) |
-| 購読開始の入口がない | [file-transfer.md](./design/file-transfer.md#7-現状と残作業) |
+| 公開と購読を始める REST API がない | [file-transfer.md](./design/file-transfer.md#7-現状と残作業) |
 | NodeFinder の能動探索がない | [node-finder.md](./design/node-finder.md#6-設計判断) |
 | 双方向の同時接続で重複した Session を両方閉じる | [node-finder.md](./design/node-finder.md#双方向の同時接続で重複した-session-の解消) |
 | Web of Trust が未設計である | [trust-security.md](./design/trust-security.md#4-設計判断) |

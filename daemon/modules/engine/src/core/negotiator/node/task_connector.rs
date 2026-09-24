@@ -93,7 +93,7 @@ impl TaskConnector {
         let this = self.clone();
         *self.join_handle.lock().await = Some(tokio::spawn(async move {
             loop {
-                this.sleeper.sleep(std::time::Duration::from_secs(20)).await;
+                this.sleeper.sleep(this.option.intervals.connect).await;
                 let res = this.connect().await;
                 if let Err(e) = res {
                     warn!(error_message = e.to_string(), "connect failed");
@@ -211,7 +211,7 @@ mod tests {
         prelude::*,
     };
 
-    use super::{NodeFinderOption, NodeFinderRepo, TaskConnector};
+    use super::{NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, TaskConnector};
 
     #[tokio::test]
     async fn connect_skips_own_node_profile() -> TestResult {
@@ -303,6 +303,7 @@ mod tests {
                 state_dir: state_dir.to_string(),
                 max_connected_session_count: 3,
                 max_accepted_session_count: 3,
+                intervals: NodeFinderIntervals::default(),
             },
         )
         .await

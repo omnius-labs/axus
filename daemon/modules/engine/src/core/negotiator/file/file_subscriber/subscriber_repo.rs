@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS files (
     id TEXT NOT NULL PRIMARY KEY,
     root_hash TEXT NOT NULL,
     file_path TEXT NOT NULL,
-    depth INTEGER NOT NULL,
+    rank INTEGER NOT NULL,
     block_count_downloaded INTEGER NOT NULL,
     block_count_total INTEGER NOT NULL,
     attrs TEXT,
@@ -50,8 +50,7 @@ CREATE TABLE IF NOT EXISTS files (
     status TEXT NOT NULL,
     failed_reason TEXT,
     created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    PRIMARY KEY (root_hash, file_name)
+    updated_at TIMESTAMP NOT NULL
 );
 CREATE TABLE IF NOT EXISTS blocks (
     root_hash TEXT NOT NULL,
@@ -61,7 +60,7 @@ CREATE TABLE IF NOT EXISTS blocks (
     downloaded INTEGER NOT NULL,
     PRIMARY KEY (root_hash, block_hash, rank, `index`)
 );
-CREATE INDEX IF NOT EXISTS index_root_hash_rank_index_for_blocks ON blocks (root_hash, rank ASC, `index` ASC, is_downloaded);
+CREATE INDEX IF NOT EXISTS index_root_hash_rank_index_for_blocks ON blocks (root_hash, rank ASC, `index` ASC, downloaded);
 "#
             .to_string(),
         }];
@@ -88,7 +87,7 @@ SELECT *
     pub async fn find_file_by_id(&self, id: &str) -> Result<Option<SubscribedFile>> {
         let res: Option<SubscribedFileRow> = sqlx::query_as(
             r#"
-SELECT id, root_hash, file_path, depth, block_count_downloaded, block_count_total, attrs, property, status, failed_reason, created_at, updated_at
+SELECT id, root_hash, file_path, rank, block_count_downloaded, block_count_total, attrs, priority, status, failed_reason, created_at, updated_at
     FROM files
     WHERE id = ?
 "#,
@@ -103,7 +102,7 @@ SELECT id, root_hash, file_path, depth, block_count_downloaded, block_count_tota
     pub async fn find_file_by_root_hash(&self, root_hash: &OmniHash) -> Result<Option<SubscribedFile>> {
         let res: Option<SubscribedFileRow> = sqlx::query_as(
             r#"
-SELECT id, root_hash, file_path, depth, block_count_downloaded, block_count_total, attrs, property, status, failed_reason, created_at, updated_at
+SELECT id, root_hash, file_path, rank, block_count_downloaded, block_count_total, attrs, priority, status, failed_reason, created_at, updated_at
     FROM files
     WHERE root_hash = ?
 "#,
@@ -118,7 +117,7 @@ SELECT id, root_hash, file_path, depth, block_count_downloaded, block_count_tota
     pub async fn find_file_by_decoding_next(&self) -> Result<Option<SubscribedFile>> {
         let res: Option<SubscribedFileRow> = sqlx::query_as(
             r#"
-SELECT id, root_hash, file_path, depth, block_count_downloaded, block_count_total, attrs, property, status, failed_reason, created_at, updated_at
+SELECT id, root_hash, file_path, rank, block_count_downloaded, block_count_total, attrs, priority, status, failed_reason, created_at, updated_at
     FROM files
     WHERE status = 'Decoding'
     ORDER BY priority ASC, created_at ASC
@@ -129,31 +128,6 @@ SELECT id, root_hash, file_path, depth, block_count_downloaded, block_count_tota
         .await?;
 
         res.map(|r| r.into()).transpose()
-    }
-
-    pub async fn insert_file(&self, file: &SubscribedFile) -> Result<()> {
-        let row = SubscribedFileRow::from(file)?;
-        sqlx::query(
-            r#"
-INSERT INTO files (id, root_hash, file_path, depth, block_count_downloaded, block_count_total, attrs, property, status, failed_reason, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-"#,
-        )
-        .bind(row.root_hash)
-        .bind(row.file_path)
-        .bind(row.rank)
-        .bind(row.block_count_downloaded)
-        .bind(row.block_count_total)
-        .bind(row.attrs)
-        .bind(row.priority)
-        .bind(row.status)
-        .bind(row.failed_reason)
-        .bind(row.created_at)
-        .bind(row.updated_at)
-        .execute(self.db.as_ref())
-        .await?;
-
-        Ok(())
     }
 
     pub async fn update_file_status(&self, id: &str, status: &SubscribedFileStatus) -> Result<()> {
@@ -255,6 +229,7 @@ SELECT *
 SELECT *
     FROM blocks
     WHERE root_hash = ? AND rank = ?
+    ORDER BY `index` ASC
 "#,
         )
         .bind(root_hash.to_string())
@@ -276,9 +251,6 @@ SELECT *
             let mut query_builder: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new(
                 r#"
 INSERT INTO blocks (root_hash, block_hash, rank, `index`, downloaded)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(root_hash, block_hash, rank, `index`) DO UPDATE SET
-        downloaded = excluded.downloaded
 "#,
             );
 
@@ -291,6 +263,12 @@ INSERT INTO blocks (root_hash, block_hash, rank, `index`, downloaded)
                 b.push_bind(row.index);
                 b.push_bind(row.downloaded);
             });
+            query_builder.push(
+                r#"
+    ON CONFLICT(root_hash, block_hash, rank, `index`) DO UPDATE SET
+        downloaded = excluded.downloaded
+"#,
+            );
             query_builder.build().execute(&mut *tx).await?;
         }
 
@@ -330,6 +308,7 @@ INSERT INTO files (id, root_hash, file_path, rank, block_count_downloaded, block
         .bind(row.priority)
         .bind(row.status)
         .bind(row.failed_reason)
+        .bind(row.created_at)
         .bind(row.updated_at)
         .execute(&mut *tx)
         .await?;
@@ -340,9 +319,6 @@ INSERT INTO files (id, root_hash, file_path, rank, block_count_downloaded, block
             let mut query_builder: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new(
                 r#"
 INSERT INTO blocks (root_hash, block_hash, rank, `index`, downloaded)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(root_hash, block_hash, rank, `index`) DO UPDATE SET
-        downloaded = excluded.downloaded
 "#,
             );
 
@@ -355,6 +331,12 @@ INSERT INTO blocks (root_hash, block_hash, rank, `index`, downloaded)
                 b.push_bind(row.index);
                 b.push_bind(row.downloaded);
             });
+            query_builder.push(
+                r#"
+    ON CONFLICT(root_hash, block_hash, rank, `index`) DO UPDATE SET
+        downloaded = excluded.downloaded
+"#,
+            );
             query_builder.build().execute(&mut *tx).await?;
         }
 
@@ -406,7 +388,7 @@ impl SubscribedFileRow {
             file_path: item.file_path.clone(),
             rank: item.rank as i64,
             block_count_downloaded: item.block_count_downloaded as i64,
-            block_count_total: item.block_count_downloaded as i64,
+            block_count_total: item.block_count_total as i64,
             attrs: item.attrs.as_ref().map(|n| n.to_string()),
             priority: item.priority,
             status: item.status.clone(),
@@ -446,5 +428,108 @@ impl SubscribedBlockRow {
             index: item.index,
             downloaded: item.downloaded,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use chrono::{DateTime, Utc};
+    use testresult::TestResult;
+
+    use omnius_core_base::clock::{Clock, FakeClockUtc};
+    use omnius_core_omnikit::generated::omni_hash::{OmniHash, OmniHashAlgorithmType};
+
+    use crate::core::negotiator::file::model::{SubscribedBlock, SubscribedFile, SubscribedFileStatus};
+
+    use super::FileSubscriberRepo;
+
+    #[tokio::test]
+    async fn file_queries_round_trip() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (repo, now) = create_repo(dir.path()).await?;
+        let root_hash = hash(b"root");
+
+        let file = subscribed_file("1", &root_hash, now);
+        repo.upsert_file_and_blocks(&file, &[]).await?;
+        let found = repo.find_file_by_id("1").await?.unwrap();
+        assert_eq!(found.rank, 2);
+        assert_eq!(found.block_count_downloaded, 1);
+        assert_eq!(found.block_count_total, 3);
+        assert_eq!(found.priority, 5);
+        assert_eq!(repo.find_file_by_root_hash(&root_hash).await?.unwrap().id, "1");
+        assert_eq!(repo.get_committed_files().await?.len(), 1);
+        assert!(repo.find_file_by_decoding_next().await?.is_none());
+
+        repo.update_file_status("1", &SubscribedFileStatus::Decoding).await?;
+        assert_eq!(repo.find_file_by_decoding_next().await?.unwrap().id, "1");
+
+        let updated = SubscribedFile {
+            rank: 1,
+            block_count_downloaded: 0,
+            block_count_total: 2,
+            status: SubscribedFileStatus::Downloading,
+            ..file
+        };
+        let blocks = vec![block(&root_hash, b"a", 1, 0), block(&root_hash, b"b", 1, 1)];
+        repo.upsert_file_and_blocks(&updated, &blocks).await?;
+        let found = repo.find_file_by_id("1").await?.unwrap();
+        assert_eq!(found.rank, 1);
+        assert_eq!(found.block_count_total, 2);
+        assert!(found.status == SubscribedFileStatus::Downloading);
+        assert_eq!(repo.find_blocks_by_root_hash_and_rank(&root_hash, 1).await?.len(), 2);
+
+        let downloaded = SubscribedBlock {
+            downloaded: true,
+            ..block(&root_hash, b"a", 1, 0)
+        };
+        repo.upsert_blocks(&[downloaded]).await?;
+        let found = repo.find_blocks_by_root_hash_and_block_hash(&root_hash, &hash(b"a")).await?;
+        assert_eq!(found.len(), 1);
+        assert!(found[0].downloaded);
+
+        repo.delete_file("1").await?;
+        assert!(repo.find_file_by_id("1").await?.is_none());
+        assert!(repo.find_blocks_by_root_hash_and_rank(&root_hash, 1).await?.is_empty());
+
+        Ok(())
+    }
+
+    async fn create_repo(dir: &std::path::Path) -> TestResult<(FileSubscriberRepo, DateTime<Utc>)> {
+        let clock = Arc::new(FakeClockUtc::new(DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")?.into()));
+        let now = clock.now();
+        Ok((FileSubscriberRepo::new(dir, clock).await?, now))
+    }
+
+    fn subscribed_file(id: &str, root_hash: &OmniHash, now: DateTime<Utc>) -> SubscribedFile {
+        SubscribedFile {
+            id: id.to_string(),
+            root_hash: root_hash.clone(),
+            file_path: "/tmp/a.txt".to_string(),
+            rank: 2,
+            block_count_downloaded: 1,
+            block_count_total: 3,
+            attrs: None,
+            priority: 5,
+            status: SubscribedFileStatus::Downloading,
+            failed_reason: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn block(root_hash: &OmniHash, value: &[u8], rank: u32, index: u32) -> SubscribedBlock {
+        SubscribedBlock {
+            root_hash: root_hash.clone(),
+            block_hash: hash(value),
+            rank,
+            index,
+            downloaded: false,
+        }
+    }
+
+    fn hash(value: &[u8]) -> OmniHash {
+        OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, value)
     }
 }

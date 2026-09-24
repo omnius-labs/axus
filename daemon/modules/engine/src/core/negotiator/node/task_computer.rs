@@ -33,7 +33,6 @@ pub struct TaskComputer {
     get_push_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
-    #[allow(unused)]
     option: NodeFinderOption,
     join_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
 }
@@ -86,7 +85,7 @@ impl TaskComputer {
                 warn!(error_message = e.to_string(), "set initial node profile failed");
             }
             loop {
-                this.sleeper.sleep(std::time::Duration::from_secs(60)).await;
+                this.sleeper.sleep(this.option.intervals.compute).await;
                 let res = this.compute().await;
                 if let Err(e) = res {
                     warn!(error_message = e.to_string(), "compute failed");

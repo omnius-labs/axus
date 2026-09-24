@@ -18,6 +18,11 @@ pub struct SubscribedFile {
     pub updated_at: DateTime<Utc>,
 }
 
+impl SubscribedFile {
+    /// root block を復号する前は root の rank が分からないため、file と root block の rank にこの値を使う
+    pub const UNKNOWN_ROOT_RANK: u32 = u32::MAX;
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum SubscribedFileStatus {
     Unknown,

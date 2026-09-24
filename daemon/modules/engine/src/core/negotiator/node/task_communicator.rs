@@ -32,7 +32,6 @@ pub struct TaskCommunicator {
     node_profile_repo: Arc<NodeFinderRepo>,
     session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
-    #[allow(unused)]
     option: NodeFinderOption,
     join_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
     communicate_join_handles: Arc<TokioMutex<Vec<JoinHandle<()>>>>,
@@ -171,7 +170,7 @@ impl TaskCommunicator {
             let sender = TaskSender { status };
             let f = async {
                 loop {
-                    this.sleeper.sleep(std::time::Duration::from_secs(20)).await;
+                    this.sleeper.sleep(this.option.intervals.communicate).await;
                     let res = sender.send().await;
                     if let Err(e) = res {
                         warn!(error_message = e.to_string(), "send failed",);
@@ -195,7 +194,7 @@ impl TaskCommunicator {
             };
             let f = async {
                 loop {
-                    this.sleeper.sleep(std::time::Duration::from_secs(20)).await;
+                    this.sleeper.sleep(this.option.intervals.communicate).await;
                     let res = receiver.receive().await;
                     if let Err(e) = res {
                         warn!(error_message = e.to_string(), "receive failed",);

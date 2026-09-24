@@ -13,7 +13,11 @@ use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc};
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 
 use crate::{
-    base::{collections::VolatileHashSet, runtime::Shutdown, sync::FnHub},
+    base::{
+        collections::VolatileHashSet,
+        runtime::Shutdown,
+        sync::{FnHandle, FnHub},
+    },
     core::session::{SessionAccepter, SessionConnector},
     model::{AssetKey, NodeProfile},
     prelude::*,
@@ -53,6 +57,24 @@ pub struct NodeFinderOption {
     pub state_dir: String,
     pub max_connected_session_count: usize,
     pub max_accepted_session_count: usize,
+    pub intervals: NodeFinderIntervals,
+}
+
+#[derive(Debug, Clone)]
+pub struct NodeFinderIntervals {
+    pub connect: std::time::Duration,
+    pub compute: std::time::Duration,
+    pub communicate: std::time::Duration,
+}
+
+impl Default for NodeFinderIntervals {
+    fn default() -> Self {
+        Self {
+            connect: std::time::Duration::from_secs(20),
+            compute: std::time::Duration::from_secs(60),
+            communicate: std::time::Duration::from_secs(20),
+        }
+    }
 }
 
 impl NodeFinder {
@@ -104,6 +126,27 @@ impl NodeFinder {
     #[allow(unused)]
     pub async fn get_session_count(&self) -> usize {
         self.sessions.read().await.len()
+    }
+
+    #[allow(unused)]
+    pub fn my_node_profile(&self) -> NodeProfile {
+        self.my_node_profile.lock().clone()
+    }
+
+    #[allow(unused)]
+    pub fn listen_want_asset_keys<F>(&self, f: F) -> FnHandle<Vec<AssetKey>, ()>
+    where
+        F: Fn(&()) -> Vec<AssetKey> + Send + Sync + 'static,
+    {
+        self.get_want_asset_keys_fn.listener().listen(f)
+    }
+
+    #[allow(unused)]
+    pub fn listen_push_asset_keys<F>(&self, f: F) -> FnHandle<Vec<AssetKey>, ()>
+    where
+        F: Fn(&()) -> Vec<AssetKey> + Send + Sync + 'static,
+    {
+        self.get_push_asset_keys_fn.listener().listen(f)
     }
 
     async fn start(&self) -> Result<()> {
@@ -329,6 +372,7 @@ mod tests {
                 state_dir: node_finder_dir.as_os_str().to_str().unwrap().to_string(),
                 max_connected_session_count: 3,
                 max_accepted_session_count: 3,
+                intervals: NodeFinderIntervals::default(),
             },
         )
         .await?;

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, hash_map::Entry},
+    collections::{HashMap, HashSet, hash_map::Entry},
     io::Cursor,
     sync::Arc,
 };
@@ -266,8 +266,10 @@ impl TaskEncoder {
                 ..committed_file
             };
 
-            for uncommitted_block in self.file_publisher_repo.find_uncommitted_blocks_by_file_id(&uncommitted_file.id).await? {
-                let path = gen_uncommitted_block_path(&uncommitted_file.id, &uncommitted_block.block_hash);
+            let uncommitted_blocks = self.file_publisher_repo.find_uncommitted_blocks_by_file_id(&uncommitted_file.id).await?;
+            let block_hashes: HashSet<&OmniHash> = uncommitted_blocks.iter().map(|block| &block.block_hash).collect();
+            for block_hash in block_hashes {
+                let path = gen_uncommitted_block_path(&uncommitted_file.id, block_hash);
                 self.blocks_storage.delete(path.as_str()).await?;
             }
 
@@ -295,9 +297,11 @@ impl TaskEncoder {
             })
             .collect::<Vec<_>>();
 
-        for uncommitted_block in all_uncommitted_blocks {
-            let old_key = gen_uncommitted_block_path(&uncommitted_file.id, &uncommitted_block.block_hash);
-            let new_key = gen_committed_block_path(&root_hash, &uncommitted_block.block_hash);
+        // 同じ内容の block は同じ key に保存されているため、hash ごとに 1 回だけ移す
+        let block_hashes: HashSet<&OmniHash> = all_uncommitted_blocks.iter().map(|block| &block.block_hash).collect();
+        for block_hash in block_hashes {
+            let old_key = gen_uncommitted_block_path(&uncommitted_file.id, block_hash);
+            let new_key = gen_committed_block_path(&root_hash, block_hash);
             self.blocks_storage.rename_key(old_key.as_str(), new_key.as_str(), false).await?;
         }
 

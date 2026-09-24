@@ -130,8 +130,17 @@ impl TaskDecoder {
             return false;
         };
 
-        if let Err(e) = self.decode_file(file).await {
-            warn!(error = ?e, "encode file error");
+        if let Err(e) = self.decode_file(file.clone()).await {
+            warn!(error = ?e, "decode file error");
+            let failed_file = SubscribedFile {
+                status: SubscribedFileStatus::Failed,
+                failed_reason: Some(e.to_string()),
+                updated_at: self.clock.now(),
+                ..file
+            };
+            if let Err(e) = self.file_subscriber_repo.upsert_file_and_blocks(&failed_file, &[]).await {
+                warn!(error = ?e, "update file as failed error");
+            }
         }
 
         *self.current_decoding_file_id.lock() = None;
@@ -181,7 +190,7 @@ impl TaskDecoder {
 
             let block_hashes: Vec<OmniHash> = blocks.iter().map(|n| n.block_hash.clone()).collect();
 
-            let mut f = File::open(file.file_path).await?;
+            let mut f = File::create(file.file_path).await?;
             self.decode_bytes(&mut f, &file.root_hash, &block_hashes).await?;
 
             self.file_subscriber_repo.update_file_status(&file.id, &SubscribedFileStatus::Completed).await?;
@@ -200,17 +209,25 @@ impl TaskDecoder {
             let bytes = Bytes::from(bytes);
             let merkle_layer = MerkleLayer::import(&bytes)?;
 
-            if merkle_layer.rank != (file.rank - 1) {
-                return Err(Error::new(ErrorKind::InvalidFormat));
+            // root の rank は復号するまで分からないため、root 以外の layer だけを照合する
+            let expected_rank = file.rank.checked_sub(1);
+            if file.rank != SubscribedFile::UNKNOWN_ROOT_RANK && Some(merkle_layer.rank) != expected_rank {
+                return Err(Error::new(ErrorKind::InvalidFormat).with_message("unexpected merkle layer rank"));
             }
 
             let now = self.clock.now();
 
+            // 子 block がない layer（空の file）は受信を待たずに次の rank を復号する
+            let status = if merkle_layer.hashes.is_empty() {
+                SubscribedFileStatus::Decoding
+            } else {
+                SubscribedFileStatus::Downloading
+            };
             let new_file = SubscribedFile {
                 rank: merkle_layer.rank,
                 block_count_downloaded: 0,
                 block_count_total: merkle_layer.hashes.len() as u32,
-                status: SubscribedFileStatus::Downloading,
+                status,
                 updated_at: now,
                 ..file
             };

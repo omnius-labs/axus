@@ -130,32 +130,6 @@ SELECT id, root_hash, file_path, rank, block_count_downloaded, block_count_total
         res.map(|r| r.into()).transpose()
     }
 
-    pub async fn insert_file(&self, file: &SubscribedFile) -> Result<()> {
-        let row = SubscribedFileRow::from(file)?;
-        sqlx::query(
-            r#"
-INSERT INTO files (id, root_hash, file_path, rank, block_count_downloaded, block_count_total, attrs, priority, status, failed_reason, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-"#,
-        )
-        .bind(row.id)
-        .bind(row.root_hash)
-        .bind(row.file_path)
-        .bind(row.rank)
-        .bind(row.block_count_downloaded)
-        .bind(row.block_count_total)
-        .bind(row.attrs)
-        .bind(row.priority)
-        .bind(row.status)
-        .bind(row.failed_reason)
-        .bind(row.created_at)
-        .bind(row.updated_at)
-        .execute(self.db.as_ref())
-        .await?;
-
-        Ok(())
-    }
-
     pub async fn update_file_status(&self, id: &str, status: &SubscribedFileStatus) -> Result<()> {
         sqlx::query(
             r#"
@@ -255,6 +229,7 @@ SELECT *
 SELECT *
     FROM blocks
     WHERE root_hash = ? AND rank = ?
+    ORDER BY `index` ASC
 "#,
         )
         .bind(root_hash.to_string())
@@ -477,7 +452,7 @@ mod tests {
         let root_hash = hash(b"root");
 
         let file = subscribed_file("1", &root_hash, now);
-        repo.insert_file(&file).await?;
+        repo.upsert_file_and_blocks(&file, &[]).await?;
         let found = repo.find_file_by_id("1").await?.unwrap();
         assert_eq!(found.rank, 2);
         assert_eq!(found.block_count_downloaded, 1);

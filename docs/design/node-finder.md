@@ -93,6 +93,22 @@ node ID は Session の署名で確かめた公開鍵から導出するため、
 **却下案**
 重複を検出した側が相手へ通知して残す Session を合意する案は、Session の上に新しい message と状態遷移が必要になるため採らない。
 
+#### 自 node の NodeProfile には起動時に決めたアドレスを載せる
+
+**決定**
+自 node の NodeProfile には、設定 `p2p.advertise_addrs` があればそのアドレスを載せる。
+設定がなければ、特定のアドレスで待ち受けるときはそのアドレスを、不特定のアドレスで待ち受けるときは到達できる local IP と UPnP の外部 IP に待ち受けポートを付けて載せる。
+UPnP は設定 `p2p.use_upnp` で有効にしたときだけ使う。
+アドレスは起動時に 1 回だけ決め、IP が変わったときは再起動で反映する。
+
+**理由**
+node 自身が知っている情報だけで決まるため、handshake に message を足す必要がない。
+`0.0.0.0` で待ち受ける場合や UPnP のない NAT の内側では到達できるアドレスを自動では決められないため、利用者が明示できる設定を優先する。
+UPnP はルーターのポート開放の設定を変えるため、利用者が選んだときだけ行う。
+
+**却下案**
+接続先から見えた接続元アドレスを handshake で返してもらう案は、NAT の外側のアドレスを知れるが、handshake の message が増え、相手の申告を検証する手段も必要になるため採らない。
+
 ### 6.2 保留
 
 #### NodeFinder の能動探索と冗長度
@@ -111,23 +127,6 @@ node ID は Session の署名で確かめた公開鍵から導出するため、
 **決める条件**
 複数 hop の結合試験で、購読開始に必要な所在情報の到達率と遅延を測定した時点で決める。
 
-#### 自 node の待ち受けアドレスの広告
-
-**現状**
-自 node の NodeProfile は待ち受けアドレスを持たず、ほかの node は bootstrap に指定された NodeProfile にしか接続できない。
-不具合としての追跡は [node-profile-without-address.md](../issues/node-profile-without-address.md) が持つ。
-
-候補は次の 2 つである。
-
-1. 設定した待ち受けアドレスと、UPnP で得た外部アドレスを載せると追加の message が要らないが、`0.0.0.0` で待ち受ける場合や UPnP のない NAT の内側では、到達できるアドレスを node 自身が知らない。
-2. 接続先から見えた接続元アドレスを handshake で返してもらうと NAT の外側のアドレスを知れるが、handshake の message が増え、相手の申告を検証する手段も必要になる。
-
-**なぜ今決めないか**
-daemon には bootstrap の設定がなく、NAT を越える構成での到達性を試していないためである。
-
-**決める条件**
-FileExchanger が lookup で得た NodeProfile へ接続する処理を実装する前に決める。
-
 ## 7. 現状と残作業
 
 接続、受理、計算、通信の task と SQLite repo があり、lookup は接続中 Session の受信状態だけを走査する。
@@ -135,6 +134,7 @@ AxusService の起動経路から 2 node を起動し、Session の確立と Ass
 各 task の周期は NodeFinderOption で指定し、結合試験では短い周期を使う。
 
 重複した Session の解消は、互いを bootstrap に指定した 2 node の結合試験で確認している。
+lookup で得た NodeProfile には、相手が広告したアドレスが含まれることを結合試験で確認している。
 
-自 node の待ち受けアドレスの広告を決める。
+daemon の設定から bootstrap node を指定できるようにし、複数 hop の探索を確かめる。
 複数 hop の到達率と遅延を測定し、能動探索と冗長度を決める。

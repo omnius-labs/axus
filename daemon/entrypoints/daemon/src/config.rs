@@ -4,6 +4,8 @@ use serde::Deserialize;
 
 use crate::prelude::*;
 
+const CONFIG_FILE_NAME: &str = "axus.toml";
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct DaemonConfigToml {
     pub core: CoreConfigToml,
@@ -89,7 +91,7 @@ impl DaemonConfig {
     }
 
     async fn load_toml(dir: &Path) -> Result<DaemonConfigToml> {
-        let toml_path = dir.join("axus.toml");
+        let toml_path = dir.join(CONFIG_FILE_NAME);
         let toml = tokio::fs::read_to_string(toml_path).await?;
         Ok(toml::from_str(&toml)?)
     }

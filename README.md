@@ -44,11 +44,6 @@ Run the repository's development configuration with:
 cargo run --manifest-path daemon/Cargo.toml -p omnius-axus-daemon -- start --config-dir daemon/config
 ```
 
-## Docs
-
-- [DESIGN.md](./docs/DESIGN.md)
-- [ISSUES.md](./docs/ISSUES.md)
-
 ## Links
 
 - Official Documentation: https://docs.omnius-labs.com/

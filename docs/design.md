@@ -144,7 +144,7 @@ NodeFinder は AssetKey から NodeProfile を探し、FileExchanger はその�
 ### 6.1 現状
 
 関心事ごとの実装状況は、各設計詳細文書が正とする。
-全体としては、daemon の起動経路が NodeFinder までを所有しており、ファイル公開、購読、P2P 転送、REST API を通す end-to-end の経路は完成していない。
+全体としては、daemon の起動経路が NodeFinder までを所有し、設定した bootstrap node を起点に他の daemon とつながるが、ファイル公開、購読、P2P 転送、REST API を通す end-to-end の経路は完成していない。
 file の公開から復号までは、P2P 転送を介さない engine 内の試験で確認している。
 
 ### 6.2 ロードマップ
@@ -153,10 +153,9 @@ file の公開から復号までは、P2P 転送を介さない engine 内の試
 
 | 番号 | 内容 | 前提とする依存 |
 | --- | --- | --- |
-| 1 | daemon の設定で bootstrap node を指定し、複数 hop の探索を確かめる | - |
-| 2 | FileExchanger の block 交換 protocol と hash 検証を定義して実装する | 1、secure channel の判断 |
-| 3 | 公開、購読、進捗、cancel の REST API を定義する | 2、[daemon-api.md](./design/daemon-api.md#5-設計判断) の長時間操作の判断 |
-| 4 | Web of Trust、Profile、memo を順に定義する | [trust-security.md](./design/trust-security.md#4-設計判断)、FileRef を解決できる 2 |
-| 5 | 手書きの RocketPack 型を rpf へ移し、生成物へ置き換える | [rocketpack.md](./design/rocketpack.md#5-設計判断) の外部型の判断 |
+| 1 | FileExchanger の block 交換 protocol と hash 検証を定義して実装する | secure channel の判断 |
+| 2 | 公開、購読、進捗、cancel の REST API を定義する | 1、[daemon-api.md](./design/daemon-api.md#5-設計判断) の長時間操作の判断 |
+| 3 | Web of Trust、Profile、memo を順に定義する | [trust-security.md](./design/trust-security.md#4-設計判断)、FileRef を解決できる 1 |
+| 4 | 手書きの RocketPack 型を rpf へ移し、生成物へ置き換える | [rocketpack.md](./design/rocketpack.md#5-設計判断) の外部型の判断 |
 
 確認済みの不具合と修正方針は [issues.md](./issues.md) を参照する。

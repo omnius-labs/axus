@@ -85,10 +85,7 @@ mod tests {
 
     #[test]
     pub fn node_profile_test() -> TestResult {
-        let v = NodeProfile {
-            id: vec![1, 2, 3],
-            addrs: ["a", "b", "c"].into_iter().map(OmniAddr::new).collect(),
-        };
+        let v = NodeProfile::new(vec![1, 2, 3], ["a", "b", "c"].into_iter().map(OmniAddr::new).collect());
         let s = UriConverter::encode("node", &v).unwrap();
         println!("{s}");
         let v2: NodeProfile = UriConverter::decode("node", s.as_str()).unwrap();

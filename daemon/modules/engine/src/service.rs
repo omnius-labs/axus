@@ -7,7 +7,6 @@ use omnius_core_base::{
     clock::{Clock, ClockUtc},
     sleeper::{Sleeper, SleeperImpl},
 };
-use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 use rand::{
     SeedableRng,
@@ -21,6 +20,7 @@ use crate::{
         runtime::Shutdown,
     },
     core::{
+        identity::NodeIdentity,
         negotiator::{NodeFinder, NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, NodeProfileFetcherImpl},
         session::{SessionAccepter, SessionConnector, model::SessionType},
     },
@@ -36,6 +36,9 @@ pub struct AxusService {
 pub struct AxusServiceOption {
     pub bootstrap_node_profiles: Vec<NodeProfile>,
     pub node_finder_intervals: NodeFinderIntervals,
+    /// 空なら、待ち受けアドレスから広告するアドレスを決める
+    pub advertise_addrs: Vec<OmniAddr>,
+    pub use_upnp: bool,
 }
 
 impl AxusService {
@@ -46,7 +49,16 @@ impl AxusService {
     }
 
     async fn create_node_finder(state_dir: &Path, listen_addr: &str, option: AxusServiceOption) -> Result<NodeFinder> {
-        let tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync> = Arc::new(ConnectionTcpAccepterImpl::new(&OmniAddr::from_host_and_port_str(listen_addr)?, false).await?);
+        let tcp_accepter = ConnectionTcpAccepterImpl::new(&OmniAddr::from_host_and_port_str(listen_addr)?, option.use_upnp).await?;
+        let my_addrs = if option.advertise_addrs.is_empty() {
+            tcp_accepter.get_advertised_addrs().await?
+        } else {
+            option.advertise_addrs.clone()
+        };
+        if my_addrs.is_empty() {
+            warn!("no address to advertise; other nodes can reach this node only through their bootstrap settings");
+        }
+        let tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync> = Arc::new(tcp_accepter);
         let tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync> = Arc::new(
             ConnectionTcpConnectorImpl::new(TcpProxyOption {
                 typ: TcpProxyType::None,
@@ -57,7 +69,8 @@ impl AxusService {
 
         let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
         let sleeper: Arc<dyn Sleeper + Send + Sync> = Arc::new(SleeperImpl);
-        let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "TODO")?);
+        let identity = NodeIdentity::load_or_create(&state_dir.join("identity")).await?;
+        let signer = identity.signer();
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
 
         let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), sleeper.clone(), rng.clone(), &[SessionType::NodeFinder]).await);
@@ -74,7 +87,12 @@ impl AxusService {
         let node_finder_dir = state_dir.join("finder");
         tokio::fs::create_dir_all(&node_finder_dir).await?;
 
+        let my_node_profile = NodeProfile::new(identity.public_key().to_vec(), my_addrs);
+        // 他の node の設定 p2p.bootstrap_nodes に書けるよう、自 node の NodeProfile を URI で記録する
+        info!(node_profile = my_node_profile.to_string(), "node profile");
+
         let result = NodeFinder::new(
+            my_node_profile,
             session_connector,
             session_accepter,
             node_profile_repo,
@@ -109,7 +127,7 @@ mod tests {
     use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
     use crate::{
-        core::negotiator::NodeFinderIntervals,
+        core::{identity::NodeIdentity, negotiator::NodeFinderIntervals},
         model::{AssetKey, NodeProfile},
         prelude::*,
     };
@@ -124,18 +142,18 @@ mod tests {
 
         let owner_port = free_port()?;
         let owner = AxusService::new(dir.path().join("owner"), format!("127.0.0.1:{owner_port}"), dir.path(), fast_option(vec![])).await?;
-        let owner_id = owner.node_finder.my_node_profile().id;
+        let owner_id = owner.node_finder.my_node_profile().id().to_vec();
 
-        let owner_node_profile = NodeProfile {
-            id: owner_id.clone(),
-            addrs: vec![OmniAddr::create_tcp("127.0.0.1".parse()?, owner_port)],
-        };
+        let owner_node_profile = NodeProfile::new(
+            owner.node_finder.my_node_profile().public_key().to_vec(),
+            vec![OmniAddr::create_tcp("127.0.0.1".parse()?, owner_port)],
+        );
         let seeker_port = free_port()?;
         let seeker = AxusService::new(
             dir.path().join("seeker"),
             format!("127.0.0.1:{seeker_port}"),
             dir.path(),
-            fast_option(vec![owner_node_profile]),
+            fast_option(vec![owner_node_profile.clone()]),
         )
         .await?;
 
@@ -167,12 +185,145 @@ mod tests {
         })
         .await??;
 
-        assert!(found.iter().all(|node_profile| node_profile.id == owner_id));
+        assert!(found.iter().all(|node_profile| node_profile.id() == owner_id.as_slice()));
+        // owner は特定のアドレスで待ち受けているため、そのアドレスを広告する
+        assert!(found.iter().all(|node_profile| node_profile.addrs == owner_node_profile.addrs));
         assert_eq!(seeker.node_finder.get_session_count().await, 1);
         assert_eq!(owner.node_finder.get_session_count().await, 1);
 
         seeker.shutdown().await;
         owner.shutdown().await;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn nodes_dialing_each_other_keep_one_session() -> TestResult {
+        // 同時に接続し合う状況は起動の時刻に左右されるため、何度か繰り返す
+        for _ in 0..5 {
+            let dir = tempfile::tempdir()?;
+            let a_dir = dir.path().join("a");
+            let b_dir = dir.path().join("b");
+            let (a_port, b_port) = (free_port()?, free_port()?);
+
+            // 互いを bootstrap に指定するため、起動の前に鍵を作って公開鍵を確定させる
+            let a_node_profile = NodeProfile::new(
+                NodeIdentity::load_or_create(&a_dir.join("identity")).await?.public_key().to_vec(),
+                vec![OmniAddr::create_tcp("127.0.0.1".parse()?, a_port)],
+            );
+            let b_node_profile = NodeProfile::new(
+                NodeIdentity::load_or_create(&b_dir.join("identity")).await?.public_key().to_vec(),
+                vec![OmniAddr::create_tcp("127.0.0.1".parse()?, b_port)],
+            );
+
+            let (a, b) = tokio::try_join!(
+                AxusService::new(&a_dir, format!("127.0.0.1:{a_port}"), dir.path(), fast_option(vec![b_node_profile])),
+                AxusService::new(&b_dir, format!("127.0.0.1:{b_port}"), dir.path(), fast_option(vec![a_node_profile])),
+            )?;
+
+            tokio::time::timeout(TEST_TIMEOUT, async {
+                while a.node_finder.get_session_count().await != 1 || b.node_finder.get_session_count().await != 1 {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await?;
+
+            // 重複した Session を閉じた後も、残した 1 本が閉じずに続くことを確かめる
+            for _ in 0..10 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                assert_eq!(a.node_finder.get_session_count().await, 1);
+                assert_eq!(b.node_finder.get_session_count().await, 1);
+            }
+
+            a.shutdown().await;
+            b.shutdown().await;
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn node_finds_and_dials_an_owner_known_only_through_another_node() -> TestResult {
+        let dir = tempfile::tempdir()?;
+
+        // hub だけが owner と seeker の両方を知り、owner と seeker は hub だけを bootstrap に指定する
+        let hub_port = free_port()?;
+        let hub = AxusService::new(dir.path().join("hub"), format!("127.0.0.1:{hub_port}"), dir.path(), fast_option(vec![])).await?;
+        let hub_node_profile = hub.node_finder.my_node_profile();
+
+        let owner = AxusService::new(
+            dir.path().join("owner"),
+            format!("127.0.0.1:{}", free_port()?),
+            dir.path(),
+            fast_option(vec![hub_node_profile.clone()]),
+        )
+        .await?;
+        let seeker = AxusService::new(
+            dir.path().join("seeker"),
+            format!("127.0.0.1:{}", free_port()?),
+            dir.path(),
+            fast_option(vec![hub_node_profile.clone()]),
+        )
+        .await?;
+        let owner_node_profile = owner.node_finder.my_node_profile();
+
+        // Kadex は自 node より AssetKey に近い node にだけ want と push を送るため、hub を最も近い node にする
+        let asset_key = AssetKey {
+            typ: "test".to_string(),
+            hash: OmniHash {
+                typ: OmniHashAlgorithmType::Sha3_256,
+                value: hub_node_profile.id().to_vec(),
+            },
+        };
+        let _push_handle = owner.node_finder.listen_push_asset_keys({
+            let asset_key = asset_key.clone();
+            move |_| vec![asset_key.clone()]
+        });
+        let _want_handle = seeker.node_finder.listen_want_asset_keys({
+            let asset_key = asset_key.clone();
+            move |_| vec![asset_key.clone()]
+        });
+
+        let found = tokio::time::timeout(TEST_TIMEOUT, async {
+            loop {
+                let node_profiles = seeker.node_finder.find_node_profile(&asset_key).await?;
+                if !node_profiles.is_empty() {
+                    return Result::Ok(node_profiles);
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await??;
+        assert!(found.iter().all(|node_profile| **node_profile == owner_node_profile));
+
+        // seeker と owner は hub から互いの NodeProfile を受け取り、広告されたアドレスで直接つながる
+        tokio::time::timeout(TEST_TIMEOUT, async {
+            while seeker.node_finder.get_session_count().await < 2 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await?;
+
+        seeker.shutdown().await;
+        owner.shutdown().await;
+        hub.shutdown().await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn advertise_addrs_override_the_listen_address() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let advertise_addrs = vec![OmniAddr::create_tcp("203.0.113.1".parse()?, 6052)];
+        let option = AxusServiceOption {
+            advertise_addrs: advertise_addrs.clone(),
+            ..fast_option(vec![])
+        };
+
+        let service = AxusService::new(dir.path().join("node"), "127.0.0.1:0", dir.path(), option).await?;
+        assert_eq!(service.node_finder.my_node_profile().addrs, advertise_addrs);
+
+        service.shutdown().await;
 
         Ok(())
     }
@@ -185,6 +336,7 @@ mod tests {
                 compute: Duration::from_millis(100),
                 communicate: Duration::from_millis(100),
             },
+            ..Default::default()
         }
     }
 

@@ -44,6 +44,18 @@ Run the repository's development configuration with:
 cargo run --manifest-path daemon/Cargo.toml -p omnius-axus-daemon -- start --config-dir daemon/config
 ```
 
+The `[p2p]` section accepts the following keys.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `listen_addr` | required | `host:port` that accepts P2P connections |
+| `advertise_addrs` | `[]` | `host:port` list announced to other nodes. When empty, the daemon announces `listen_addr`, or the reachable IPs with its port when `listen_addr` is unspecified such as `0.0.0.0` |
+| `use_upnp` | `false` | Opens the listen port on the router through UPnP when `listen_addr` is unspecified |
+| `bootstrap_nodes` | `[]` | `axus:node/...` URIs of nodes to connect to first |
+
+At startup the daemon logs its own URI as `node_profile` in the `node profile` message.
+Add that URI to `bootstrap_nodes` of another daemon to connect the two.
+
 ## Links
 
 - Official Documentation: https://docs.omnius-labs.com/

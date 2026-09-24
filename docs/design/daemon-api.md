@@ -38,7 +38,7 @@ DaemonState は daemon の所有物を保持し、終了時には `AxusService::
 
 ### 4.1 設定の境界
 
-[config.rs](../../daemon/entrypoints/daemon/src/config.rs) は、永続状態の置き場、待ち受け address、logging を外部設定から内部型へ変換する。
+[config.rs](../../daemon/entrypoints/daemon/src/config.rs) は、永続状態の置き場、待ち受け address、他の node に広告する address と UPnP の利用、起動時に接続する bootstrap node、logging を外部設定から内部型へ変換する。
 HTTP API と P2P transport は別の待ち受け口であるため、両者の address を別々に設定できなければならない。
 一時 directory は process 寿命に従い、再起動後も必要な情報は `state_dir` 配下に置く。
 

@@ -173,7 +173,7 @@ impl TaskConnector {
         self.connected_node_profiles.lock().refresh();
 
         let connected_ids: HashSet<Vec<u8>> = {
-            let v1: Vec<Vec<u8>> = self.connected_node_profiles.lock().iter().map(|n| n.id.to_owned()).collect();
+            let v1: Vec<Vec<u8>> = self.connected_node_profiles.lock().iter().map(|n| n.id().to_vec()).collect();
             let v2: Vec<Vec<u8>> = self.sessions.read().await.iter().map(|n| n.0.to_owned()).collect();
             v1.into_iter().chain(v2).collect()
         };
@@ -194,7 +194,7 @@ impl TaskConnector {
             // };
 
             let node_profiles = self.node_finder.find_node_profile(&asset_key).await?;
-            let node_profiles: Vec<Arc<NodeProfile>> = node_profiles.into_iter().filter(|n| !connected_ids.contains(&n.id)).collect();
+            let node_profiles: Vec<Arc<NodeProfile>> = node_profiles.into_iter().filter(|n| !connected_ids.contains(n.id())).collect();
 
             for node_profile in node_profiles {
                 for addr in node_profile.addrs.iter() {

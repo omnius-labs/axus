@@ -145,14 +145,8 @@ mod tests {
         let repo = NodeFinderRepo::new(path, clock).await?;
 
         let vs: Vec<NodeProfile> = vec![
-            NodeProfile {
-                id: vec![0],
-                addrs: vec![OmniAddr::new("test")],
-            },
-            NodeProfile {
-                id: vec![1],
-                addrs: vec![OmniAddr::new("test")],
-            },
+            NodeProfile::new(vec![0], vec![OmniAddr::new("test")]),
+            NodeProfile::new(vec![1], vec![OmniAddr::new("test")]),
         ];
         let vs_ref: Vec<&NodeProfile> = vs.iter().collect();
         repo.insert_or_ignore_node_profiles(&vs_ref, 1).await?;

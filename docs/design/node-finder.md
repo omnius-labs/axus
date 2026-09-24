@@ -76,8 +76,38 @@ URI を opaque な値として保存することで形式追加のたびに tabl
 
 ### 6.1 決定済み
 
-この関心事に閉じる追加の決定はない。
 NodeFinder と FileExchanger の分離は [design.md](../design.md#51-決定済み) が正とする。
+
+#### 重複した Session は node ID が小さい側から張ったものを残す
+
+**決定**
+同じ相手との Session が重複したら、node ID が小さい側から張った Session を残す。
+残すべき Session が後から handshake を終えた場合は、先に登録した Session を閉じて入れ替える。
+
+**理由**
+同じ node の TaskConnector どうしは接続中の相手を予約するため、重複は 2 つの node が互いへ同時に接続したときに起きる。
+handshake を終えた順に Session を残す規則では、両側が異なる Session を残し得る。
+一方が閉じた接続は他方が残した Session でもあるため、両方の Session が閉じ、接続元は相手を接続済みとして記録したまま再接続しない。
+node ID は Session の署名で確かめた公開鍵から導出するため、両側は追加の message なしに同じ規則で同じ Session を選べる。
+
+**却下案**
+重複を検出した側が相手へ通知して残す Session を合意する案は、Session の上に新しい message と状態遷移が必要になるため採らない。
+
+#### 自 node の NodeProfile には起動時に決めたアドレスを載せる
+
+**決定**
+自 node の NodeProfile には、設定 `p2p.advertise_addrs` があればそのアドレスを載せる。
+設定がなければ、特定のアドレスで待ち受けるときはそのアドレスを、不特定のアドレスで待ち受けるときは到達できる local IP と UPnP の外部 IP に待ち受けポートを付けて載せる。
+UPnP は設定 `p2p.use_upnp` で有効にしたときだけ使う。
+アドレスは起動時に 1 回だけ決め、IP が変わったときは再起動で反映する。
+
+**理由**
+node 自身が知っている情報だけで決まるため、handshake に message を足す必要がない。
+`0.0.0.0` で待ち受ける場合や UPnP のない NAT の内側では到達できるアドレスを自動では決められないため、利用者が明示できる設定を優先する。
+UPnP はルーターのポート開放の設定を変えるため、利用者が選んだときだけ行う。
+
+**却下案**
+接続先から見えた接続元アドレスを handshake で返してもらう案は、NAT の外側のアドレスを知れるが、handshake の message が増え、相手の申告を検証する手段も必要になるため採らない。
 
 ### 6.2 保留
 
@@ -97,48 +127,15 @@ NodeFinder と FileExchanger の分離は [design.md](../design.md#51-決定済�
 **決める条件**
 複数 hop の結合試験で、購読開始に必要な所在情報の到達率と遅延を測定した時点で決める。
 
-#### 双方向の同時接続で重複した Session の解消
-
-**現状**
-[TaskCommunicator](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs) は handshake の後、同じ相手との Session が既にあれば、後から handshake を終えた Session を閉じる。
-node A と B が互いへ同時に接続すると、A と B はそれぞれ先に handshake を終えた Session を残す。
-残した Session が両側で異なると、一方が閉じた接続は他方が残した Session でもあるため、両方の Session が閉じる。
-接続元は相手を接続済みとして 180 秒記録するため、その間は同じ相手へ再接続しない。
-同じ node の TaskConnector どうしは、接続中の相手を予約して同じ相手へ同時に接続しない。
-
-候補は次の 2 つである。
-
-1. node ID の大小で残す接続方向を決めると、追加の message なしに両側が同じ Session を選べるが、先に登録した Session を後から来た Session で置き換える処理が必要になる。
-2. 重複を検出した側が相手へ通知して残す Session を合意すると判定規則を柔軟にできるが、Session の上に新しい message と状態遷移が必要になる。
-
-**なぜ今決めないか**
-自 node の NodeProfile は待ち受けアドレスを持たないため、相手のアドレスは bootstrap に指定された NodeProfile からしか得られず、双方向の同時接続が起きる構成は限られる。
-
-**決める条件**
-自 node の NodeProfile に待ち受けアドレスを載せる前に決める。
-
-#### 自 node の待ち受けアドレスの広告
-
-**現状**
-自 node の NodeProfile は待ち受けアドレスを持たず、ほかの node は bootstrap に指定された NodeProfile にしか接続できない。
-不具合としての追跡は [node-profile-without-address.md](../issues/node-profile-without-address.md) が持つ。
-
-候補は次の 2 つである。
-
-1. 設定した待ち受けアドレスと、UPnP で得た外部アドレスを載せると追加の message が要らないが、`0.0.0.0` で待ち受ける場合や UPnP のない NAT の内側では、到達できるアドレスを node 自身が知らない。
-2. 接続先から見えた接続元アドレスを handshake で返してもらうと NAT の外側のアドレスを知れるが、handshake の message が増え、相手の申告を検証する手段も必要になる。
-
-**なぜ今決めないか**
-daemon には bootstrap の設定がなく、NAT を越える構成での到達性を試していないためである。
-
-**決める条件**
-FileExchanger が lookup で得た NodeProfile へ接続する処理を実装する前に決める。
-
 ## 7. 現状と残作業
 
 接続、受理、計算、通信の task と SQLite repo があり、lookup は接続中 Session の受信状態だけを走査する。
 AxusService の起動経路から 2 node を起動し、Session の確立と AssetKey の lookup を結合試験で確認している。
 各 task の周期は NodeFinderOption で指定し、結合試験では短い周期を使う。
 
-自 node の待ち受けアドレスの広告と、双方向の同時接続で重複した Session の解消規則を決める。
-複数 hop の到達率と遅延を測定し、能動探索と冗長度を決める。
+重複した Session の解消は、互いを bootstrap に指定した 2 node の結合試験で確認している。
+lookup で得た NodeProfile には、相手が広告したアドレスが含まれることを結合試験で確認している。
+daemon は設定 `p2p.bootstrap_nodes` の NodeProfile を既知 node に加えて起動する。
+3 node の結合試験で、bootstrap に指定していない node を中継の node 経由で見つけ、広告されたアドレスで直接つながることを確認している。
+
+実運用規模での複数 hop の到達率と遅延を測定し、能動探索と冗長度を決める。

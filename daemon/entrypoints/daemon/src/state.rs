@@ -1,6 +1,6 @@
 use tempfile::TempDir;
 
-use omnius_axus_engine::service::AxusService;
+use omnius_axus_engine::service::{AxusService, AxusServiceOption};
 
 use crate::{config::DaemonConfig, prelude::*};
 
@@ -18,7 +18,7 @@ impl DaemonState {
 
         let temp_dir = TempDir::new()?;
 
-        let axus_service = AxusService::new(&state_dir, &conf.p2p.listen_addr, temp_dir.path()).await?;
+        let axus_service = AxusService::new(&state_dir, &conf.p2p.listen_addr, temp_dir.path(), AxusServiceOption::default()).await?;
 
         Ok(Self { conf, axus_service, temp_dir })
     }

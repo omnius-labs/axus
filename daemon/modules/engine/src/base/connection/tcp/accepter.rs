@@ -36,7 +36,8 @@ impl ConnectionTcpAccepterImpl {
             let listener = TcpListener::bind(socket_addr).await?;
 
             if use_upnp && socket_addr.ip().is_unspecified() {
-                let upnp_port_mapping = UpnpPortMapping::new(socket_addr.port()).await;
+                // port に 0 を指定した場合も、OS が割り当てた port を開放する
+                let upnp_port_mapping = UpnpPortMapping::new(listener.local_addr()?.port()).await;
                 if let Ok(upnp_port_mapping) = upnp_port_mapping {
                     return Ok(Self {
                         listener,

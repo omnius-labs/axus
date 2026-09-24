@@ -35,6 +35,7 @@ pub struct TaskConnector {
     session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
     session_connector: Arc<SessionConnector>,
     connected_node_profiles: Arc<Mutex<VolatileHashSet<NodeProfile>>>,
+    connecting_ids: Arc<Mutex<HashSet<Vec<u8>>>>,
     node_profile_repo: Arc<NodeFinderRepo>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
@@ -61,6 +62,7 @@ impl TaskConnector {
         session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
         session_connector: Arc<SessionConnector>,
         connected_node_profiles: Arc<Mutex<VolatileHashSet<NodeProfile>>>,
+        connecting_ids: Arc<Mutex<HashSet<Vec<u8>>>>,
         node_profile_repo: Arc<NodeFinderRepo>,
         clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
@@ -73,6 +75,7 @@ impl TaskConnector {
             session_sender,
             session_connector,
             connected_node_profiles,
+            connecting_ids,
             node_profile_repo,
             clock,
             sleeper,
@@ -130,13 +133,27 @@ impl TaskConnector {
             .filter(|n| !excluded_ids.contains(&n.id))
             .collect();
 
+        // 同じ node の TaskConnector が同じ相手へ同時に接続しないよう、相手の選択と予約を 1 つの lock の中で行う
         let node_profile = {
-            let mut rng = self.rng.lock();
-            node_profiles
-                .choose(&mut *rng)
-                .ok_or_else(|| Error::new(ErrorKind::NotFound).with_message("node profile is not found"))?
+            let mut connecting_ids = self.connecting_ids.lock();
+            let candidates: Vec<&NodeProfile> = node_profiles.iter().filter(|n| !connecting_ids.contains(&n.id)).collect();
+            let node_profile = {
+                let mut rng = self.rng.lock();
+                (*candidates
+                    .choose(&mut *rng)
+                    .ok_or_else(|| Error::new(ErrorKind::NotFound).with_message("node profile is not found"))?)
+                .clone()
+            };
+            connecting_ids.insert(node_profile.id.clone());
+            node_profile
         };
 
+        let result = self.connect_node(&node_profile).await;
+        self.connecting_ids.lock().remove(&node_profile.id);
+        result
+    }
+
+    async fn connect_node(&self, node_profile: &NodeProfile) -> Result<()> {
         for addr in node_profile.addrs.iter() {
             if let Ok(session) = self.session_connector.connect(addr, &SessionType::NodeFinder).await {
                 let status = SessionStatus::new(session, self.clock.clone());
@@ -159,7 +176,11 @@ impl TaskConnector {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc, time::Duration};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+        time::Duration,
+    };
 
     use async_trait::async_trait;
     use chrono::Utc;
@@ -197,7 +218,14 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let my_node_profile = node_profile("me", 1);
         let tcp_connector = Arc::new(CountingTcpConnector::default());
-        let task = create_task_connector(dir.path().to_str().unwrap(), &my_node_profile, &[&my_node_profile], tcp_connector.clone()).await?;
+        let task = create_task_connector(
+            dir.path().to_str().unwrap(),
+            &my_node_profile,
+            &[&my_node_profile],
+            tcp_connector.clone(),
+            Arc::new(Mutex::new(HashSet::new())),
+        )
+        .await?;
 
         let err = task.connect().await.unwrap_err();
         assert_eq!(err.kind(), &ErrorKind::NotFound);
@@ -208,11 +236,48 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn concurrent_connects_do_not_target_the_same_node() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let my_node_profile = node_profile("me", 1);
+        let other_node_profile = node_profile("other", 2);
+        let tcp_connector = Arc::new(CountingTcpConnector::default());
+        let connecting_ids = Arc::new(Mutex::new(HashSet::new()));
+
+        let mut tasks = Vec::new();
+        for i in 0..3 {
+            let state_dir = dir.path().join(i.to_string());
+            std::fs::create_dir_all(&state_dir)?;
+            let task = create_task_connector(
+                state_dir.to_str().unwrap(),
+                &my_node_profile,
+                &[&other_node_profile],
+                tcp_connector.clone(),
+                connecting_ids.clone(),
+            )
+            .await?;
+            tasks.push(task);
+        }
+
+        let results = futures::future::join_all(tasks.iter().map(|task| task.connect())).await;
+        let not_found_count = results.iter().filter(|result| matches!(result, Err(e) if e.kind() == &ErrorKind::NotFound)).count();
+        assert_eq!(tcp_connector.count(), 1);
+        assert_eq!(not_found_count, 2);
+        assert!(connecting_ids.lock().is_empty());
+
+        for task in tasks {
+            task.shutdown().await;
+        }
+
+        Ok(())
+    }
+
     async fn create_task_connector(
         state_dir: &str,
         my_node_profile: &NodeProfile,
         node_profiles: &[&NodeProfile],
         tcp_connector: Arc<CountingTcpConnector>,
+        connecting_ids: Arc<Mutex<HashSet<Vec<u8>>>>,
     ) -> Result<Arc<TaskConnector>> {
         let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
@@ -229,6 +294,7 @@ mod tests {
             Arc::new(TokioMutex::new(session_sender)),
             Arc::new(SessionConnector::new(tcp_connector, signer, rng.clone())),
             Arc::new(Mutex::new(VolatileHashSet::new(chrono::Duration::seconds(180), clock.clone()))),
+            connecting_ids,
             node_profile_repo,
             clock,
             Arc::new(SleeperImpl),

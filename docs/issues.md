@@ -41,6 +41,7 @@
 | FileExchanger の block 交換 protocol がない | [file-transfer.md](./design/file-transfer.md#7-現状と残作業) |
 | 購読開始の入口がない | [file-transfer.md](./design/file-transfer.md#7-現状と残作業) |
 | NodeFinder の能動探索がない | [node-finder.md](./design/node-finder.md#6-設計判断) |
+| 双方向の同時接続で重複した Session を両方閉じる | [node-finder.md](./design/node-finder.md#双方向の同時接続で重複した-session-の解消) |
 | Web of Trust が未設計である | [trust-security.md](./design/trust-security.md#4-設計判断) |
 | Profile と memo が未実装である | [profile-memo.md](./design/profile-memo.md#5-現状と残作業) |
 | 長時間 REST 操作の表現が未決である | [daemon-api.md](./design/daemon-api.md#5-設計判断) |

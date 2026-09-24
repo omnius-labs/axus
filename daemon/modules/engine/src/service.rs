@@ -36,6 +36,9 @@ pub struct AxusService {
 pub struct AxusServiceOption {
     pub bootstrap_node_profiles: Vec<NodeProfile>,
     pub node_finder_intervals: NodeFinderIntervals,
+    /// 空なら、待ち受けアドレスから広告するアドレスを決める
+    pub advertise_addrs: Vec<OmniAddr>,
+    pub use_upnp: bool,
 }
 
 impl AxusService {
@@ -46,7 +49,16 @@ impl AxusService {
     }
 
     async fn create_node_finder(state_dir: &Path, listen_addr: &str, option: AxusServiceOption) -> Result<NodeFinder> {
-        let tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync> = Arc::new(ConnectionTcpAccepterImpl::new(&OmniAddr::from_host_and_port_str(listen_addr)?, false).await?);
+        let tcp_accepter = ConnectionTcpAccepterImpl::new(&OmniAddr::from_host_and_port_str(listen_addr)?, option.use_upnp).await?;
+        let my_addrs = if option.advertise_addrs.is_empty() {
+            tcp_accepter.get_advertised_addrs().await?
+        } else {
+            option.advertise_addrs.clone()
+        };
+        if my_addrs.is_empty() {
+            warn!("no address to advertise; other nodes can reach this node only through their bootstrap settings");
+        }
+        let tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync> = Arc::new(tcp_accepter);
         let tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync> = Arc::new(
             ConnectionTcpConnectorImpl::new(TcpProxyOption {
                 typ: TcpProxyType::None,
@@ -75,7 +87,7 @@ impl AxusService {
         let node_finder_dir = state_dir.join("finder");
         tokio::fs::create_dir_all(&node_finder_dir).await?;
 
-        let my_node_profile = NodeProfile::new(identity.public_key().to_vec(), Vec::new());
+        let my_node_profile = NodeProfile::new(identity.public_key().to_vec(), my_addrs);
 
         let result = NodeFinder::new(
             my_node_profile,
@@ -139,7 +151,7 @@ mod tests {
             dir.path().join("seeker"),
             format!("127.0.0.1:{seeker_port}"),
             dir.path(),
-            fast_option(vec![owner_node_profile]),
+            fast_option(vec![owner_node_profile.clone()]),
         )
         .await?;
 
@@ -172,6 +184,8 @@ mod tests {
         .await??;
 
         assert!(found.iter().all(|node_profile| node_profile.id() == owner_id.as_slice()));
+        // owner は特定のアドレスで待ち受けているため、そのアドレスを広告する
+        assert!(found.iter().all(|node_profile| node_profile.addrs == owner_node_profile.addrs));
         assert_eq!(seeker.node_finder.get_session_count().await, 1);
         assert_eq!(owner.node_finder.get_session_count().await, 1);
 
@@ -226,6 +240,23 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn advertise_addrs_override_the_listen_address() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let advertise_addrs = vec![OmniAddr::create_tcp("203.0.113.1".parse()?, 6052)];
+        let option = AxusServiceOption {
+            advertise_addrs: advertise_addrs.clone(),
+            ..fast_option(vec![])
+        };
+
+        let service = AxusService::new(dir.path().join("node"), "127.0.0.1:0", dir.path(), option).await?;
+        assert_eq!(service.node_finder.my_node_profile().addrs, advertise_addrs);
+
+        service.shutdown().await;
+
+        Ok(())
+    }
+
     fn fast_option(bootstrap_node_profiles: Vec<NodeProfile>) -> AxusServiceOption {
         AxusServiceOption {
             bootstrap_node_profiles,
@@ -234,6 +265,7 @@ mod tests {
                 compute: Duration::from_millis(100),
                 communicate: Duration::from_millis(100),
             },
+            ..Default::default()
         }
     }
 

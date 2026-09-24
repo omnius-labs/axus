@@ -1,6 +1,7 @@
 use tempfile::TempDir;
 
 use omnius_axus_engine::service::{AxusService, AxusServiceOption};
+use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
 use crate::{config::DaemonConfig, prelude::*};
 
@@ -18,7 +19,19 @@ impl DaemonState {
 
         let temp_dir = TempDir::new()?;
 
-        let axus_service = AxusService::new(&state_dir, &conf.p2p.listen_addr, temp_dir.path(), AxusServiceOption::default()).await?;
+        let advertise_addrs = conf
+            .p2p
+            .advertise_addrs
+            .iter()
+            .map(OmniAddr::from_host_and_port_str)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let option = AxusServiceOption {
+            advertise_addrs,
+            use_upnp: conf.p2p.use_upnp,
+            ..Default::default()
+        };
+
+        let axus_service = AxusService::new(&state_dir, &conf.p2p.listen_addr, temp_dir.path(), option).await?;
 
         Ok(Self { conf, axus_service, temp_dir })
     }
@@ -49,6 +62,8 @@ mod tests {
             },
             p2p: P2pConfig {
                 listen_addr: "127.0.0.1:0".to_string(),
+                advertise_addrs: vec![],
+                use_upnp: false,
             },
             logging: LoggingConfig {
                 level: "info".to_string(),
@@ -75,6 +90,8 @@ mod tests {
             },
             p2p: P2pConfig {
                 listen_addr: "not-an-addr".to_string(),
+                advertise_addrs: vec![],
+                use_upnp: false,
             },
             logging: LoggingConfig {
                 level: "info".to_string(),

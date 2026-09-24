@@ -25,10 +25,10 @@
 
 | 項目 | 深刻度 | 調査日 | Issue |
 | --- | --- | --- | --- |
-| [自 node の NodeProfile が待ち受けアドレスを持たない](./issues/node-profile-without-address.md) | 高 | 2026-09-24 | - |
+| [アドレスが変わった node が既知 node に重複して残る](./issues/node-profile-rows-keyed-by-uri.md) | 低 | 2026-09-24 | - |
 
-自 node のアドレスは設計判断に依存するが、現在の実装が将来の contract を満たさない点は確認済みである。
-アドレスは FileExchanger が lookup の結果へ接続する前提であり、block 交換の前に解消する。
+1 件だけであり、ほかの項目との関係はない。
+NodeProfile の到達先の真正性（[trust-security.md](./design/trust-security.md#nodeprofile-の到達先の真正性)）を決めると既知 node の保存形式も変わり得るため、あわせて扱う。
 
 ## 3. ここに含めていないもの
 

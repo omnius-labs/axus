@@ -28,11 +28,10 @@
 | [ファイル関連の SQLite schema が初期化時にエラーになる](./issues/file-schema-initialization-fails.md) | 高 | 2026-09-02 | - |
 | [SQL が存在しない列 `property` を参照している](./issues/file-query-column-mismatch.md) | 高 | 2026-09-02 | - |
 | [`MerkleLayer.rank` の解釈が encoder と decoder で 1 ずれる](./issues/merkle-layer-rank-mismatch.md) | 高 | 2026-09-02 | - |
-| [version 交渉が積集合ではなく和集合になっている](./issues/session-version-union.md) | 中 | 2026-09-02 | - |
 | [署名鍵の識別子が `"TODO"` 固定である](./issues/fixed-signer-identifier.md) | 中 | 2026-09-02 | - |
 
 最初の 3 件は file の公開と購読の同じ経路にあるため、schema の初期化、query、Merkle layer の round-trip をまとめて検証する。
-version 交渉と署名鍵の識別子は設計判断に依存するが、現在の実装が将来の contract を満たさない点は確認済みである。
+署名鍵の識別子は設計判断に依存するが、現在の実装が将来の contract を満たさない点は確認済みである。
 
 ## 3. ここに含めていないもの
 

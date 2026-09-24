@@ -146,7 +146,7 @@ impl TaskCommunicator {
         session.stream.sender.lock().await.send_message(&send_hello_message).await?;
         let received_hello_message: HelloMessage = session.stream.receiver.lock().await.recv_message().await?;
 
-        let version = send_hello_message.version | received_hello_message.version;
+        let version = send_hello_message.version & received_hello_message.version;
 
         if version.contains(NodeFinderVersion::V1) {
             let send_profile_message = ProfileMessage {
@@ -467,5 +467,96 @@ impl RocketPackStruct for DataMessage {
             give_asset_key_locations: give_asset_key_locations.ok_or(RocketPackDecoderError::Other("missing field: give_asset_key_locations"))?,
             push_asset_key_locations: push_asset_key_locations.ok_or(RocketPackDecoderError::Other("missing field: push_asset_key_locations"))?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use enumflags2::{BitFlags, make_bitflags};
+    use testresult::TestResult;
+
+    use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
+    use omnius_core_omnikit::model::omni_addr::OmniAddr;
+
+    use crate::{
+        base::connection::{FramedRecvExt as _, FramedSendExt as _, FramedStream},
+        core::session::model::{Session, SessionHandshakeType, SessionType},
+        model::NodeProfile,
+        prelude::*,
+    };
+
+    use super::{HelloMessage, NodeFinderVersion, ProfileMessage, TaskCommunicator};
+
+    #[tokio::test]
+    async fn handshake_succeeds_with_common_version() -> TestResult {
+        let (session, peer) = session_pair()?;
+        let peer_node_profile = node_profile("peer");
+
+        let peer_task = tokio::spawn(async move {
+            peer.sender
+                .lock()
+                .await
+                .send_message(&HelloMessage {
+                    version: make_bitflags!(NodeFinderVersion::V1),
+                })
+                .await?;
+            let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
+            peer.sender
+                .lock()
+                .await
+                .send_message(&ProfileMessage {
+                    node_profile: node_profile("peer"),
+                })
+                .await?;
+            let _: ProfileMessage = peer.receiver.lock().await.recv_message().await?;
+            Result::Ok(())
+        });
+
+        let received = TaskCommunicator::handshake(&session, &node_profile("me")).await?;
+        assert_eq!(received, peer_node_profile);
+        peer_task.await??;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handshake_rejects_peer_without_common_version() -> TestResult {
+        let (session, peer) = session_pair()?;
+
+        let peer_task = tokio::spawn(async move {
+            peer.sender.lock().await.send_message(&HelloMessage { version: BitFlags::empty() }).await?;
+            let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
+            Result::Ok(())
+        });
+
+        let err = TaskCommunicator::handshake(&session, &node_profile("me")).await.unwrap_err();
+        assert_eq!(err.kind(), &ErrorKind::UnsupportedType);
+        peer_task.await??;
+
+        Ok(())
+    }
+
+    fn session_pair() -> Result<(Session, FramedStream)> {
+        let (local, peer) = tokio::io::duplex(64 * 1024);
+        let (local_reader, local_writer) = tokio::io::split(local);
+        let (peer_reader, peer_writer) = tokio::io::split(peer);
+
+        let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?;
+        let session = Session {
+            typ: SessionType::NodeFinder,
+            address: OmniAddr::create_tcp("127.0.0.1".parse()?, 1),
+            handshake_type: SessionHandshakeType::Connected,
+            cert: signer.sign(b"test")?,
+            stream: FramedStream::new(local_reader, local_writer),
+        };
+
+        Ok((session, FramedStream::new(peer_reader, peer_writer)))
+    }
+
+    fn node_profile(id: &str) -> NodeProfile {
+        NodeProfile {
+            id: id.as_bytes().to_vec(),
+            addrs: vec![],
+        }
     }
 }

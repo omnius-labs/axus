@@ -155,6 +155,10 @@ impl TaskCommunicator {
             session.stream.sender.lock().await.send_message(&send_profile_message).await?;
             let received_profile_message: ProfileMessage = session.stream.receiver.lock().await.recv_message().await?;
 
+            if received_profile_message.node_profile.id == node_profile.id {
+                return Err(Error::new(ErrorKind::Reject).with_message("connected to self"));
+            }
+
             Ok(received_profile_message.node_profile)
         } else {
             Err(Error::new(ErrorKind::UnsupportedType).with_message(format!("invalid version: {}", version.bits())))
@@ -531,6 +535,31 @@ mod tests {
 
         let err = TaskCommunicator::handshake(&session, &node_profile("me")).await.unwrap_err();
         assert_eq!(err.kind(), &ErrorKind::UnsupportedType);
+        peer_task.await??;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handshake_rejects_peer_with_own_id() -> TestResult {
+        let (session, peer) = session_pair()?;
+
+        let peer_task = tokio::spawn(async move {
+            peer.sender
+                .lock()
+                .await
+                .send_message(&HelloMessage {
+                    version: make_bitflags!(NodeFinderVersion::V1),
+                })
+                .await?;
+            let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
+            peer.sender.lock().await.send_message(&ProfileMessage { node_profile: node_profile("me") }).await?;
+            let _: ProfileMessage = peer.receiver.lock().await.recv_message().await?;
+            Result::Ok(())
+        });
+
+        let err = TaskCommunicator::handshake(&session, &node_profile("me")).await.unwrap_err();
+        assert_eq!(err.kind(), &ErrorKind::Reject);
         peer_task.await??;
 
         Ok(())

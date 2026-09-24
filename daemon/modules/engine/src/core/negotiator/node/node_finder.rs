@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
@@ -34,6 +37,7 @@ pub struct NodeFinder {
     session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
     sessions: Arc<TokioRwLock<HashMap<Vec<u8>, Arc<SessionStatus>>>>,
     connected_node_profiles: Arc<Mutex<VolatileHashSet<NodeProfile>>>,
+    connecting_ids: Arc<Mutex<HashSet<Vec<u8>>>>,
     get_want_asset_keys_fn: Arc<FnHub<Vec<AssetKey>, ()>>,
     get_push_asset_keys_fn: Arc<FnHub<Vec<AssetKey>, ()>>,
 
@@ -83,6 +87,7 @@ impl NodeFinder {
             session_sender: Arc::new(TokioMutex::new(tx)),
             sessions: Arc::new(TokioRwLock::new(HashMap::new())),
             connected_node_profiles: Arc::new(Mutex::new(VolatileHashSet::new(Duration::seconds(180), clock))),
+            connecting_ids: Arc::new(Mutex::new(HashSet::new())),
             get_want_asset_keys_fn: Arc::new(FnHub::new()),
             get_push_asset_keys_fn: Arc::new(FnHub::new()),
 
@@ -104,10 +109,12 @@ impl NodeFinder {
     async fn start(&self) -> Result<()> {
         for _ in 0..3 {
             let task = TaskConnector::new(
+                self.my_node_profile.clone(),
                 self.sessions.clone(),
                 self.session_sender.clone(),
                 self.session_connector.clone(),
                 self.connected_node_profiles.clone(),
+                self.connecting_ids.clone(),
                 self.node_profile_repo.clone(),
                 self.clock.clone(),
                 self.sleeper.clone(),

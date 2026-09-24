@@ -86,4 +86,4 @@ directory 名の追加や移行が必要な場合は migration と rollback の�
 ## 6. 現状と残作業
 
 NodeFinder、publisher、subscriber の repository と block storage がある。
-file の repository 初期化と query には確認済みの schema 不具合があり、修正方針は [issues.md](../issues.md) が正とする。
+publisher と subscriber の repository は、すべての public method を test で実行している。

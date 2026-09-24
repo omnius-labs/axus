@@ -19,7 +19,7 @@
 
 | 用語 | スコープ | 識別子 | 外部表現 | 指すもの | 使わない別称 |
 | --- | --- | --- | --- | --- | --- |
-| rank | file-transfer | `MerkleLayer.rank` | - | Merkle 構造における layer の階層 | root hash |
+| rank | file-transfer | `MerkleLayer.rank` | - | Merkle 構造における block の階層。file 本体の block を 0 とする | root hash |
 | root hash | file-transfer | `OmniHash` | - | 最上位 block の hash である内容識別子 | FileRef |
 | AssetKey | node-finder | `AssetKey` | - | NodeFinder が所在を探索する対象の識別子 | ファイル参照 |
 | NodeProfile | node-finder | `NodeProfile` | `axus:node/` URI | P2P network 上の node を探索する識別子と到達先の組 | 署名鍵 |

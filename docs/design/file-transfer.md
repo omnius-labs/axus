@@ -18,7 +18,7 @@
 ### 1.2 本書の時制について
 
 本文は完成形の設計を記述する。
-実装状況と残作業は §6 に集約する。
+実装状況と残作業は §7 に集約する。
 
 ## 2. 責務と境界
 
@@ -51,7 +51,10 @@ flowchart BT
 
 root hash から下位 block の hash を段階的に得られるため、受信者は file 全体の hash 一覧を事前に持つ必要がない。
 各受信 block は期待する hash と照合してから保存または復号に使う。
-MerkleLayer の rank は encoder と decoder が同じ意味で解釈しなければならない。
+
+MerkleLayer の rank は、その layer が列挙する子 block の rank を表す。
+購読側は root hash だけから始めるため、root block の rank は root の layer を復号するまで分からない。
+購読側は root の layer の rank を照合せずに次の rank とし、以降の layer では親の rank より 1 小さいことを照合する。
 
 ## 4. 状態遷移
 
@@ -98,29 +101,29 @@ block 交換 protocol は、要求した hash、受信した hash、保存した
 
 ### 6.1 決定済み
 
-この関心事に閉じる追加の決定はない。
 探索と file 交換の分離は [design.md](../design.md#51-決定済み) が正とする。
+
+#### MerkleLayer.rank は子 block の rank を表す
+
+**決定**
+MerkleLayer の rank には、その layer を格納する block の rank ではなく、layer が列挙する子 block の rank を記録する。
+
+**理由**
+購読側は layer を復号した時点で、次に取得する block の rank をそのまま得られる。
+互換性を保つべき既存の wire data はなく、encode から decode までの round-trip test でこの意味を固定している。
+
+**却下案**
+格納先 block の rank を記録する案は、修正前の encoder が採っていた意味である。
+購読側は layer を復号するたびに、格納先の rank から 1 を引いて次の rank を計算する必要があるため採らない。
 
 ### 6.2 保留
 
-#### MerkleLayer.rank の意味
-
-**現状**
-MerkleLayer の rank が、その layer を格納する block の rank と、layer が列挙する子 block の rank のどちらを指すかを contract として定めていない。
-
-候補は次の 2 つである。
-
-1. 格納先 block の rank を持たせると encoder の生成位置と一致するが、decoder は次の rank を別途計算する必要がある。
-2. 子 block の rank を持たせると decoder の遷移を直接表せるが、encoder は格納先から 1 を引いて記録する必要がある。
-
-**なぜ今決めないか**
-どちらの意味も Merkle 構造を表現でき、互換性を保証する既存 wire data と encode から decode までの成功試験がないためである。
-
-**決める条件**
-[merkle-layer-rank-mismatch.md](../issues/merkle-layer-rank-mismatch.md) を修正する前に決め、選んだ意味を encode と decode の contract test で固定する。
+この関心事に閉じる保留はない。
 
 ## 7. 現状と残作業
 
-FilePublisher には file の block 化、MerkleLayer の生成、root hash の確定、commit 用の処理がある。
-FileSubscriber には block の保存と rank ごとの復号処理があるが、購読を作成する daemon API はない。
+FilePublisher は file の取り込み、block 化、MerkleLayer の生成、root hash の確定、commit、committed block の読み出しを行う。
+FileSubscriber は購読の開始、block の保存、rank ごとの復号を行い、公開から復号までを engine 内の round-trip test で確認している。
+FileSubscriber は受け取った block の hash を照合しておらず、照合は block 交換 protocol とあわせて実装する。
 FileExchanger には接続と受理の task はあるが、block 要求と応答の message および送受信 loop がない。
+公開と購読を始める REST API はない。

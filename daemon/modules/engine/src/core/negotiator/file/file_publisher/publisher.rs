@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use parking_lot::Mutex;
 use tokio::sync::Mutex as TokioMutex;
+use tokio_util::bytes::Bytes;
 
 use omnius_core_base::{clock::Clock, sleeper::Sleeper, tsid::TsidProvider};
 use omnius_core_omnikit::generated::omni_hash::OmniHash;
@@ -48,7 +49,9 @@ impl FilePublisher {
         clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
     ) -> Result<Arc<Self>> {
-        let file_publisher_repo = Arc::new(FilePublisherRepo::new(state_dir.join("repo"), clock.clone()).await?);
+        let repo_dir = state_dir.join("repo");
+        tokio::fs::create_dir_all(&repo_dir).await?;
+        let file_publisher_repo = Arc::new(FilePublisherRepo::new(&repo_dir, clock.clone()).await?);
         let blocks_storage = Arc::new(KeyValueRocksdbStorage::new(state_dir.join("blocks"), tsid_provider.clone()).await?);
 
         let v = Arc::new(Self {
@@ -78,6 +81,18 @@ impl FilePublisher {
         self.task_encoder.lock().await.replace(task);
 
         Ok(())
+    }
+
+    pub async fn import(&self, file_path: &str, file_name: &str, block_size: u32, attrs: Option<&str>, priority: i64) -> Result<()> {
+        let Some(task_encoder) = self.task_encoder.lock().await.clone() else {
+            return Err(Error::new(ErrorKind::UnexpectedError).with_message("task encoder is not started"));
+        };
+        task_encoder.import(file_path, file_name, block_size, attrs, priority).await
+    }
+
+    pub async fn read_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<Option<Bytes>> {
+        let key = gen_committed_block_path(root_hash, block_hash);
+        Ok(self.blocks_storage.get_value(&key).await?.map(Bytes::from))
     }
 
     pub async fn get_published_root_hashes(&self) -> Result<Vec<OmniHash>> {

@@ -110,8 +110,11 @@ MerkleLayer の rank には、その layer を格納する block の rank では
 
 **理由**
 購読側は layer を復号した時点で、次に取得する block の rank をそのまま得られる。
-格納先の rank を記録すると、購読側が root の rank を知らないまま次の rank を計算する必要がある。
 互換性を保つべき既存の wire data はなく、encode から decode までの round-trip test でこの意味を固定している。
+
+**却下案**
+格納先 block の rank を記録する案は、修正前の encoder が採っていた意味である。
+購読側は layer を復号するたびに、格納先の rank から 1 を引いて次の rank を計算する必要があるため採らない。
 
 ### 6.2 保留
 

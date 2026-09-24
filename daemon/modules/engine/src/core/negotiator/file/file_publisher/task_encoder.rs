@@ -227,8 +227,9 @@ impl TaskEncoder {
 
         let mut rank = 1;
         loop {
+            // MerkleLayer.rank は、格納先の block ではなく、列挙する子 block の rank を表す
             let merkle_layer = MerkleLayer {
-                rank,
+                rank: rank - 1,
                 hashes: std::mem::take(&mut current_block_hashes),
             };
 

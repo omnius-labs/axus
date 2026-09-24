@@ -104,6 +104,7 @@ impl NodeFinder {
     async fn start(&self) -> Result<()> {
         for _ in 0..3 {
             let task = TaskConnector::new(
+                self.my_node_profile.clone(),
                 self.sessions.clone(),
                 self.session_sender.clone(),
                 self.session_connector.clone(),

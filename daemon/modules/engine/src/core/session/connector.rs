@@ -34,7 +34,7 @@ impl SessionConnector {
         stream.sender.lock().await.send_message(&send_hello_message).await?;
         let received_hello_message: HelloMessage = stream.receiver.lock().await.recv_message().await?;
 
-        let version = send_hello_message.version | received_hello_message.version;
+        let version = send_hello_message.version & received_hello_message.version;
 
         if version.contains(SessionVersion::V1) {
             let send_nonce: [u8; 32] = self.rng.lock().random();

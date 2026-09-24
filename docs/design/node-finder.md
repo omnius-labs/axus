@@ -97,7 +97,28 @@ NodeFinder と FileExchanger の分離は [design.md](../design.md#51-決定済�
 **決める条件**
 複数 hop の結合試験で、購読開始に必要な所在情報の到達率と遅延を測定した時点で決める。
 
+#### 双方向の同時接続で重複した Session の解消
+
+**現状**
+[TaskCommunicator](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs) は handshake の後、同じ相手との Session が既にあれば、後から handshake を終えた Session を閉じる。
+node A と B が互いへ同時に接続すると、A と B はそれぞれ先に handshake を終えた Session を残す。
+残した Session が両側で異なると、一方が閉じた接続は他方が残した Session でもあるため、両方の Session が閉じる。
+接続元は相手を接続済みとして 180 秒記録するため、その間は同じ相手へ再接続しない。
+同じ node の TaskConnector どうしは、接続中の相手を予約して同じ相手へ同時に接続しない。
+
+候補は次の 2 つである。
+
+1. node ID の大小で残す接続方向を決めると、追加の message なしに両側が同じ Session を選べるが、先に登録した Session を後から来た Session で置き換える処理が必要になる。
+2. 重複を検出した側が相手へ通知して残す Session を合意すると判定規則を柔軟にできるが、Session の上に新しい message と状態遷移が必要になる。
+
+**なぜ今決めないか**
+自 node の NodeProfile は待ち受けアドレスを持たないため、相手のアドレスは bootstrap に指定された NodeProfile からしか得られず、双方向の同時接続が起きる構成は限られる。
+
+**決める条件**
+自 node の NodeProfile に待ち受けアドレスを載せる前に決める。
+
 ## 7. 現状と残作業
 
 接続、受理、計算、通信の task と SQLite repo があり、lookup は接続中 Session の受信状態だけを走査する。
 複数 hop の到達率と遅延を測定し、能動探索と冗長度を決める。
+双方向の同時接続で重複した Session の解消規則を決める。

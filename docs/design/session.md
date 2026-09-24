@@ -105,7 +105,8 @@ local の構成確認と storage 処理は secure channel の wire format に依
 #### Session の version 選択
 
 **現状**
-[message.rs](../../daemon/modules/engine/src/core/session/message.rs) と [task_communicator.rs](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs) は、対応 version を bit flag で交換する。
+[connector.rs](../../daemon/modules/engine/src/core/session/connector.rs)、[accepter.rs](../../daemon/modules/engine/src/core/session/accepter.rs)、[task_communicator.rs](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs) は、送った version と受け取った version の積集合を取り、空なら `UnsupportedType` の error を返す。
+NodeFinder の HelloMessage は対応 version を bit flag の集合で運ぶが、[message.rs](../../daemon/modules/engine/src/core/session/message.rs) の Session の HelloMessage は `SessionVersion` を 1 つだけ運び、未知の値を decode で拒否する。
 定義されている version は V1 だけであり、複数の共通 version から 1 つを選ぶ規則は定めていない。
 
 候補は次の 2 つである。
@@ -118,6 +119,7 @@ V1 しか存在しないため、どちらの規則でも交渉結果が変わ�
 
 **決める条件**
 `SessionVersion` または `NodeFinderVersion` に 2 つ目の version を追加する前に決める。
+`SessionVersion` に追加する場合は、Session の HelloMessage が対応 version の集合を運べるように wire format も同時に変える。
 
 ## 6. 現状と残作業
 

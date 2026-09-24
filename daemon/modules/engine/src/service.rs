@@ -88,6 +88,8 @@ impl AxusService {
         tokio::fs::create_dir_all(&node_finder_dir).await?;
 
         let my_node_profile = NodeProfile::new(identity.public_key().to_vec(), my_addrs);
+        // 他の node の設定 p2p.bootstrap_nodes に書けるよう、自 node の NodeProfile を URI で記録する
+        info!(node_profile = my_node_profile.to_string(), "node profile");
 
         let result = NodeFinder::new(
             my_node_profile,
@@ -236,6 +238,75 @@ mod tests {
             a.shutdown().await;
             b.shutdown().await;
         }
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn node_finds_and_dials_an_owner_known_only_through_another_node() -> TestResult {
+        let dir = tempfile::tempdir()?;
+
+        // hub だけが owner と seeker の両方を知り、owner と seeker は hub だけを bootstrap に指定する
+        let hub_port = free_port()?;
+        let hub = AxusService::new(dir.path().join("hub"), format!("127.0.0.1:{hub_port}"), dir.path(), fast_option(vec![])).await?;
+        let hub_node_profile = hub.node_finder.my_node_profile();
+
+        let owner = AxusService::new(
+            dir.path().join("owner"),
+            format!("127.0.0.1:{}", free_port()?),
+            dir.path(),
+            fast_option(vec![hub_node_profile.clone()]),
+        )
+        .await?;
+        let seeker = AxusService::new(
+            dir.path().join("seeker"),
+            format!("127.0.0.1:{}", free_port()?),
+            dir.path(),
+            fast_option(vec![hub_node_profile.clone()]),
+        )
+        .await?;
+        let owner_node_profile = owner.node_finder.my_node_profile();
+
+        // Kadex は自 node より AssetKey に近い node にだけ want と push を送るため、hub を最も近い node にする
+        let asset_key = AssetKey {
+            typ: "test".to_string(),
+            hash: OmniHash {
+                typ: OmniHashAlgorithmType::Sha3_256,
+                value: hub_node_profile.id().to_vec(),
+            },
+        };
+        let _push_handle = owner.node_finder.listen_push_asset_keys({
+            let asset_key = asset_key.clone();
+            move |_| vec![asset_key.clone()]
+        });
+        let _want_handle = seeker.node_finder.listen_want_asset_keys({
+            let asset_key = asset_key.clone();
+            move |_| vec![asset_key.clone()]
+        });
+
+        let found = tokio::time::timeout(TEST_TIMEOUT, async {
+            loop {
+                let node_profiles = seeker.node_finder.find_node_profile(&asset_key).await?;
+                if !node_profiles.is_empty() {
+                    return Result::Ok(node_profiles);
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await??;
+        assert!(found.iter().all(|node_profile| **node_profile == owner_node_profile));
+
+        // seeker と owner は hub から互いの NodeProfile を受け取り、広告されたアドレスで直接つながる
+        tokio::time::timeout(TEST_TIMEOUT, async {
+            while seeker.node_finder.get_session_count().await < 2 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await?;
+
+        seeker.shutdown().await;
+        owner.shutdown().await;
+        hub.shutdown().await;
 
         Ok(())
     }

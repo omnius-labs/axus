@@ -31,6 +31,8 @@ struct P2pConfigToml {
     pub advertise_addrs: Vec<String>,
     #[serde(default)]
     pub use_upnp: bool,
+    #[serde(default)]
+    pub bootstrap_nodes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -66,6 +68,8 @@ pub struct P2pConfig {
     pub advertise_addrs: Vec<String>,
     /// 不特定のアドレスで待ち受けるとき、UPnP でルーターのポートを開放する
     pub use_upnp: bool,
+    /// 起動時に接続を試みる node の NodeProfile の URI（`axus:node/...`）の一覧
+    pub bootstrap_nodes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +96,7 @@ impl DaemonConfig {
                 listen_addr: toml.p2p.listen_addr,
                 advertise_addrs: toml.p2p.advertise_addrs,
                 use_upnp: toml.p2p.use_upnp,
+                bootstrap_nodes: toml.p2p.bootstrap_nodes,
             },
             logging: LoggingConfig {
                 level: toml.logging.level,
@@ -140,6 +145,7 @@ mod tests {
         assert_eq!(conf.p2p.listen_addr, "0.0.0.0:6052");
         assert!(conf.p2p.advertise_addrs.is_empty());
         assert!(!conf.p2p.use_upnp);
+        assert!(conf.p2p.bootstrap_nodes.is_empty());
         assert_eq!(conf.logging.level, "info");
         assert!(!conf.logging.json);
 
@@ -159,6 +165,7 @@ mod tests {
             listen_addr = "0.0.0.0:6052"
             advertise_addrs = ["203.0.113.1:6052", "example.com:6052"]
             use_upnp = true
+            bootstrap_nodes = ["axus:node/a", "axus:node/b"]
 
             [logging]
             level = "info"
@@ -172,6 +179,7 @@ mod tests {
 
         assert_eq!(conf.p2p.advertise_addrs, vec!["203.0.113.1:6052", "example.com:6052"]);
         assert!(conf.p2p.use_upnp);
+        assert_eq!(conf.p2p.bootstrap_nodes, vec!["axus:node/a", "axus:node/b"]);
 
         Ok(())
     }
@@ -187,6 +195,7 @@ mod tests {
         assert_eq!(conf.p2p.listen_addr, "127.0.0.1:5051");
         assert!(conf.p2p.advertise_addrs.is_empty());
         assert!(!conf.p2p.use_upnp);
+        assert!(conf.p2p.bootstrap_nodes.is_empty());
         assert_eq!(conf.logging.level, "info");
         assert!(!conf.logging.json);
 

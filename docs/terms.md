@@ -22,7 +22,8 @@
 | rank | file-transfer | `MerkleLayer.rank` | - | Merkle 構造における block の階層。file 本体の block を 0 とする | root hash |
 | root hash | file-transfer | `OmniHash` | - | 最上位 block の hash である内容識別子 | FileRef |
 | AssetKey | node-finder | `AssetKey` | - | NodeFinder が所在を探索する対象の識別子 | ファイル参照 |
-| NodeProfile | node-finder | `NodeProfile` | `axus:node/` URI | P2P network 上の node を探索する識別子と到達先の組 | 署名鍵 |
+| NodeProfile | node-finder | `NodeProfile` | `axus:node/` URI | P2P network 上の node の公開鍵と到達先の組 | 署名鍵 |
+| node ID | node-finder | `NodeProfile::id()` | - | node の公開鍵の SHA3-256 hash。Kadex の距離計算と Session の重複判定に使う | NodeProfile.id |
 | FileRef | profile-memo | `FileRef` | - | 上位データが公開済み file を参照する名前と hash の組 | ファイル本体 |
 | memo | profile-memo | `MemoExchanger` | - | Profile を探索、交換、配布する下位機構 | 投稿本文 |
 | Profile | profile-memo | `Profile` | - | 主体の公開情報と公開データへの FileRef 群を表す上位データ | memo |
@@ -35,11 +36,12 @@
 #### NodeProfile と Session
 
 **境界**
-NodeProfile は探索に使う node の識別子と到達先である。
-Session は challenge への署名を確認した後に用途へ渡す通信路であり、NodeProfile と署名鍵の結合や相手への信頼は保証しない。
+NodeProfile は探索に使う node の公開鍵と到達先である。
+Session は challenge への署名を確認した後に用途へ渡す通信路であり、相手がその公開鍵の秘密鍵を持つことだけを保証する。
+NodeFinder の handshake は、相手の NodeProfile の公開鍵が Session の cert の公開鍵と一致することを確かめる。
 
 **取り違えると何が起きるか**
-Session の認証結果だけで NodeProfile の主体を確定したものとして扱うと、identity と trust の未決 contract を迂回する。
+NodeProfile を受け取っただけで、その到達先や相手への信頼まで確定したものとして扱うと、署名のない到達先と未決の trust の contract を迂回する。
 
 <a id="t-asset-key-vs-file-ref"></a>
 #### AssetKey と FileRef

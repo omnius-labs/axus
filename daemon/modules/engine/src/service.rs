@@ -7,7 +7,6 @@ use omnius_core_base::{
     clock::{Clock, ClockUtc},
     sleeper::{Sleeper, SleeperImpl},
 };
-use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 use rand::{
     SeedableRng,
@@ -21,6 +20,7 @@ use crate::{
         runtime::Shutdown,
     },
     core::{
+        identity::NodeIdentity,
         negotiator::{NodeFinder, NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, NodeProfileFetcherImpl},
         session::{SessionAccepter, SessionConnector, model::SessionType},
     },
@@ -57,7 +57,8 @@ impl AxusService {
 
         let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
         let sleeper: Arc<dyn Sleeper + Send + Sync> = Arc::new(SleeperImpl);
-        let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "TODO")?);
+        let identity = NodeIdentity::load_or_create(&state_dir.join("identity")).await?;
+        let signer = identity.signer();
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
 
         let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), sleeper.clone(), rng.clone(), &[SessionType::NodeFinder]).await);
@@ -74,7 +75,10 @@ impl AxusService {
         let node_finder_dir = state_dir.join("finder");
         tokio::fs::create_dir_all(&node_finder_dir).await?;
 
+        let my_node_profile = NodeProfile::new(identity.public_key().to_vec(), Vec::new());
+
         let result = NodeFinder::new(
+            my_node_profile,
             session_connector,
             session_accepter,
             node_profile_repo,
@@ -124,12 +128,12 @@ mod tests {
 
         let owner_port = free_port()?;
         let owner = AxusService::new(dir.path().join("owner"), format!("127.0.0.1:{owner_port}"), dir.path(), fast_option(vec![])).await?;
-        let owner_id = owner.node_finder.my_node_profile().id;
+        let owner_id = owner.node_finder.my_node_profile().id().to_vec();
 
-        let owner_node_profile = NodeProfile {
-            id: owner_id.clone(),
-            addrs: vec![OmniAddr::create_tcp("127.0.0.1".parse()?, owner_port)],
-        };
+        let owner_node_profile = NodeProfile::new(
+            owner.node_finder.my_node_profile().public_key().to_vec(),
+            vec![OmniAddr::create_tcp("127.0.0.1".parse()?, owner_port)],
+        );
         let seeker_port = free_port()?;
         let seeker = AxusService::new(
             dir.path().join("seeker"),
@@ -167,7 +171,7 @@ mod tests {
         })
         .await??;
 
-        assert!(found.iter().all(|node_profile| node_profile.id == owner_id));
+        assert!(found.iter().all(|node_profile| node_profile.id() == owner_id.as_slice()));
         assert_eq!(seeker.node_finder.get_session_count().await, 1);
         assert_eq!(owner.node_finder.get_session_count().await, 1);
 

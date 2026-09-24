@@ -119,9 +119,9 @@ impl TaskConnector {
         self.connected_node_profiles.lock().refresh();
 
         let excluded_ids: HashSet<Vec<u8>> = {
-            let v1: Vec<Vec<u8>> = self.connected_node_profiles.lock().iter().map(|n| n.id.to_owned()).collect();
+            let v1: Vec<Vec<u8>> = self.connected_node_profiles.lock().iter().map(|n| n.id().to_vec()).collect();
             let v2: Vec<Vec<u8>> = self.sessions.read().await.iter().map(|n| n.0.to_owned()).collect();
-            let my_id = self.my_node_profile.lock().id.clone();
+            let my_id = self.my_node_profile.lock().id().to_vec();
             v1.into_iter().chain(v2).chain([my_id]).collect()
         };
 
@@ -130,13 +130,13 @@ impl TaskConnector {
             .fetch_node_profiles()
             .await?
             .into_iter()
-            .filter(|n| !excluded_ids.contains(&n.id))
+            .filter(|n| !excluded_ids.contains(n.id()))
             .collect();
 
         // 同じ node の TaskConnector が同じ相手へ同時に接続しないよう、相手の選択と予約を 1 つの lock の中で行う
         let node_profile = {
             let mut connecting_ids = self.connecting_ids.lock();
-            let candidates: Vec<&NodeProfile> = node_profiles.iter().filter(|n| !connecting_ids.contains(&n.id)).collect();
+            let candidates: Vec<&NodeProfile> = node_profiles.iter().filter(|n| !connecting_ids.contains(n.id())).collect();
             let node_profile = {
                 let mut rng = self.rng.lock();
                 (*candidates
@@ -144,12 +144,12 @@ impl TaskConnector {
                     .ok_or_else(|| Error::new(ErrorKind::NotFound).with_message("node profile is not found"))?)
                 .clone()
             };
-            connecting_ids.insert(node_profile.id.clone());
+            connecting_ids.insert(node_profile.id().to_vec());
             node_profile
         };
 
         let result = self.connect_node(&node_profile).await;
-        self.connecting_ids.lock().remove(&node_profile.id);
+        self.connecting_ids.lock().remove(node_profile.id());
         result
     }
 
@@ -310,10 +310,7 @@ mod tests {
     }
 
     fn node_profile(id: &str, port: u16) -> NodeProfile {
-        NodeProfile {
-            id: id.as_bytes().to_vec(),
-            addrs: vec![OmniAddr::create_tcp("127.0.0.1".parse().unwrap(), port)],
-        }
+        NodeProfile::new(id.as_bytes().to_vec(), vec![OmniAddr::create_tcp("127.0.0.1".parse().unwrap(), port)])
     }
 
     #[derive(Default)]

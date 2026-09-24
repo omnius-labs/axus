@@ -116,10 +116,10 @@ impl TaskCommunicator {
 
         {
             let mut sessions = self.sessions.write().await;
-            if sessions.contains_key(&other_node_profile.id) {
+            if sessions.contains_key(other_node_profile.id()) {
                 return Err(Error::new(ErrorKind::AlreadyExists).with_message("Session already exists"));
             }
-            sessions.insert(other_node_profile.id.clone(), status.clone());
+            sessions.insert(other_node_profile.id().to_vec(), status.clone());
         }
 
         info!(node_profile = other_node_profile.to_string(), "Session established");
@@ -132,7 +132,7 @@ impl TaskCommunicator {
 
         {
             let mut sessions = self.sessions.write().await;
-            sessions.remove(&other_node_profile.id);
+            sessions.remove(other_node_profile.id());
         }
 
         Ok(())
@@ -154,8 +154,13 @@ impl TaskCommunicator {
             session.stream.sender.lock().await.send_message(&send_profile_message).await?;
             let received_profile_message: ProfileMessage = session.stream.receiver.lock().await.recv_message().await?;
 
-            if received_profile_message.node_profile.id == node_profile.id {
+            if received_profile_message.node_profile.id() == node_profile.id() {
                 return Err(Error::new(ErrorKind::Reject).with_message("connected to self"));
+            }
+
+            // node ID は公開鍵から導出するため、Session で署名を確かめた鍵と一致すれば ID も相手のものと確定する
+            if received_profile_message.node_profile.public_key() != session.cert.public_key.as_slice() {
+                return Err(Error::new(ErrorKind::Reject).with_message("node profile does not match the session certificate"));
             }
 
             Ok(received_profile_message.node_profile)
@@ -492,28 +497,9 @@ mod tests {
 
     #[tokio::test]
     async fn handshake_succeeds_with_common_version() -> TestResult {
-        let (session, peer) = session_pair()?;
-        let peer_node_profile = node_profile("peer");
+        let (session, peer, peer_node_profile) = session_pair()?;
 
-        let peer_task = tokio::spawn(async move {
-            peer.sender
-                .lock()
-                .await
-                .send_message(&HelloMessage {
-                    version: make_bitflags!(NodeFinderVersion::V1),
-                })
-                .await?;
-            let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
-            peer.sender
-                .lock()
-                .await
-                .send_message(&ProfileMessage {
-                    node_profile: node_profile("peer"),
-                })
-                .await?;
-            let _: ProfileMessage = peer.receiver.lock().await.recv_message().await?;
-            Result::Ok(())
-        });
+        let peer_task = tokio::spawn(answer_handshake(peer, peer_node_profile.clone()));
 
         let received = TaskCommunicator::handshake(&session, &node_profile("me")).await?;
         assert_eq!(received, peer_node_profile);
@@ -524,7 +510,7 @@ mod tests {
 
     #[tokio::test]
     async fn handshake_rejects_peer_without_common_version() -> TestResult {
-        let (session, peer) = session_pair()?;
+        let (session, peer, _) = session_pair()?;
 
         let peer_task = tokio::spawn(async move {
             peer.sender.lock().await.send_message(&HelloMessage { version: BitFlags::empty() }).await?;
@@ -541,21 +527,9 @@ mod tests {
 
     #[tokio::test]
     async fn handshake_rejects_peer_with_own_id() -> TestResult {
-        let (session, peer) = session_pair()?;
+        let (session, peer, _) = session_pair()?;
 
-        let peer_task = tokio::spawn(async move {
-            peer.sender
-                .lock()
-                .await
-                .send_message(&HelloMessage {
-                    version: make_bitflags!(NodeFinderVersion::V1),
-                })
-                .await?;
-            let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
-            peer.sender.lock().await.send_message(&ProfileMessage { node_profile: node_profile("me") }).await?;
-            let _: ProfileMessage = peer.receiver.lock().await.recv_message().await?;
-            Result::Ok(())
-        });
+        let peer_task = tokio::spawn(answer_handshake(peer, node_profile("me")));
 
         let err = TaskCommunicator::handshake(&session, &node_profile("me")).await.unwrap_err();
         assert_eq!(err.kind(), &ErrorKind::Reject);
@@ -564,27 +538,54 @@ mod tests {
         Ok(())
     }
 
-    fn session_pair() -> Result<(Session, FramedStream)> {
+    #[tokio::test]
+    async fn handshake_rejects_profile_that_does_not_match_the_certificate() -> TestResult {
+        let (session, peer, _) = session_pair()?;
+
+        let peer_task = tokio::spawn(answer_handshake(peer, node_profile("someone else")));
+
+        let err = TaskCommunicator::handshake(&session, &node_profile("me")).await.unwrap_err();
+        assert_eq!(err.kind(), &ErrorKind::Reject);
+        peer_task.await??;
+
+        Ok(())
+    }
+
+    async fn answer_handshake(peer: FramedStream, node_profile: NodeProfile) -> Result<()> {
+        peer.sender
+            .lock()
+            .await
+            .send_message(&HelloMessage {
+                version: make_bitflags!(NodeFinderVersion::V1),
+            })
+            .await?;
+        let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
+        peer.sender.lock().await.send_message(&ProfileMessage { node_profile }).await?;
+        let _: ProfileMessage = peer.receiver.lock().await.recv_message().await?;
+        Ok(())
+    }
+
+    /// local 側の Session と、相手側の stream および Session の cert と一致する相手の NodeProfile を返す
+    fn session_pair() -> Result<(Session, FramedStream, NodeProfile)> {
         let (local, peer) = tokio::io::duplex(64 * 1024);
         let (local_reader, local_writer) = tokio::io::split(local);
         let (peer_reader, peer_writer) = tokio::io::split(peer);
 
-        let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?;
+        let peer_signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?;
+        let peer_cert = peer_signer.sign(b"test")?;
+        let peer_node_profile = NodeProfile::new(peer_cert.public_key.clone(), vec![]);
         let session = Session {
             typ: SessionType::NodeFinder,
             address: OmniAddr::create_tcp("127.0.0.1".parse()?, 1),
             handshake_type: SessionHandshakeType::Connected,
-            cert: signer.sign(b"test")?,
+            cert: peer_cert,
             stream: FramedStream::new(local_reader, local_writer),
         };
 
-        Ok((session, FramedStream::new(peer_reader, peer_writer)))
+        Ok((session, FramedStream::new(peer_reader, peer_writer), peer_node_profile))
     }
 
-    fn node_profile(id: &str) -> NodeProfile {
-        NodeProfile {
-            id: id.as_bytes().to_vec(),
-            addrs: vec![],
-        }
+    fn node_profile(public_key: &str) -> NodeProfile {
+        NodeProfile::new(public_key.as_bytes().to_vec(), vec![])
     }
 }

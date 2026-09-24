@@ -187,7 +187,7 @@ impl TaskComputer {
         // Kadexの距離が近いノードにwant_asset_keyを配布する
         let mut sending_want_asset_key_map: HashMap<&[u8], Vec<Arc<AssetKey>>> = HashMap::new();
         for target_key in want_asset_keys.iter() {
-            for id in Kadex::find(&my_node_profile.id, &target_key.hash.value, &ids, 1) {
+            for id in Kadex::find(my_node_profile.id(), &target_key.hash.value, &ids, 1) {
                 sending_want_asset_key_map.entry(id).or_default().push(target_key.clone());
             }
         }
@@ -205,7 +205,7 @@ impl TaskComputer {
         // Kadexの距離が近いノードにpush_asset_key_locationsを配布する
         let mut sending_push_asset_key_location_map: HashMap<&[u8], HashMap<Arc<AssetKey>, &HashSet<Arc<NodeProfile>>>> = HashMap::new();
         for (target_key, node_profiles) in push_asset_key_locations.iter() {
-            for id in Kadex::find(&my_node_profile.id, &target_key.hash.value, &ids, 1) {
+            for id in Kadex::find(my_node_profile.id(), &target_key.hash.value, &ids, 1) {
                 sending_push_asset_key_location_map.entry(id).or_default().insert(target_key.clone(), node_profiles);
             }
         }

@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use futures::future::join_all;
 use parking_lot::Mutex;
-use rand::RngExt;
 use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc};
 
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
@@ -80,6 +79,7 @@ impl Default for NodeFinderIntervals {
 impl NodeFinder {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
+        my_node_profile: NodeProfile,
         session_connector: Arc<SessionConnector>,
         session_accepter: Arc<SessionAccepter>,
         node_profile_repo: Arc<NodeFinderRepo>,
@@ -92,10 +92,7 @@ impl NodeFinder {
         let (tx, rx) = mpsc::channel(20);
 
         let v = Self {
-            my_node_profile: Arc::new(Mutex::new(NodeProfile {
-                id: rng.clone().lock().random::<[u8; 32]>().to_vec(),
-                addrs: Vec::new(),
-            })),
+            my_node_profile: Arc::new(Mutex::new(my_node_profile)),
             session_connector,
             session_accepter,
             node_profile_repo,
@@ -254,129 +251,5 @@ impl Shutdown for NodeFinder {
         }
 
         self.session_accepter.shutdown().await;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{fs, path::Path, sync::Arc};
-
-    use chrono::Utc;
-    use omnius_core_base::{
-        clock::{Clock, ClockUtc},
-        sleeper::{Sleeper, SleeperImpl},
-    };
-    use parking_lot::Mutex;
-    use rand::{
-        SeedableRng as _,
-        rngs::{ChaCha20Rng, SysRng},
-    };
-    use rand_core::UnwrapErr;
-    use testresult::TestResult;
-    use tracing::info;
-
-    use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
-    use omnius_core_omnikit::model::omni_addr::OmniAddr;
-
-    use crate::{
-        base::connection::{ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, TcpProxyOption, TcpProxyType},
-        core::{negotiator::NodeProfileFetcherMock, session::model::SessionType},
-    };
-
-    use super::*;
-
-    #[ignore]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn simple_test() -> TestResult {
-        tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).with_target(false).init();
-
-        let dir = tempfile::tempdir()?;
-
-        let np1 = NodeProfile {
-            id: "1".as_bytes().to_vec(),
-            addrs: vec![OmniAddr::new("tcp(ip4(127.0.0.1),60001)")],
-        };
-        let np2 = NodeProfile {
-            id: "2".as_bytes().to_vec(),
-            addrs: vec![OmniAddr::new("tcp(ip4(127.0.0.1),60002)")],
-        };
-
-        let nf1_path = dir.path().join("1");
-        fs::create_dir_all(&nf1_path)?;
-
-        let nf1 = create_node_finder(&nf1_path, "1", 60001, np2).await?;
-
-        let nf2_path = dir.path().join("2");
-        fs::create_dir_all(&nf2_path)?;
-
-        let nf2 = create_node_finder(&nf2_path, "2", 60002, np1).await?;
-
-        loop {
-            let nf1_session_count = nf1.get_session_count().await;
-            let nf2_session_count = nf2.get_session_count().await;
-
-            if nf1_session_count == 1 && nf2_session_count == 1 {
-                break;
-            }
-
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            info!(nf1_session_count, nf2_session_count, "wait");
-        }
-        info!("done");
-
-        nf1.shutdown().await;
-        nf2.shutdown().await;
-
-        Ok(())
-    }
-
-    async fn create_node_finder(state_dir: &Path, name: &str, port: u16, other_node_profile: NodeProfile) -> Result<NodeFinder> {
-        let tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync> = Arc::new(ConnectionTcpAccepterImpl::new(&OmniAddr::create_tcp("127.0.0.1".parse()?, port), false).await?);
-        let tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync> = Arc::new(
-            ConnectionTcpConnectorImpl::new(TcpProxyOption {
-                typ: TcpProxyType::None,
-                addr: None,
-            })
-            .await?,
-        );
-
-        let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
-        let sleeper: Arc<dyn Sleeper + Send + Sync> = Arc::new(SleeperImpl);
-        let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, name)?);
-        let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
-
-        let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), sleeper.clone(), rng.clone(), &[SessionType::NodeFinder]).await);
-        let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, rng.clone()));
-
-        let node_ref_repo_dir = state_dir.join(name).join("repo");
-        fs::create_dir_all(&node_ref_repo_dir)?;
-
-        let node_profile_repo = Arc::new(NodeFinderRepo::new(node_ref_repo_dir.as_os_str().to_str().unwrap(), clock.clone()).await?);
-
-        let node_profile_fetcher = Arc::new(NodeProfileFetcherMock {
-            node_profiles: vec![other_node_profile],
-        });
-
-        let node_finder_dir = state_dir.join(name).join("finder");
-        fs::create_dir_all(&node_finder_dir)?;
-
-        let result = NodeFinder::new(
-            session_connector,
-            session_accepter,
-            node_profile_repo,
-            node_profile_fetcher,
-            clock,
-            sleeper,
-            rng,
-            NodeFinderOption {
-                state_dir: node_finder_dir.as_os_str().to_str().unwrap().to_string(),
-                max_connected_session_count: 3,
-                max_accepted_session_count: 3,
-                intervals: NodeFinderIntervals::default(),
-            },
-        )
-        .await?;
-
-        Ok(result)
     }
 }

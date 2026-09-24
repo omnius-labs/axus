@@ -26,10 +26,9 @@
 | 項目 | 深刻度 | 調査日 | Issue |
 | --- | --- | --- | --- |
 | [自 node の NodeProfile が待ち受けアドレスを持たない](./issues/node-profile-without-address.md) | 高 | 2026-09-24 | - |
-| [署名鍵の識別子が `"TODO"` 固定である](./issues/fixed-signer-identifier.md) | 中 | 2026-09-02 | - |
 
-2 件とも設計判断に依存するが、現在の実装が将来の contract を満たさない点は確認済みである。
-自 node のアドレスは FileExchanger が lookup の結果へ接続する前提であり、block 交換の前に解消する。
+自 node のアドレスは設計判断に依存するが、現在の実装が将来の contract を満たさない点は確認済みである。
+アドレスは FileExchanger が lookup の結果へ接続する前提であり、block 交換の前に解消する。
 
 ## 3. ここに含めていないもの
 

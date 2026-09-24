@@ -1,0 +1,2 @@
+# NodeProfile は id の cache に OnceLock を持つが、Hash と Eq は cache を対象にしないため、collection の key に使える
+ignore-interior-mutability = ["omnius_axus_engine::model::node_profile::NodeProfile"]

@@ -28,10 +28,12 @@
 | [ファイル関連の SQLite schema が初期化時にエラーになる](./issues/file-schema-initialization-fails.md) | 高 | 2026-09-02 | - |
 | [SQL が存在しない列 `property` を参照している](./issues/file-query-column-mismatch.md) | 高 | 2026-09-02 | - |
 | [`MerkleLayer.rank` の解釈が encoder と decoder で 1 ずれる](./issues/merkle-layer-rank-mismatch.md) | 高 | 2026-09-02 | - |
+| [自 node の NodeProfile が待ち受けアドレスを持たない](./issues/node-profile-without-address.md) | 高 | 2026-09-24 | - |
 | [署名鍵の識別子が `"TODO"` 固定である](./issues/fixed-signer-identifier.md) | 中 | 2026-09-02 | - |
 
 最初の 3 件は file の公開と購読の同じ経路にあるため、schema の初期化、query、Merkle layer の round-trip をまとめて検証する。
-署名鍵の識別子は設計判断に依存するが、現在の実装が将来の contract を満たさない点は確認済みである。
+自 node のアドレスと署名鍵の識別子は設計判断に依存するが、現在の実装が将来の contract を満たさない点は確認済みである。
+アドレスは FileExchanger が lookup の結果へ接続する前提であり、file 経路の 3 件とあわせて block 交換の前に解消する。
 
 ## 3. ここに含めていないもの
 

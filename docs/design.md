@@ -152,7 +152,7 @@ NodeFinder は AssetKey から NodeProfile を探し、FileExchanger はその�
 
 | 番号 | 内容 | 前提とする依存 |
 | --- | --- | --- |
-| 1 | session と NodeFinder を daemon の起動経路から結合試験する | 関連する既知の不具合の解消 |
+| 1 | 自 node の NodeProfile に待ち受けアドレスを載せる | [node-finder.md](./design/node-finder.md#62-保留) のアドレス広告と重複 Session の判断 |
 | 2 | publisher と subscriber の schema を修正し、初期化、符号化、復号を実データで検証する | 適用済み migration の有無の確認 |
 | 3 | FileExchanger の block 交換 protocol と hash 検証を定義して実装する | 1、2、secure channel の判断 |
 | 4 | 公開、購読、進捗、cancel の REST API を定義する | 3、[daemon-api.md](./design/daemon-api.md#5-設計判断) の長時間操作の判断 |

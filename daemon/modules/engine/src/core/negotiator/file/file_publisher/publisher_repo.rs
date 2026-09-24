@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS uncommitted_blocks (
     `index` INTEGER NOT NULL,
     PRIMARY KEY (file_id, block_hash, rank, `index`)
 );
-CREATE INDEX IF NOT EXISTS index_file_id_rank_index_for_uncommitted_blocks ON committed_blocks (file_id, rank ASC, `index` ASC);
+CREATE INDEX IF NOT EXISTS index_file_id_rank_index_for_uncommitted_blocks ON uncommitted_blocks (file_id, rank ASC, `index` ASC);
 "#
             .to_string(),
         }];
@@ -108,7 +108,7 @@ SELECT COUNT(1)
     pub async fn get_committed_files(&self) -> Result<Vec<PublishedCommittedFile>> {
         let res: Vec<PublishedCommittedFileRow> = sqlx::query_as(
             r#"
-SELECT root_hash, file_name, block_size, property, created_at, updated_at
+SELECT root_hash, file_name, block_size, attrs, created_at, updated_at
     FROM committed_files
 "#,
         )
@@ -122,7 +122,7 @@ SELECT root_hash, file_name, block_size, property, created_at, updated_at
     pub async fn find_committed_file_by_root_hash(&self, root_hash: &OmniHash) -> Result<Option<PublishedCommittedFile>> {
         let res: Option<PublishedCommittedFileRow> = sqlx::query_as(
             r#"
-SELECT root_hash, file_name, block_size, property, created_at, updated_at
+SELECT root_hash, file_name, block_size, attrs, created_at, updated_at
     FROM committed_files
     WHERE root_hash = ?
 "#,
@@ -298,7 +298,7 @@ SELECT COUNT(1)
     pub async fn get_uncommitted_files(&self) -> Result<Vec<PublishedUncommittedFile>> {
         let res: Vec<PublishedUncommittedFileRow> = sqlx::query_as(
             r#"
-SELECT id, file_name, block_size, property, created_at, updated_at
+SELECT id, file_path, file_name, block_size, attrs, priority, status, failed_reason, created_at, updated_at
     FROM uncommitted_files
 "#,
         )
@@ -312,8 +312,9 @@ SELECT id, file_name, block_size, property, created_at, updated_at
     pub async fn find_uncommitted_file_by_encoding_next(&self) -> Result<Option<PublishedUncommittedFile>> {
         let res: Option<PublishedUncommittedFileRow> = sqlx::query_as(
             r#"
-SELECT id, file_path, file_name, block_size, attrs, priority, created_at, updated_at
+SELECT id, file_path, file_name, block_size, attrs, priority, status, failed_reason, created_at, updated_at
     FROM uncommitted_files
+    WHERE status = 'Pending'
     ORDER BY priority ASC, created_at ASC
     LIMIT 1
 "#,
@@ -327,7 +328,7 @@ SELECT id, file_path, file_name, block_size, attrs, priority, created_at, update
     pub async fn find_uncommitted_file_by_id(&self, id: &str) -> Result<Option<PublishedUncommittedFile>> {
         let res: Option<PublishedUncommittedFileRow> = sqlx::query_as(
             r#"
-SELECT id, file_name, block_size, property, created_at, updated_at
+SELECT id, file_path, file_name, block_size, attrs, priority, status, failed_reason, created_at, updated_at
     FROM uncommitted_files
     WHERE id = ?
 "#,
@@ -344,7 +345,7 @@ SELECT id, file_name, block_size, property, created_at, updated_at
         sqlx::query(
             r#"
 INSERT INTO uncommitted_files (id, file_path, file_name, block_size, attrs, priority, status, failed_reason, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#,
         )
         .bind(row.id)
@@ -655,5 +656,142 @@ impl PublishedUncommittedBlockRow {
             rank: item.rank,
             index: item.index,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use chrono::{DateTime, Utc};
+    use testresult::TestResult;
+
+    use omnius_core_base::clock::{Clock, FakeClockUtc};
+    use omnius_core_omnikit::generated::omni_hash::{OmniHash, OmniHashAlgorithmType};
+
+    use crate::core::negotiator::file::model::{
+        PublishedCommittedBlock, PublishedCommittedFile, PublishedUncommittedBlock, PublishedUncommittedFile, PublishedUncommittedFileStatus,
+    };
+
+    use super::FilePublisherRepo;
+
+    #[tokio::test]
+    async fn uncommitted_queries_round_trip() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (repo, now) = create_repo(dir.path()).await?;
+
+        let file = uncommitted_file("1", "a.txt", now);
+        repo.insert_uncommitted_file(&file).await?;
+        assert!(repo.contains_uncommitted_file("1").await?);
+        assert_eq!(repo.get_uncommitted_files().await?.len(), 1);
+        let found = repo.find_uncommitted_file_by_id("1").await?.unwrap();
+        assert_eq!(found.file_path, "/tmp/a.txt");
+        assert_eq!(found.attrs.as_deref(), Some("attrs"));
+        assert!(found.status == PublishedUncommittedFileStatus::Pending);
+        assert_eq!(repo.find_uncommitted_file_by_encoding_next().await?.unwrap().id, "1");
+
+        let block = PublishedUncommittedBlock {
+            file_id: "1".to_string(),
+            block_hash: hash(b"block"),
+            rank: 0,
+            index: 0,
+        };
+        repo.insert_or_ignore_uncommitted_block(&block).await?;
+        repo.insert_or_ignore_uncommitted_block(&block).await?;
+        assert!(repo.contains_uncommitted_block("1", &block.block_hash).await?);
+        assert_eq!(repo.get_uncommitted_blocks(10).await?.len(), 1);
+        assert_eq!(repo.find_uncommitted_blocks_by_file_id("1").await?.len(), 1);
+        repo.delete_uncommitted_blocks(std::slice::from_ref(&block)).await?;
+        assert!(!repo.contains_uncommitted_block("1", &block.block_hash).await?);
+
+        repo.update_uncommitted_file_status("1", &PublishedUncommittedFileStatus::Processing).await?;
+        assert!(repo.find_uncommitted_file_by_id("1").await?.unwrap().status == PublishedUncommittedFileStatus::Processing);
+        assert!(repo.find_uncommitted_file_by_encoding_next().await?.is_none());
+
+        repo.update_uncommitted_file_as_failed("1", "reason").await?;
+        let failed = repo.find_uncommitted_file_by_id("1").await?.unwrap();
+        assert!(failed.status == PublishedUncommittedFileStatus::Failed);
+        assert_eq!(failed.failed_reason.as_deref(), Some("reason"));
+
+        repo.delete_uncommitted_file("1").await?;
+        assert!(!repo.contains_uncommitted_file("1").await?);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_moves_uncommitted_file_to_committed() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (repo, now) = create_repo(dir.path()).await?;
+        let root_hash = hash(b"root");
+
+        repo.insert_uncommitted_file(&uncommitted_file("1", "a.txt", now)).await?;
+        repo.insert_or_ignore_uncommitted_block(&PublishedUncommittedBlock {
+            file_id: "1".to_string(),
+            block_hash: root_hash.clone(),
+            rank: 1,
+            index: 0,
+        })
+        .await?;
+        let committed_block = PublishedCommittedBlock {
+            root_hash: root_hash.clone(),
+            block_hash: root_hash.clone(),
+            rank: 1,
+            index: 0,
+        };
+        repo.commit_file_with_blocks(&committed_file(&root_hash, "a.txt", now), &[committed_block], "1").await?;
+
+        assert!(!repo.contains_uncommitted_file("1").await?);
+        assert!(repo.find_uncommitted_blocks_by_file_id("1").await?.is_empty());
+        assert!(repo.contains_committed_file(&root_hash).await?);
+        assert!(repo.contains_committed_block(&root_hash, &root_hash).await?);
+        let found = repo.find_committed_file_by_root_hash(&root_hash).await?.unwrap();
+        assert_eq!(found.file_name, "a.txt");
+        assert_eq!(found.attrs.as_deref(), Some("attrs"));
+
+        repo.insert_uncommitted_file(&uncommitted_file("2", "b.txt", now)).await?;
+        repo.commit_file_without_blocks(&committed_file(&root_hash, "b.txt", now), "2").await?;
+        assert!(!repo.contains_uncommitted_file("2").await?);
+
+        repo.insert_committed_file(&committed_file(&hash(b"other"), "c.txt", now)).await?;
+        assert_eq!(repo.get_committed_files().await?.len(), 3);
+
+        Ok(())
+    }
+
+    async fn create_repo(dir: &std::path::Path) -> TestResult<(FilePublisherRepo, DateTime<Utc>)> {
+        let clock = Arc::new(FakeClockUtc::new(DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")?.into()));
+        let now = clock.now();
+        Ok((FilePublisherRepo::new(dir, clock).await?, now))
+    }
+
+    fn uncommitted_file(id: &str, file_name: &str, now: DateTime<Utc>) -> PublishedUncommittedFile {
+        PublishedUncommittedFile {
+            id: id.to_string(),
+            file_path: format!("/tmp/{file_name}"),
+            file_name: file_name.to_string(),
+            block_size: 1024,
+            attrs: Some("attrs".to_string()),
+            priority: 0,
+            status: PublishedUncommittedFileStatus::Pending,
+            failed_reason: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn committed_file(root_hash: &OmniHash, file_name: &str, now: DateTime<Utc>) -> PublishedCommittedFile {
+        PublishedCommittedFile {
+            root_hash: root_hash.clone(),
+            file_name: file_name.to_string(),
+            block_size: 1024,
+            attrs: Some("attrs".to_string()),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn hash(value: &[u8]) -> OmniHash {
+        OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, value)
     }
 }

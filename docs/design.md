@@ -153,7 +153,7 @@ file の公開から復号までは、P2P 転送を介さない engine 内の試
 
 | 番号 | 内容 | 前提とする依存 |
 | --- | --- | --- |
-| 1 | 自 node の NodeProfile に待ち受けアドレスを載せる | [node-finder.md](./design/node-finder.md#62-保留) のアドレス広告と重複 Session の判断 |
+| 1 | 自 node の NodeProfile に待ち受けアドレスを載せる | [node-finder.md](./design/node-finder.md#62-保留) のアドレス広告の判断 |
 | 2 | FileExchanger の block 交換 protocol と hash 検証を定義して実装する | 1、secure channel の判断 |
 | 3 | 公開、購読、進捗、cancel の REST API を定義する | 2、[daemon-api.md](./design/daemon-api.md#5-設計判断) の長時間操作の判断 |
 | 4 | identity、Web of Trust、Profile、memo を順に定義する | [trust-security.md](./design/trust-security.md#4-設計判断)、FileRef を解決できる 2 |

@@ -18,7 +18,7 @@ use crate::{
         connection::{FramedRecvExt as _, FramedSendExt as _},
         runtime::Shutdown,
     },
-    core::session::model::Session,
+    core::session::model::{Session, SessionHandshakeType},
     model::{AssetKey, NodeProfile},
     prelude::*,
 };
@@ -114,12 +114,24 @@ impl TaskCommunicator {
 
         let status = Arc::new(status);
 
-        {
+        let replaced = {
             let mut sessions = self.sessions.write().await;
-            if sessions.contains_key(other_node_profile.id()) {
+            if let Some(existing) = sessions.get(other_node_profile.id())
+                && Self::keeps_existing_session(
+                    my_node_profile.id(),
+                    other_node_profile.id(),
+                    &existing.session.handshake_type,
+                    &status.session.handshake_type,
+                )
+            {
                 return Err(Error::new(ErrorKind::AlreadyExists).with_message("Session already exists"));
             }
-            sessions.insert(other_node_profile.id().to_vec(), status.clone());
+            sessions.insert(other_node_profile.id().to_vec(), status.clone())
+        };
+
+        if let Some(replaced) = replaced {
+            replaced.cancellation_token.cancel();
+            info!(node_profile = other_node_profile.to_string(), "Session replaced");
         }
 
         info!(node_profile = other_node_profile.to_string(), "Session established");
@@ -130,12 +142,26 @@ impl TaskCommunicator {
 
         info!(node_profile = other_node_profile.to_string(), "Session closed");
 
+        // 入れ替えで後から登録された Session を消さないよう、自分が登録した Session のときだけ消す
         {
             let mut sessions = self.sessions.write().await;
-            sessions.remove(other_node_profile.id());
+            if sessions.get(other_node_profile.id()).is_some_and(|current| Arc::ptr_eq(current, &status)) {
+                sessions.remove(other_node_profile.id());
+            }
         }
 
         Ok(())
+    }
+
+    /// 同じ相手との Session が重複したとき、既存の Session を残すかどうかを返す。
+    /// node ID が小さい側から張った Session を残す規則にすると、両側が追加の message なしに同じ Session を選ぶ。
+    fn keeps_existing_session(my_id: &[u8], other_id: &[u8], existing: &SessionHandshakeType, new: &SessionHandshakeType) -> bool {
+        let preferred = if my_id < other_id {
+            SessionHandshakeType::Connected
+        } else {
+            SessionHandshakeType::Accepted
+        };
+        *existing == preferred || *new != preferred
     }
 
     pub async fn handshake(session: &Session, node_profile: &NodeProfile) -> Result<NodeProfile> {
@@ -186,6 +212,7 @@ impl TaskCommunicator {
             select! {
                 _ = f => {}
                 _ = this.cancellation_token.cancelled() => {}
+                _ = sender.status.cancellation_token.cancelled() => {}
             };
         })
     }
@@ -210,6 +237,7 @@ impl TaskCommunicator {
             select! {
                 _ = f => {}
                 _ = this.cancellation_token.cancelled() => {}
+                _ = receiver.status.cancellation_token.cancelled() => {}
             }
         })
     }
@@ -549,6 +577,26 @@ mod tests {
         peer_task.await??;
 
         Ok(())
+    }
+
+    #[test]
+    fn both_nodes_keep_the_session_dialed_by_the_smaller_id() {
+        use SessionHandshakeType::{Accepted, Connected};
+
+        let small: &[u8] = &[1];
+        let large: &[u8] = &[2];
+
+        // 小さい ID の側が張った接続を X、大きい ID の側が張った接続を Y とすると、
+        // 小さい側では X が Connected、Y が Accepted に、大きい側では X が Accepted、Y が Connected に見える
+        for (my_id, other_id, x, y) in [(small, large, Connected, Accepted), (large, small, Accepted, Connected)] {
+            // X が先に登録された場合は X を残し、Y が先に登録された場合は X に入れ替える
+            assert!(TaskCommunicator::keeps_existing_session(my_id, other_id, &x, &y));
+            assert!(!TaskCommunicator::keeps_existing_session(my_id, other_id, &y, &x));
+        }
+
+        // 同じ方向の接続が重複した場合は、既存の Session を残す
+        assert!(TaskCommunicator::keeps_existing_session(small, large, &Accepted, &Accepted));
+        assert!(TaskCommunicator::keeps_existing_session(large, small, &Connected, &Connected));
     }
 
     async fn answer_handshake(peer: FramedStream, node_profile: NodeProfile) -> Result<()> {

@@ -38,5 +38,4 @@ node は bootstrap に指定された NodeProfile にしか接続できず、複
 ## 対応方針
 
 [node-finder.md](../design/node-finder.md#自-node-の待ち受けアドレスの広告) で、広告するアドレスの決め方を決める。
-アドレスを広告すると双方向の同時接続が起きるため、[重複した Session の解消規則](../design/node-finder.md#双方向の同時接続で重複した-session-の解消) も先に決める。
 決めた規則で自 node の `addrs` を設定し、AssetKey の lookup が返す NodeProfile にアドレスが含まれることを結合試験で確認する。

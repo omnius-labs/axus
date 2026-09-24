@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use chrono::{Duration, Utc};
 use parking_lot::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use omnius_core_base::clock::Clock;
 
@@ -17,6 +18,8 @@ pub struct SessionStatus {
     pub node_profile: Arc<Mutex<Option<NodeProfile>>>,
     pub sending_data_message: Arc<Mutex<SendingDataMessage>>,
     pub received_data_message: Arc<Mutex<ReceivedDataMessage>>,
+    /// 同じ相手との重複を解消するとき、この Session の送受信だけを止める
+    pub cancellation_token: CancellationToken,
 }
 
 impl SessionStatus {
@@ -26,6 +29,7 @@ impl SessionStatus {
             node_profile: Arc::new(Mutex::new(None)),
             sending_data_message: Arc::new(Mutex::new(SendingDataMessage::new())),
             received_data_message: Arc::new(Mutex::new(ReceivedDataMessage::new(clock))),
+            cancellation_token: CancellationToken::new(),
         }
     }
 }

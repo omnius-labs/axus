@@ -113,7 +113,7 @@ mod tests {
     use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
     use crate::{
-        core::negotiator::NodeFinderIntervals,
+        core::{identity::NodeIdentity, negotiator::NodeFinderIntervals},
         model::{AssetKey, NodeProfile},
         prelude::*,
     };
@@ -177,6 +177,51 @@ mod tests {
 
         seeker.shutdown().await;
         owner.shutdown().await;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn nodes_dialing_each_other_keep_one_session() -> TestResult {
+        // 同時に接続し合う状況は起動の時刻に左右されるため、何度か繰り返す
+        for _ in 0..5 {
+            let dir = tempfile::tempdir()?;
+            let a_dir = dir.path().join("a");
+            let b_dir = dir.path().join("b");
+            let (a_port, b_port) = (free_port()?, free_port()?);
+
+            // 互いを bootstrap に指定するため、起動の前に鍵を作って公開鍵を確定させる
+            let a_node_profile = NodeProfile::new(
+                NodeIdentity::load_or_create(&a_dir.join("identity")).await?.public_key().to_vec(),
+                vec![OmniAddr::create_tcp("127.0.0.1".parse()?, a_port)],
+            );
+            let b_node_profile = NodeProfile::new(
+                NodeIdentity::load_or_create(&b_dir.join("identity")).await?.public_key().to_vec(),
+                vec![OmniAddr::create_tcp("127.0.0.1".parse()?, b_port)],
+            );
+
+            let (a, b) = tokio::try_join!(
+                AxusService::new(&a_dir, format!("127.0.0.1:{a_port}"), dir.path(), fast_option(vec![b_node_profile])),
+                AxusService::new(&b_dir, format!("127.0.0.1:{b_port}"), dir.path(), fast_option(vec![a_node_profile])),
+            )?;
+
+            tokio::time::timeout(TEST_TIMEOUT, async {
+                while a.node_finder.get_session_count().await != 1 || b.node_finder.get_session_count().await != 1 {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await?;
+
+            // 重複した Session を閉じた後も、残した 1 本が閉じずに続くことを確かめる
+            for _ in 0..10 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                assert_eq!(a.node_finder.get_session_count().await, 1);
+                assert_eq!(b.node_finder.get_session_count().await, 1);
+            }
+
+            a.shutdown().await;
+            b.shutdown().await;
+        }
 
         Ok(())
     }

@@ -135,6 +135,7 @@ AxusService の起動経路から 2 node を起動し、Session の確立と Ass
 
 重複した Session の解消は、互いを bootstrap に指定した 2 node の結合試験で確認している。
 lookup で得た NodeProfile には、相手が広告したアドレスが含まれることを結合試験で確認している。
+daemon は設定 `p2p.bootstrap_nodes` の NodeProfile を既知 node に加えて起動する。
+3 node の結合試験で、bootstrap に指定していない node を中継の node 経由で見つけ、広告されたアドレスで直接つながることを確認している。
 
-daemon の設定から bootstrap node を指定できるようにし、複数 hop の探索を確かめる。
-複数 hop の到達率と遅延を測定し、能動探索と冗長度を決める。
+実運用規模での複数 hop の到達率と遅延を測定し、能動探索と冗長度を決める。

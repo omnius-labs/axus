@@ -1,6 +1,11 @@
 use tempfile::TempDir;
 
-use omnius_axus_engine::service::{AxusService, AxusServiceOption};
+use std::str::FromStr as _;
+
+use omnius_axus_engine::{
+    model::NodeProfile,
+    service::{AxusService, AxusServiceOption},
+};
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
 use crate::{config::DaemonConfig, prelude::*};
@@ -25,7 +30,14 @@ impl DaemonState {
             .iter()
             .map(OmniAddr::from_host_and_port_str)
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        let bootstrap_node_profiles = conf
+            .p2p
+            .bootstrap_nodes
+            .iter()
+            .map(|uri| NodeProfile::from_str(uri))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         let option = AxusServiceOption {
+            bootstrap_node_profiles,
             advertise_addrs,
             use_upnp: conf.p2p.use_upnp,
             ..Default::default()
@@ -64,6 +76,7 @@ mod tests {
                 listen_addr: "127.0.0.1:0".to_string(),
                 advertise_addrs: vec![],
                 use_upnp: false,
+                bootstrap_nodes: vec![],
             },
             logging: LoggingConfig {
                 level: "info".to_string(),
@@ -92,6 +105,35 @@ mod tests {
                 listen_addr: "not-an-addr".to_string(),
                 advertise_addrs: vec![],
                 use_upnp: false,
+                bootstrap_nodes: vec![],
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                json: false,
+            },
+        };
+
+        assert!(DaemonState::new(conf).await.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn new_fails_when_bootstrap_node_is_invalid_test() -> TestResult {
+        let state_dir = tempfile::tempdir()?;
+
+        let conf = DaemonConfig {
+            core: CoreConfig {
+                state_dir: state_dir.path().to_path_buf(),
+            },
+            api: ApiConfig {
+                listen_addr: "127.0.0.1:0".to_string(),
+            },
+            p2p: P2pConfig {
+                listen_addr: "127.0.0.1:0".to_string(),
+                advertise_addrs: vec![],
+                use_upnp: false,
+                bootstrap_nodes: vec!["axus:node/not-a-node-profile".to_string()],
             },
             logging: LoggingConfig {
                 level: "info".to_string(),

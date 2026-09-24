@@ -8,6 +8,7 @@ listen_addr = "127.0.0.1:5050"
 listen_addr = "127.0.0.1:5051"
 advertise_addrs = []
 use_upnp = false
+bootstrap_nodes = []
 
 [logging]
 level = "info"

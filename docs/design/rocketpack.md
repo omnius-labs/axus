@@ -51,7 +51,7 @@ flowchart LR
 rpf の struct の field と enum の variant は `@N` の番号を持ち、この N が wire 上の field 番号である。
 `Option<T>` の field は値が `None` のとき map から省き、要素数もそれに合わせて数える。
 未知の番号を受け取った側は、その field を読み飛ばして残りの復号を続ける。
-移行はこの 2 つの規則を前提にしており、手書き実装と生成物の間で field の有無が違っても復号できる。
+移行は `Option` の省略と未知の field の読み飛ばしを前提にしており、手書き実装と生成物の間で field の有無が違っても復号できる。
 長さ制約と decode 時の検査は [core-rs の DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#5-rocketpack) が正とする。
 
 移行の不変条件は wire format を変えないことである。

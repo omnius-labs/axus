@@ -15,7 +15,7 @@
 | [issues.md](./issues.md) | コードで確認した明確な不具合と修正までの追跡 |
 | `knowledges.md`（未作成） | 外部の挙動を確認した最初の項目と同時に作る、出所付きの外部知識 |
 | `plans.md`（未作成） | 進行中の実装作業が発生した時点で、その子文書と同時に作る計画の一覧 |
-| `reviews.md`（未作成） | 最初の review 結果と同時に作る、review の履歴と指摘の転記状態 |
+| [reviews.md](./reviews.md) | review の履歴と指摘の転記状態 |
 | [daemon-api.md](./design/daemon-api.md) | daemon のライフサイクル、設定境界、REST API と OpenAPI 生成 |
 | [rocketpack.md](./design/rocketpack.md) | RocketPack 型の生成、wire format の移行規約 |
 | [session.md](./design/session.md) | transport、Session の確立、用途分離、停止 |
@@ -24,6 +24,7 @@
 | [storage.md](./design/storage.md) | metadata と block の保存、状態 directory、migration |
 | [trust-security.md](./design/trust-security.md) | 認証、暗号化、内容検証、identity、Web of Trust |
 | [profile-memo.md](./design/profile-memo.md) | Profile と memo の責務境界、参照する公開データ |
+| [rust.md](./coding/rust.md) | Rust のコーディング規約。正本は core-rs にある |
 | [README.md](../README.md) | プロジェクト概要、セットアップ、開発手順 |
 | [openapi.yaml](../daemon/openapi.yaml) | REST API の path、schema、status code |
 | [entrypoints/interface](../daemon/entrypoints/interface) | OpenAPI から生成する Rust interface |
@@ -38,6 +39,7 @@
 本文は、Axus が満たす設計を現在形で記述する。
 実装状況は各設計詳細文書の「現状と残作業」に集約する。
 関心事ごとの実装状況は対応する詳細文書を先に読む。
+いま何が動くのかを知りたい場合は §6 を先に読む。
 
 ## 2. Axus daemon とは
 
@@ -153,9 +155,10 @@ file の公開から復号までは、P2P 転送を介さない engine 内の試
 
 | 番号 | 内容 | 前提とする依存 |
 | --- | --- | --- |
-| 1 | FileExchanger の block 交換 protocol と hash 検証を定義して実装する | secure channel の判断 |
-| 2 | 公開、購読、進捗、cancel の REST API を定義する | 1、[daemon-api.md](./design/daemon-api.md#5-設計判断) の長時間操作の判断 |
-| 3 | Web of Trust、Profile、memo を順に定義する | [trust-security.md](./design/trust-security.md#4-設計判断)、FileRef を解決できる 1 |
-| 4 | 手書きの RocketPack 型を rpf へ移し、生成物へ置き換える | [rocketpack.md](./design/rocketpack.md#5-設計判断) の外部型の判断 |
+| 1 | Session の認証を接続に束縛し、secure channel と NodeProfile の到達先の真正性を決める | [session.md](./design/session.md#session-の-secure-channel)、[trust-security.md](./design/trust-security.md#nodeprofile-の到達先の真正性) |
+| 2 | FileExchanger の block 交換 protocol と hash 検証を定義して実装する | 1、[file-transfer.md](./design/file-transfer.md#62-保留) の公開側の接続先と照合位置の判断 |
+| 3 | 公開、購読、進捗、cancel の REST API を定義する | 2、[daemon-api.md](./design/daemon-api.md#52-保留) の長時間操作と到達範囲の判断 |
+| 4 | Web of Trust、Profile、memo を順に定義する | [trust-security.md](./design/trust-security.md#4-設計判断)、FileRef を解決できる 2 |
+| 5 | 手書きの RocketPack 型を rpf へ移し、生成物へ置き換える | [rocketpack.md](./design/rocketpack.md#5-設計判断) の外部型の判断 |
 
 確認済みの不具合と修正方針は [issues.md](./issues.md) を参照する。

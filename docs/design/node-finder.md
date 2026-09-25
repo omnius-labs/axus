@@ -139,3 +139,5 @@ daemon は設定 `p2p.bootstrap_nodes` の NodeProfile を既知 node に加え�
 3 node の結合試験で、bootstrap に指定していない node を中継の node 経由で見つけ、広告されたアドレスで直接つながることを確認している。
 
 実運用規模での複数 hop の到達率と遅延を測定し、能動探索と冗長度を決める。
+
+確認済みの不具合は [issues.md](../issues.md) を参照する。

@@ -30,8 +30,8 @@
 
 | 機構 | 保証するもの | 保証しないもの |
 | --- | --- | --- |
-| Session の challenge signature | 相手が応答に使った秘密鍵を所持すること | 相手への信頼 |
-| NodeFinder の handshake での公開鍵の照合 | 相手の NodeProfile と node ID が Session の相手のものであること | NodeProfile の到達先の真正性 |
+| Session の challenge signature | 署名者が秘密鍵を所持すること | 相手への信頼、TCP の相手が署名者本人であること |
+| NodeFinder の handshake での公開鍵の照合 | 相手の NodeProfile と node ID が Session の署名者のものであること | NodeProfile の到達先の真正性 |
 | FramedStream | message 境界 | 通信内容の機密性と改竄検出 |
 | Merkle hash | 期待する hash に対する block 内容の一致 | 提供者の信頼性、検索結果の正当性 |
 | Web of Trust | §4 で決める信頼 policy | transport の暗号化と block の内容検証 |
@@ -43,7 +43,7 @@ node ID は公開鍵から導出するが、鍵は低コストで生成できる
 既知 node と伝播情報の件数上限は資源消費を抑えるが、攻撃者の情報だけが残ることは防がない。
 Web of Trust はこの信頼選別を担うが、transport の盗聴と改竄には別の secure channel が必要である。
 
-NodeFinder の中継は情報を増幅し得るため、TTL、件数、接続数、message size の上限を protocol の入力境界で強制する。
+NodeFinder の中継は情報を増幅し得るため、TTL、件数、接続数、message size の上限と、handshake と受信の期限を protocol の入力境界で強制する。
 FileExchanger は受信 block を hash 検証し、Profile 交換は署名と version 検証を通す。
 
 ## 4. 設計判断
@@ -74,7 +74,8 @@ ID と鍵を分離して trust graph で対応を表す案は、Web of Trust の
 
 **現状**
 NodeProfile の到達先には署名がなく、第三者はある node の公開鍵に偽の到達先を付けて配布できる。
-接続すると handshake で公開鍵を照合するためなりすましは成立しないが、接続の失敗を誘って特定の node を探索から外せる。
+偽の到達先へ接続しても handshake で公開鍵を照合するが、Session の署名は接続に束縛されていないため、偽の到達先の node は本物の node へ handshake を中継して通信の間に入れる（[session.md](./session.md#session-の-secure-channel)）。
+中継しない場合でも、接続の失敗を誘って特定の node を探索から外せる。
 
 候補は次の 2 つである。
 
@@ -82,10 +83,10 @@ NodeProfile の到達先には署名がなく、第三者はある node の公�
 2. 接続に成功した到達先だけを保存して配布すると wire format は変わらないが、未検証の到達先を最初に試す段階は残る。
 
 **なぜ今決めないか**
-複数 hop の探索を daemon で動かしておらず、偽の到達先が探索に与える影響を測れないためである。
+偽の到達先が与える影響は Session の認証を接続に束縛するかどうかで大きく変わるため、secure channel の判断を先に行う。
 
 **決める条件**
-自 node の到達先を広告した後、信頼できない network で NodeFinder を動かす前に決める。
+Session の secure channel を決めた後、既定の bootstrap node の一覧を配布する前に決める。
 
 #### Web of Trust の単位と伝播
 

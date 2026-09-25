@@ -100,8 +100,27 @@ FilePublisher と FileSubscriber の public operation が daemon 層に接続さ
 **決める条件**
 公開開始、購読開始、進捗取得の endpoint を `openapi.yaml` に追加する前に決める。
 
+#### REST API の到達範囲と認証
+
+**現状**
+REST API は認証を持たず、`openapi.yaml` の health は `security: []` である。
+待ち受け address は設定 `api.listen_addr` で自由に選べ、local client だけが接続する前提を daemon は強制していない。
+
+候補は次の 2 つである。
+
+1. loopback address だけで待ち受けることを強制すると認証を持たずに済むが、別の machine の client から操作できない。
+2. token などの認証を加えると待ち受け address を自由にできるが、token の発行と保管の手順が必要になる。
+
+**なぜ今決めないか**
+状態を変える endpoint がなく、health 以外に守るべき操作がないためである。
+
+**決める条件**
+公開や購読のように状態を変える最初の endpoint を `openapi.yaml` に追加する前に決める。
+
 ## 6. 現状と残作業
 
 Executor は config、file lock、signal、HTTP server を組み立て、DaemonState は AxusService を所有して停止まで管理する。
 API と P2P は別の待ち受け address を持ち、health handler は稼働を返す。
 file 公開、購読、進捗、cancel の endpoint は未定義である。
+
+確認済みの不具合は [issues.md](../issues.md) を参照する。

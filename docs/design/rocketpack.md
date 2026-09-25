@@ -12,7 +12,7 @@
 | [design.md](../design.md#11-文書間の責務分担) | 全体構成、他の関心事との境界、横断的な依存関係 |
 | 本書 | Axus が採用する RocketPack 型生成と移行の設計 |
 | [rocketpack-compiler.md](../../daemon/refs/core-rs/docs/design/rocketpack-compiler.md) | `rocketpack.yaml` の書式、外部型の参照、生成される module の構成 |
-| [core-rs の DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#5-rocketpack) | RocketPack の wire format と長さ制約 |
+| [core-rs の DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#5-rocketpack) | RocketPack の長さ制約と decode 時の検査 |
 | [rocketpack-compiler](../../daemon/refs/core-rs/entrypoints/rocketpack-compiler) | compiler の実装 |
 | [rocketpack-compiled-example](../../daemon/refs/core-rs/entrypoints/rocketpack-compiled-example) | compiler 設定と生成物の例 |
 | `.rpf` file | 型、field 番号、外部型参照の正 |
@@ -48,7 +48,11 @@ flowchart LR
 
 ## 4. wire format の移行
 
-rpf の `@N` が wire 上の field 番号であり、`Option` の省略や未知の field の読み飛ばしを含む wire の規則は [core-rs の DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#5-rocketpack) が正とする。
+rpf の struct の field と enum の variant は `@N` の番号を持ち、この N が wire 上の field 番号である。
+`Option<T>` の field は値が `None` のとき map から省き、要素数もそれに合わせて数える。
+未知の番号を受け取った側は、その field を読み飛ばして残りの復号を続ける。
+移行はこの 2 つの規則を前提にしており、手書き実装と生成物の間で field の有無が違っても復号できる。
+長さ制約と decode 時の検査は [core-rs の DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#5-rocketpack) が正とする。
 
 移行の不変条件は wire format を変えないことである。
 手書き実装が使っている field 番号をそのまま `@N` へ写し、番号の詰め直しや採番規則の統一を同時に行わない。

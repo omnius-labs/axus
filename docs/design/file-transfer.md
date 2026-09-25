@@ -93,7 +93,7 @@ stateDiagram-v2
 購読側は目的の AssetKey を提供する node へ接続する。
 公開側から接続を始めるかどうかは §6.2 の保留である。
 相手の探索は NodeFinder に委ね、FileExchanger は探索 algorithm を持たない。
-公開用、購読用、受理用の接続枠を分け、転送方向ごとの資源を確保する。
+購読用と受理用の接続枠を分け、転送方向ごとの資源を確保する。
 
 block 交換 protocol は、要求した hash、受信した hash、保存した block の対応を追跡しなければならない。
 汚染 block を永続化しないため、内容 hash の検証は commit より前に行う。
@@ -122,7 +122,7 @@ MerkleLayer の rank には、その layer を格納する block の rank では
 #### 公開側の接続先
 
 **現状**
-公開側は自分が提供する AssetKey を要求する node へ接続する想定だったが、NodeFinder の want は要求元の NodeProfile を運ばず、`NodeFinder::find_node_profile` が返すのは AssetKey を提供する node だけである。
+FileExchanger には公開用の接続 task があるが、NodeFinder の want は要求元の NodeProfile を運ばず、`NodeFinder::find_node_profile` が返すのは AssetKey を提供する node だけである。
 FileExchanger の公開用の接続 task は自分の root hash で `find_node_profile` を呼ぶため、見つかるのは同じ file を提供するほかの node である。
 
 候補は次の 2 つである。

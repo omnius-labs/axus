@@ -95,10 +95,10 @@ V1 の challenge で署名するのは相手が選んだ 32 byte の nonce だ�
 
 候補は次の 2 つである。
 
-1. `core-rs` の `OmniSecureStream` を適用すると既存部品を再利用できるが、handshake 順序と鍵導出の適合を確認する必要がある。`OmniSecureStream` は自分の鍵合意の公開鍵を含む 32 byte の SHA3-256 hash に署名するため、同じ鍵で V1 の challenge に応じ続けると、第三者は challenge として渡した hash への署名を得て、その node になりすませる。
+1. `core-rs` の `OmniSecureStream` を適用すると既存部品を再利用できるが、handshake 順序と鍵導出の適合を確認する必要がある。`OmniSecureStream` は署名者側の値だけから作る 32 byte の SHA3-256 hash に接頭辞なしで署名するため、同じ鍵で V1 の challenge に応じ続けると、第三者は challenge として渡した hash への署名を得て、その node になりすませる。
 2. Session protocol 専用の鍵合意を定義すると用途に合わせられるが、新しい暗号 protocol の設計と監査が必要になる。
 
-どちらを選んでも、署名の対象に用途を区別する接頭辞と、鍵合意の公開鍵か handshake の transcript を含めなければ、上の中継と署名の流用は防げない。
+中継は、Session の署名に鍵合意の公開鍵か handshake の transcript を含めることで防げる。署名の流用は、同じ鍵で署名する対象が複数残るなら用途を区別する接頭辞で防ぎ、用途ごとに鍵を分けても防げる。候補 1 では、V1 の challenge を廃止するか、core-rs 側の署名対象に接頭辞を加える必要がある。
 
 **なぜ今決めないか**
 local の構成確認と storage 処理は secure channel の wire format に依存しないためである。

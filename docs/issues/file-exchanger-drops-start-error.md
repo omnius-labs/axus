@@ -26,7 +26,7 @@ v.start().await;
 
 ## 影響
 
-storage を開けないときも FileExchanger が生成され、publisher と subscriber のない状態で接続 task だけが動く。
+storage を開けないときも `FileExchanger::new` は成功を返すが、接続と受理の task は起動せず、何も転送しない FileExchanger が返る。
 AxusService へ結線すると顕在化する。
 
 ## 対応方針

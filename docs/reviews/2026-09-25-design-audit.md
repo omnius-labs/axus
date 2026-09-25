@@ -312,7 +312,7 @@ rank の別称に root hash、root hash の別称に FileRef、Profile の別称
 terms.md と設計文書を照合して確かめた。
 
 **影響**
-語を引いても定義が見つからず、到達先とアドレスのように同じものを指す表記が揃わない。
+語を引いても定義が見つからない。
 
 **扱い**
 terms.md の用語一覧へ転記した（本レビューと同じ変更で修正）。
@@ -365,6 +365,6 @@ issues.md の daemon-lock-not-on-state-dir として起票した。
 - decode 時の `Vec::with_capacity` が要素数だけで巨大な確保をする疑いは、core-rs の decoder が残りの byte 数を超える要素数を拒否することで frame の大きさまでに留まると確かめた。
 - RocksDB の rename が途中で壊れる疑いは、`rename_key` が 1 つの transaction で names を付け替えることで否定した。
 - MerkleLayer の rank の意味が符号化側と復号側で食い違う疑いは、多段の round-trip test が通ることで否定した。
-- 署名鍵の file が書き込み途中で読まれる疑いは、一時 file に書いてから rename し、権限を 0600 にしていることで否定した。
+- 署名鍵の file が書き込み途中で読まれる疑いは、一時 file に書いてから rename していることで否定した。
 
 ## 6. その後

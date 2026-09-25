@@ -60,7 +60,7 @@ NodeProfile は node ID ではなく公開鍵を持ち、node ID は公開鍵の
 NodeFinder の handshake は、相手の NodeProfile の公開鍵が Session の cert の公開鍵と一致しない場合に接続を拒否する。
 
 **理由**
-node ID を公開鍵から導出すると、ID と鍵の対応を別に証明しなくても、Session の署名検証だけで相手の ID が確定する。
+node ID を公開鍵から導出すると、ID と鍵の対応を別に証明しなくても、Session の署名検証だけで署名者の ID が確定する。
 ID を保持せずに導出するため、ID と鍵が食い違う NodeProfile を表現できない。
 鍵を rotation すると node ID も変わるが、ID を引き継ぐ要件は現時点でない。
 

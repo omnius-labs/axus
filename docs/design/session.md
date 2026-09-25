@@ -65,8 +65,7 @@ version 交渉は、双方が共通して対応する手順だけを選ばなけ
 
 ## 4. 用途と停止
 
-1 本の Session は NodeFinder または FileExchanger のどちらか一方に割り当てる。
-用途ごとの受理 queue と接続上限を分けることで、一方の負荷が他方の接続枠を使い切ることを防ぐ。
+1 本の Session は NodeFinder または FileExchanger のどちらか一方に割り当てる（§5.1）。
 用途間の多重化を session 層に持ち込まないため、上位 protocol は自分の message だけを処理する。
 
 [Shutdown](../../daemon/modules/engine/src/base/runtime/shutdown.rs) は、所有する下位 component を順に停止するための共通 contract である。
@@ -90,17 +89,22 @@ message protocol と接続資源を用途ごとに隔離し、一方の負荷が
 
 **現状**
 相互 challenge signature の後も Session は FramedStream を使い、暗号化と message authentication の方式は定めていない。
+V1 の challenge で署名するのは相手が選んだ 32 byte の nonce だけであり、署名は TCP 接続にも handshake の内容にも束縛されていない。
+そのため、ある node を自分へ接続させた第三者は、同じ handshake を本物の相手へ中継して両者に互いを認証させ、その後の平文の message を読み書きできる。
+また、認証前の相手はどの node にも任意の 32 byte への署名を作らせられる。
 
 候補は次の 2 つである。
 
-1. `core-rs` の `OmniSecureStream` を適用すると既存部品を再利用できるが、handshake 順序と鍵導出の適合を確認する必要がある。
+1. `core-rs` の `OmniSecureStream` を適用すると既存部品を再利用できるが、handshake 順序と鍵導出の適合を確認する必要がある。`OmniSecureStream` は署名者側の値だけから作る 32 byte の SHA3-256 hash に接頭辞なしで署名するため、同じ鍵で V1 の challenge に応じ続けると、第三者は challenge として渡した hash への署名を得て、その node になりすませる。
 2. Session protocol 専用の鍵合意を定義すると用途に合わせられるが、新しい暗号 protocol の設計と監査が必要になる。
+
+中継は、Session の署名に鍵合意の公開鍵か handshake の transcript を含めることで防げる。署名の流用は、同じ鍵で署名する対象が複数残るなら用途を区別する接頭辞で防ぎ、用途ごとに鍵を分けても防げる。候補 1 では、V1 の challenge を廃止するか、core-rs 側の署名対象に接頭辞を加える必要がある。
 
 **なぜ今決めないか**
 local の構成確認と storage 処理は secure channel の wire format に依存しないためである。
 
 **決める条件**
-信頼できない network で FileExchanger または Profile 交換を有効にする前に決める。
+既定の bootstrap node の一覧を配布する前と、信頼できない network で FileExchanger または Profile 交換を有効にする前の、いずれか早い時点で決める。
 
 #### Session の version 選択
 
@@ -125,3 +129,5 @@ V1 しか存在しないため、どちらの規則でも交渉結果が変わ�
 
 version、challenge、signature、用途選択の message があり、Session は暗号化されていない FramedStream を保持する。
 secure channel と複数 version の選択規則を定めるまで、信頼できない network での FileExchanger と Profile 交換は有効にしない。
+
+確認済みの不具合は [issues.md](../issues.md) を参照する。

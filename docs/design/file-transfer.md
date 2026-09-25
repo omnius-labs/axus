@@ -90,9 +90,10 @@ stateDiagram-v2
 
 ## 5. 接続相手と block の検証
 
-公開側は自分が提供する AssetKey を要求する node へ接続し、購読側は目的の AssetKey を提供する node へ接続する。
+購読側は目的の AssetKey を提供する node へ接続する。
+公開側から接続を始めるかどうかは §6.2 の保留である。
 相手の探索は NodeFinder に委ね、FileExchanger は探索 algorithm を持たない。
-公開用、購読用、受理用の接続枠を分け、転送方向ごとの資源を確保する。
+購読用と受理用の接続枠を分け、転送方向ごとの資源を確保する。
 
 block 交換 protocol は、要求した hash、受信した hash、保存した block の対応を追跡しなければならない。
 汚染 block を永続化しないため、内容 hash の検証は commit より前に行う。
@@ -118,12 +119,46 @@ MerkleLayer の rank には、その layer を格納する block の rank では
 
 ### 6.2 保留
 
-この関心事に閉じる保留はない。
+#### 公開側の接続先
+
+**現状**
+FileExchanger には公開用の接続 task があるが、NodeFinder の want は要求元の NodeProfile を運ばず、`NodeFinder::find_node_profile` が返すのは AssetKey を提供する node だけである。
+FileExchanger の公開用の接続 task は自分の root hash で `find_node_profile` を呼ぶため、見つかるのは同じ file を提供するほかの node である。
+
+候補は次の 2 つである。
+
+1. want に要求元の NodeProfile を載せ、NodeFinder が要求する node も返すようにすると公開側から配れるが、want の message が大きくなり、要求元の到達先が中継の node に知られる。
+2. 公開側は接続を始めず受理だけにすると NodeFinder は変わらないが、NAT の内側で UPnP を使えない公開側へは購読側が接続できない。
+
+**なぜ今決めないか**
+block 交換 protocol がなく、公開側から接続する経路がまだ使われていないためである。
+
+**決める条件**
+block 交換 protocol を定義する前に決める。
+
+#### block の hash を照合する位置
+
+**現状**
+`FileSubscriber::write_block` は、受け取った値を呼び出し元が示した hash の key に保存し、内容の hash を照合しない。
+§5 の「内容 hash の検証は commit より前に行う」を、どの層で満たすかは決めていない。
+
+候補は次の 2 つである。
+
+1. `write_block` で照合すると、どの経路から来た block も保存の前に検証できるが、不正な相手を切るには照合の結果を protocol 層へ返す必要がある。
+2. block 交換 protocol で照合すると不正な相手をその場で切れるが、`write_block` を呼ぶ経路が増えるたびに照合を書き足す必要がある。
+
+**なぜ今決めないか**
+block 交換 protocol がなく、`write_block` を呼ぶのは test だけであるためである。
+
+**決める条件**
+block 交換 protocol を定義する前に決める。
 
 ## 7. 現状と残作業
 
 FilePublisher は file の取り込み、block 化、MerkleLayer の生成、root hash の確定、commit、committed block の読み出しを行う。
 FileSubscriber は購読の開始、block の保存、rank ごとの復号を行い、公開から復号までを engine 内の round-trip test で確認している。
-FileSubscriber は受け取った block の hash を照合しておらず、照合は block 交換 protocol とあわせて実装する。
+FileSubscriber は受け取った block の hash を照合しておらず、照合の位置は §6.2 の保留である。
 FileExchanger には接続と受理の task はあるが、block 要求と応答の message および送受信 loop がない。
 公開と購読を始める REST API はない。
+
+確認済みの不具合は [issues.md](../issues.md) を参照する。

@@ -33,7 +33,7 @@ Profile の真正性を検証しても、参照先 file の block hash 検証は
 | 層 | 責務 | 知らないもの |
 | --- | --- | --- |
 | FilePublisher と FileExchanger | file の公開、探索、block 転送 | 投稿、Profile の意味 |
-| 将来の MemoExchanger | Profile の探索、交換、配布 | 投稿本文、添付の解釈 |
+| MemoExchanger | Profile の探索、交換、配布 | 投稿本文、添付の解釈 |
 | 上位 service 層 | 投稿データの構築、FileRef の分類、Profile の生成と更新 | block 転送の詳細 |
 
 下位層は Profile を opaque な payload として扱い、上位層だけが FileRef の意味を解釈する。

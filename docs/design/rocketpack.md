@@ -11,6 +11,8 @@
 | --- | --- |
 | [design.md](../design.md#11-文書間の責務分担) | 全体構成、他の関心事との境界、横断的な依存関係 |
 | 本書 | Axus が採用する RocketPack 型生成と移行の設計 |
+| [rocketpack-compiler.md](../../daemon/refs/core-rs/docs/design/rocketpack-compiler.md) | `rocketpack.yaml` の書式、外部型の参照、生成される module の構成 |
+| [core-rs の DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#5-rocketpack) | RocketPack の長さ制約と decode 時の検査 |
 | [rocketpack-compiler](../../daemon/refs/core-rs/entrypoints/rocketpack-compiler) | compiler の実装 |
 | [rocketpack-compiled-example](../../daemon/refs/core-rs/entrypoints/rocketpack-compiled-example) | compiler 設定と生成物の例 |
 | `.rpf` file | 型、field 番号、外部型参照の正 |
@@ -41,31 +43,21 @@ flowchart LR
     Generated --> Engine
 ```
 
-型と field 番号の変更は rpf にだけ加え、生成物にも手書き実装にも加えない。
 定義を rpf 1 箇所に集めることで、encode 側と decode 側の field 番号の対応を人手で保つ必要がなくなる。
-
-compiler は指定した directory の `rocketpack.yaml` を読み、`sources` と `generators` に従って生成する。
-`sources` は `base_dir`、`includes`、`excludes` で対象の rpf を集める。
-`generators` は plugin ごとに `targets` を持ち、`pattern` に一致した rpf を `dir` 配下へ書き出す。
-出力は rpf 1 本につき Rust file 1 本であり、file 名は rpf の stem を引き継ぐ。
-
-`pattern` に一致しない rpf は生成対象から外れるため、rpf を追加したときは target の追加も必要になる。
-同じ rpf を複数の generator へ渡せるので、言語ごとの出力先を 1 つの設定で管理できる。
-`rocketpack.yaml` を置いた directory が生成の起点であり、`base_dir` と `dir` はそこからの相対 path として解決する。
+`rocketpack.yaml` の書式、生成される module の構成、生成物の置き場は [rocketpack-compiler.md](../../daemon/refs/core-rs/docs/design/rocketpack-compiler.md) が正とする。
 
 ## 4. wire format の移行
 
-rpf は version、package、use、struct、enum、type alias、const を持つ。
-struct の field と enum の variant は `@N` の番号を持ち、この N が wire 上の field 番号である。
+rpf の struct の field と enum の variant は `@N` の番号を持ち、この N が wire 上の field 番号である。
 `Option<T>` の field は値が `None` のとき map から省き、要素数もそれに合わせて数える。
 未知の番号を受け取った側は、その field を読み飛ばして残りの復号を続ける。
-
-rpf から外部型として参照する Rust 型は、`RocketPackStruct` を実装していなければならない。
-実装を持たない型を参照した場合、誤りは生成時ではなく Rust の compile 時に現れる。
+移行は `Option` の省略と未知の field の読み飛ばしを前提にしており、手書き実装と生成物の間で field の有無が違っても復号できる。
+長さ制約と decode 時の検査は [core-rs の DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#5-rocketpack) が正とする。
 
 移行の不変条件は wire format を変えないことである。
 手書き実装が使っている field 番号をそのまま `@N` へ写し、番号の詰め直しや採番規則の統一を同時に行わない。
 1 つの型の宣言と codec を手書きと生成物に分けず、型ごとに正を 1 つにする。
+rpf では要素数と byte 長の上限を型に書けるため、移した型では上限を decode の時点で強制できる。
 
 ## 5. 設計判断
 
@@ -89,21 +81,21 @@ RocketPack で符号化する型は rpf を正とし、Rust の型宣言と `Roc
 #### rpf から参照する core-rs 型の扱い
 
 **現状**
-`OmniHash` は `RocketPackStruct` を実装しており、手書き実装も `write_struct` で符号化しているため、rpf から外部型としてそのまま参照できる。
-`OmniAddr` は実装を持たず、手書きの NodeProfile は string として符号化している。
+compiler が外部型として参照できるのは dependency に指定した manifest の rpf に定義された型であり、その Rust 上の名前は generator の `dependencies` で対応させる（[rocketpack-compiler.md](../../daemon/refs/core-rs/docs/design/rocketpack-compiler.md)）。
+`OmniHash` は core-rs の omnikit の rpf に定義されており、手書き実装も同じ型を `write_struct` で符号化しているため、omnikit の manifest を dependency にすれば参照できる。
+`OmniAddr` は rpf に定義がなく、手書きの NodeProfile は string として符号化している。
 
 候補は次の 2 つである。
 
-1. core-rs 側に `RocketPackStruct` を実装して外部型として参照すると、型と符号化を 1 箇所に置けるが、core-rs の型の wire format を Axus の都合で決めることになる。
-2. rpf では string や bytes などの組み込み型で表すと core-rs を変更せずに済むが、Rust 型との変換が Axus 側に手書きで残る。
+1. core-rs の rpf に `OmniAddr` を定義して参照すると、型と符号化を 1 箇所に置けるが、core-rs の型の wire format を Axus の都合で決めることになる。
+2. Axus の rpf では string などの組み込み型で表すと core-rs を変更せずに済むが、Rust 型との変換が Axus 側に手書きで残る。
 
 **なぜ今決めないか**
 現在の wire format を保つ実装はどちらの案でも書けるため、選択は変換を core-rs と Axus のどちらに置くかの問題に留まるためである。
 
 **決める条件**
-`OmniAddr` のように `RocketPackStruct` を持たない core-rs 型を含む型を、最初に rpf へ移す前に決める。
+`OmniAddr` のように rpf に定義のない core-rs 型を含む型を、最初に rpf へ移す前に決める。
 
 ## 6. 現状と残作業
 
 engine の型は手書きの `RocketPackStruct` 実装であり、Axus に rpf と `rocketpack.yaml` はない。
-compiler の Rust generator だけが Rust を出力し、C# と Swift の generator は log を残して生成を飛ばす。

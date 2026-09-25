@@ -41,6 +41,7 @@ block は hash key による読み書きが中心であり、大きな byte 列�
 
 ```text
 <state_dir>/
+├── identity/
 ├── repo/
 ├── file_publisher/
 │   ├── repo/
@@ -51,6 +52,7 @@ block は hash key による読み書きが中心であり、大きな byte 列�
 ```
 
 publisher と subscriber の保存領域を分けることで、一方の再構築や削除が他方の状態を直接壊さない。
+`identity/` は node の署名鍵を持ち、消すと次の起動で別の鍵と node ID が作られるため、ほかの directory と違って作り直しでは元に戻らない。
 directory 名の追加や移行が必要な場合は migration と rollback の単位を明示する。
 
 ## 4. 論理 key と migration
@@ -87,3 +89,5 @@ directory 名の追加や移行が必要な場合は migration と rollback の�
 
 NodeFinder、publisher、subscriber の repository と block storage がある。
 publisher と subscriber の repository は、すべての public method を test で実行している。
+
+確認済みの不具合は [issues.md](../issues.md) を参照する。

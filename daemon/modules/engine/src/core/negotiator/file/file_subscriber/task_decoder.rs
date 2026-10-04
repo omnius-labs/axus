@@ -1,269 +1,188 @@
-use std::{io::Cursor, sync::Arc};
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    io::Cursor,
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use futures::FutureExt as _;
 use parking_lot::Mutex;
 use tokio::{
     fs::File,
-    io::{AsyncWrite, AsyncWriteExt, BufWriter},
-    sync::Mutex as TokioMutex,
+    io::{AsyncWrite, AsyncWriteExt},
+    sync::{Mutex as TokioMutex, Notify},
     task::JoinHandle,
 };
-use tokio_util::bytes::Bytes;
+use tokio_util::{bytes::Bytes, sync::CancellationToken};
 
-use omnius_core_base::{clock::Clock, sleeper::Sleeper, tsid::TsidProvider};
+use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
-use crate::{
-    base::{runtime::Shutdown, storage::KeyValueRocksdbStorage, sync::EventListener},
-    core::negotiator::file::model::SubscribedFile,
-    prelude::*,
-};
+use super::{store::FileSubscriberStore, *};
+use crate::base::runtime::Shutdown;
 
-use super::*;
-
-#[allow(unused)]
 pub struct TaskDecoder {
-    file_subscriber_repo: Arc<FileSubscriberRepo>,
-    blocks_storage: Arc<KeyValueRocksdbStorage>,
-
-    tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>>,
+    store: Arc<FileSubscriberStore>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
-
-    current_decoding_file_id: Arc<Mutex<Option<String>>>,
-    enqueue_event_listener: Arc<EventListener>,
-    cancel_event_listener: Arc<EventListener>,
-
-    join_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
+    enqueue_notify: Notify,
+    active_jobs: Mutex<HashMap<String, CancellationToken>>,
+    join_handle: TokioMutex<Option<JoinHandle<()>>>,
+    token: CancellationToken,
 }
 
 #[async_trait]
 impl Shutdown for TaskDecoder {
     async fn shutdown(&self) {
-        if let Some(join_handle) = self.join_handle.lock().await.take() {
-            join_handle.abort();
-            let _ = join_handle.fuse().await;
+        self.token.cancel();
+        if let Some(handle) = self.join_handle.lock().await.take() {
+            let _ = handle.await;
         }
     }
 }
 
-#[allow(unused)]
 impl TaskDecoder {
-    #[allow(clippy::too_many_arguments)]
-    pub async fn new(
-        file_subscriber_repo: Arc<FileSubscriberRepo>,
-        blocks_storage: Arc<KeyValueRocksdbStorage>,
-
-        tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>>,
-        clock: Arc<dyn Clock<Utc> + Send + Sync>,
-        sleeper: Arc<dyn Sleeper + Send + Sync>,
-    ) -> Result<Arc<Self>> {
-        let v = Arc::new(Self {
-            file_subscriber_repo,
-            blocks_storage,
-
-            tsid_provider,
+    pub async fn new(store: Arc<FileSubscriberStore>, clock: Arc<dyn Clock<Utc> + Send + Sync>, sleeper: Arc<dyn Sleeper + Send + Sync>) -> Result<Arc<Self>> {
+        let task = Arc::new(Self {
+            store,
             clock,
             sleeper,
-
-            current_decoding_file_id: Arc::new(Mutex::new(None)),
-            enqueue_event_listener: Arc::new(EventListener::new()),
-            cancel_event_listener: Arc::new(EventListener::new()),
-
-            join_handle: Arc::new(TokioMutex::new(None)),
+            enqueue_notify: Notify::new(),
+            active_jobs: Mutex::new(HashMap::new()),
+            join_handle: TokioMutex::new(None),
+            token: CancellationToken::new(),
         });
-        v.clone().start().await?;
-
-        Ok(v)
-    }
-
-    pub async fn export(&self, _file_id: &str) -> Result<()> {
-        self.enqueue_event_listener.notify();
-
-        Ok(())
-    }
-
-    pub async fn cancel(&self, file_id: &str) -> Result<()> {
-        self.file_subscriber_repo.update_file_status(file_id, &SubscribedFileStatus::Canceled).await?;
-
-        let guard = self.current_decoding_file_id.lock();
-
-        let Some(current_decoding_file_id) = guard.as_ref() else {
-            return Ok(());
-        };
-
-        if current_decoding_file_id != file_id {
-            return Ok(());
-        }
-
-        self.cancel_event_listener.notify();
-
-        Ok(())
-    }
-
-    async fn start(self: Arc<Self>) -> Result<()> {
-        let this = self.clone();
-        *self.join_handle.lock().await = Some(tokio::spawn(async move {
-            loop {
+        let this = task.clone();
+        *task.join_handle.lock().await = Some(tokio::spawn(async move {
+            while !this.token.is_cancelled() {
+                if this.decode().await {
+                    continue;
+                }
                 tokio::select! {
-                    next = this.decode() => {
-                        if next {
-                            continue;
-                        }
-                    }
-                    _ = this.cancel_event_listener.wait() => {
-                        info!("import task canceled");
-                    }
-                };
-
-                this.enqueue_event_listener.wait().await;
+                    _ = this.enqueue_notify.notified() => {},
+                    _ = this.token.cancelled() => break,
+                }
             }
         }));
+        Ok(task)
+    }
 
-        Ok(())
+    pub fn wake(&self) {
+        self.enqueue_notify.notify_one();
+    }
+    pub fn cancel(&self, id: &str) {
+        if let Some(token) = self.active_jobs.lock().get(id) {
+            token.cancel();
+        }
     }
 
     async fn decode(&self) -> bool {
-        let Some(file) = self.pickup().await else {
-            return false;
+        let file = match self.store.next_file().await {
+            Ok(Some(file)) => file,
+            Ok(None) => return false,
+            Err(error) => {
+                warn!(?error, at = %self.clock.now(), "decoding queue fetch failed");
+                tokio::select! { _ = self.sleeper.sleep(std::time::Duration::from_secs(1)) => {}, _ = self.token.cancelled() => {} }
+                self.wake();
+                return false;
+            }
         };
-
-        if let Err(e) = self.decode_file(file.clone()).await {
-            warn!(error = ?e, "decode file error");
-            let failed_file = SubscribedFile {
-                status: SubscribedFileStatus::Failed,
-                failed_reason: Some(e.to_string()),
-                updated_at: self.clock.now(),
-                ..file
-            };
-            if let Err(e) = self.file_subscriber_repo.upsert_file_and_blocks(&failed_file, &[]).await {
-                warn!(error = ?e, "update file as failed error");
+        let token = match self.active_jobs.lock().entry(file.id.clone()) {
+            Entry::Occupied(_) => return false,
+            Entry::Vacant(entry) => {
+                let token = self.token.child_token();
+                entry.insert(token.clone());
+                token
+            }
+        };
+        if let Err(error) = self.decode_file(&file.id, &token).await {
+            warn!(?error, "decode file error");
+            if !token.is_cancelled()
+                && let Err(error) = self.store.fail(&file.id, &error.to_string()).await
+            {
+                warn!(?error, "decode failure recording failed");
             }
         }
-
-        *self.current_decoding_file_id.lock() = None;
-
+        self.active_jobs.lock().remove(&file.id);
         true
     }
 
-    async fn pickup(&self) -> Option<SubscribedFile> {
-        let file = match self.file_subscriber_repo.find_file_by_decoding_next().await {
-            Ok(file) => file,
-            Err(e) => {
-                info!(error_message = e.to_string(), "file not found",);
-                return None;
-            }
-        };
-        let Some(file) = file else {
-            *self.current_decoding_file_id.lock() = None;
-            return None;
-        };
-
-        *self.current_decoding_file_id.lock() = Some(file.id.clone());
-
-        // current_import_file_idがセットされる前に状態が変わる可能性があるため、再度取得する
-        let file = match self.file_subscriber_repo.find_file_by_id(&file.id).await {
-            Ok(file) => file,
-            Err(e) => {
-                warn!(error_message = e.to_string(), "file did lost",);
-                return None;
-            }
-        };
-        let Some(file) = file else {
-            *self.current_decoding_file_id.lock() = None;
-            return None;
-        };
-
-        Some(file)
-    }
-
-    async fn decode_file(&self, file: SubscribedFile) -> Result<()> {
-        if file.status == SubscribedFileStatus::Canceled {
-            self.file_subscriber_repo.delete_file(&file.id).await?;
-            return Ok(());
+    async fn decode_file(&self, id: &str, token: &CancellationToken) -> Result<Option<()>> {
+        if token.is_cancelled() {
+            return Ok(None);
         }
-
+        let Some(file) = self.store.find_file(id).await? else {
+            return Ok(None);
+        };
+        if file.status != SubscribedFileStatus::Decoding {
+            return Ok(None);
+        }
+        let blocks = self.store.blocks(&file.root_hash, file.rank).await?;
+        let hashes: Vec<_> = blocks.into_iter().map(|block| block.block_hash).collect();
+        if token.is_cancelled() {
+            return Ok(None);
+        }
         if file.rank == 0 {
-            let blocks = self.file_subscriber_repo.find_blocks_by_root_hash_and_rank(&file.root_hash, file.rank).await?;
-
-            let block_hashes: Vec<OmniHash> = blocks.iter().map(|n| n.block_hash.clone()).collect();
-
-            let mut f = File::create(file.file_path).await?;
-            self.decode_bytes(&mut f, &file.root_hash, &block_hashes).await?;
-
-            self.file_subscriber_repo.update_file_status(&file.id, &SubscribedFileStatus::Completed).await?;
+            let mut output = File::create(&file.file_path).await?;
+            let result = async {
+                if self.decode_bytes(&mut output, &file.root_hash, &hashes, token).await?.is_none() {
+                    return Ok(None);
+                }
+                if token.is_cancelled() || !self.store.complete(id).await? {
+                    return Ok(None);
+                }
+                Result::Ok(Some(()))
+            }
+            .await;
+            drop(output);
+            if !matches!(result, Ok(Some(()))) {
+                match tokio::fs::remove_file(&file.file_path).await {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            result
         } else {
-            let blocks = self.file_subscriber_repo.find_blocks_by_root_hash_and_rank(&file.root_hash, file.rank).await?;
-
-            let block_hashes: Vec<OmniHash> = blocks.iter().map(|n| n.block_hash.clone()).collect();
-
-            let bytes: Vec<u8> = Vec::new();
-            let cursor = Cursor::new(bytes);
-            let mut writer = BufWriter::new(cursor);
-            self.decode_bytes(&mut writer, &file.root_hash, &block_hashes).await?;
-
-            let cursor = writer.into_inner();
-            let bytes = cursor.into_inner();
-            let bytes = Bytes::from(bytes);
-            let merkle_layer = MerkleLayer::import(&bytes)?;
-
-            // root の rank は復号するまで分からないため、root 以外の layer だけを照合する
-            let expected_rank = file.rank.checked_sub(1);
-            if file.rank != SubscribedFile::UNKNOWN_ROOT_RANK && Some(merkle_layer.rank) != expected_rank {
+            let mut output = Cursor::new(Vec::new());
+            if self.decode_bytes(&mut output, &file.root_hash, &hashes, token).await?.is_none() {
+                return Ok(None);
+            }
+            let layer = MerkleLayer::import(&Bytes::from(output.into_inner()))?;
+            if file.rank != SubscribedFile::UNKNOWN_ROOT_RANK && Some(layer.rank) != file.rank.checked_sub(1) {
                 return Err(Error::new(ErrorKind::InvalidFormat).with_message("unexpected merkle layer rank"));
             }
-
-            let now = self.clock.now();
-
-            // 子 block がない layer（空の file）は受信を待たずに次の rank を復号する
-            let status = if merkle_layer.hashes.is_empty() {
-                SubscribedFileStatus::Decoding
-            } else {
-                SubscribedFileStatus::Downloading
-            };
-            let new_file = SubscribedFile {
-                rank: merkle_layer.rank,
-                block_count_downloaded: 0,
-                block_count_total: merkle_layer.hashes.len() as u32,
-                status,
-                updated_at: now,
-                ..file
-            };
-            let new_blocks: Vec<SubscribedBlock> = merkle_layer
-                .hashes
-                .into_iter()
-                .enumerate()
-                .map(|(i, n)| SubscribedBlock {
-                    root_hash: new_file.root_hash.clone(),
-                    block_hash: n,
-                    rank: merkle_layer.rank,
-                    index: i as u32,
-                    downloaded: false,
-                })
-                .collect();
-
-            self.file_subscriber_repo.upsert_file_and_blocks(&new_file, &new_blocks).await?;
+            if token.is_cancelled() || !self.store.advance_layer(&file, layer).await? {
+                return Ok(None);
+            }
+            Ok(Some(()))
         }
-
-        Ok(())
     }
 
-    async fn decode_bytes<W>(&self, writer: &mut W, root_hash: &OmniHash, block_hashes: &[OmniHash]) -> Result<()>
+    async fn decode_bytes<W>(&self, writer: &mut W, root_hash: &OmniHash, hashes: &[OmniHash], token: &CancellationToken) -> Result<Option<()>>
     where
         W: AsyncWrite + Unpin,
     {
-        for block_hash in block_hashes {
-            let key = gen_block_path(root_hash, block_hash);
-            let Some(block) = self.blocks_storage.get_value(&key).await? else {
+        for hash in hashes {
+            if token.is_cancelled() {
+                return Ok(None);
+            }
+            let block = self.store.read_block(root_hash, hash).await?;
+            if token.is_cancelled() {
+                return Ok(None);
+            }
+            let Some(block) = block else {
                 return Err(Error::new(ErrorKind::IoError).with_message("decoding error: block is not found"));
             };
-            writer.write_all(&block).await?;
+            tokio::select! {
+                _ = token.cancelled() => return Ok(None),
+                result = writer.write_all(&block) => result?,
+            }
         }
-
-        writer.flush().await?;
-
-        Ok(())
+        tokio::select! {
+            _ = token.cancelled() => return Ok(None),
+            result = writer.flush() => result?,
+        }
+        Ok(Some(()))
     }
 }

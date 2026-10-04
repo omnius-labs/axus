@@ -4,26 +4,26 @@
 
 本書は、Axus の Rust 製 daemon が P2P ネットワーク上でノードを探索し、ファイルを公開および購読するための全体設計を扱う。
 主な読者は、`daemon/` の実装を変更する開発者と、設計判断を引き継ぐ AI エージェントである。
-本書は [terms.md](./terms.md) の語彙を前提とする。語の定義は本書にない。
+本書は [terms.md](./terms.md#2-用語一覧) の語彙を前提とする。語の定義は本書にない。
 
 ### 1.1 文書間の責務分担
 
 | 文書または正本 | 正とする内容 |
 | --- | --- |
 | 本書 | プロジェクト全体のスコープ、全体構成、関心事間の境界、横断的な設計判断、全体の依存関係 |
-| [terms.md](./terms.md) | プロジェクト固有の語の定義、表記、隣接語との境界 |
+| [terms.md](./terms.md#2-用語一覧) | プロジェクト固有の語の定義、表記、隣接語との境界 |
 | [issues.md](./issues.md) | コードで確認した明確な不具合と修正までの追跡 |
-| `knowledges.md`（未作成） | 外部の挙動を確認した最初の項目と同時に作る、出所付きの外部知識 |
+| [knowledges.md](./knowledges.md) | 依存ライブラリと OS の挙動について確認した、出所付きの外部知識 |
 | `plans.md`（未作成） | 進行中の実装作業が発生した時点で、その子文書と同時に作る計画の一覧 |
 | [reviews.md](./reviews.md) | review の履歴と指摘の転記状態 |
-| [daemon-api.md](./design/daemon-api.md) | daemon のライフサイクル、設定境界、REST API と OpenAPI 生成 |
-| [rocketpack.md](./design/rocketpack.md) | RocketPack 型の生成、wire format の移行規約 |
-| [session.md](./design/session.md) | transport、Session の確立、用途分離、停止 |
-| [node-finder.md](./design/node-finder.md) | ノード探索、情報伝播、距離計算、探索状態 |
-| [file-transfer.md](./design/file-transfer.md) | ファイルの公開、購読、Merkle 構造、block の検証 |
-| [storage.md](./design/storage.md) | metadata と block の保存、状態 directory、migration |
-| [trust-security.md](./design/trust-security.md) | 認証、暗号化、内容検証、identity、Web of Trust |
-| [profile-memo.md](./design/profile-memo.md) | Profile と memo の責務境界、参照する公開データ |
+| [daemon-api.md](./design/daemon-api.md#1-このドキュメントについて) | daemon のライフサイクル、設定境界、REST API と OpenAPI 生成 |
+| [rocketpack.md](./design/rocketpack.md#1-このドキュメントについて) | RocketPack 型の生成、wire format の移行規約 |
+| [session.md](./design/session.md#1-このドキュメントについて) | transport、Session の確立、用途分離、停止 |
+| [node-finder.md](./design/node-finder.md#1-このドキュメントについて) | ノード探索、情報伝播、距離計算、探索状態 |
+| [file-transfer.md](./design/file-transfer.md#1-このドキュメントについて) | ファイルの公開、購読、Merkle 構造、出力先の予約、block の検証 |
+| [storage.md](./design/storage.md#1-このドキュメントについて) | metadata、block、出力 file の永続化、確定と回収、障害後の回復、migration |
+| [trust-security.md](./design/trust-security.md#1-このドキュメントについて) | 認証、暗号化、内容検証、identity、Web of Trust |
+| [profile-memo.md](./design/profile-memo.md#1-このドキュメントについて) | Profile と memo の責務境界、参照する公開データ |
 | [rust.md](./coding/rust.md) | Rust のコーディング規約。正本は core-rs にある |
 | [README.md](../README.md) | プロジェクト概要、セットアップ、開発手順 |
 | [openapi.yaml](../daemon/openapi.yaml) | REST API の path、schema、status code |
@@ -114,14 +114,14 @@ API 層は engine を知るが、NodeFinder は FilePublisher と FileSubscriber
 
 | 関心事 | 受け持つ設計文書 | ほかの関心事との境界 |
 | --- | --- | --- |
-| daemon と REST API | [daemon-api.md](./design/daemon-api.md) | engine の所有と外部 contract を結び、P2P protocol は持たない |
-| RocketPack 型 | [rocketpack.md](./design/rocketpack.md) | wire 型の正を持ち、compiler の内部設計は持たない |
-| transport と Session | [session.md](./design/session.md) | 接続を認証して用途へ渡し、探索と file message は解釈しない |
-| NodeFinder | [node-finder.md](./design/node-finder.md) | AssetKey と NodeProfile の対応を扱い、file 内容を解釈しない |
-| file の公開と購読 | [file-transfer.md](./design/file-transfer.md) | block を公開、購読、検証し、探索 algorithm は持たない |
-| 永続化 | [storage.md](./design/storage.md) | metadata と block 実体の保存を扱い、上位 protocol は持たない |
-| trust と security | [trust-security.md](./design/trust-security.md) | 各層の保証と限界を定め、個別の暗号 protocol を選ばない |
-| Profile と memo | [profile-memo.md](./design/profile-memo.md) | 上位データの参照と配布を扱い、投稿本文と block 転送を解釈しない |
+| daemon と REST API | [daemon-api.md](./design/daemon-api.md#1-このドキュメントについて) | engine の所有と外部 contract を結び、P2P protocol は持たない |
+| RocketPack 型 | [rocketpack.md](./design/rocketpack.md#1-このドキュメントについて) | wire 型の正を持ち、compiler の内部設計は持たない |
+| transport と Session | [session.md](./design/session.md#1-このドキュメントについて) | 接続を認証して用途へ渡し、探索と file message は解釈しない |
+| NodeFinder | [node-finder.md](./design/node-finder.md#1-このドキュメントについて) | AssetKey と NodeProfile の対応を扱い、file 内容を解釈しない |
+| file の公開と購読 | [file-transfer.md](./design/file-transfer.md#1-このドキュメントについて) | block を公開、購読、検証し、探索 algorithm は持たない |
+| 永続化 | [storage.md](./design/storage.md#1-このドキュメントについて) | metadata、block、出力 file の永続化と回復を扱い、上位 protocol は持たない |
+| trust と security | [trust-security.md](./design/trust-security.md#1-このドキュメントについて) | 各層の保証と限界を定め、個別の暗号 protocol を選ばない |
+| Profile と memo | [profile-memo.md](./design/profile-memo.md#1-このドキュメントについて) | 上位データの参照と配布を扱い、投稿本文と block 転送を解釈しない |
 
 ## 5. 設計判断
 

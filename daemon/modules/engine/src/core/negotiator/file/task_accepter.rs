@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use async_trait::async_trait;
 use chrono::Utc;
 use tokio::{
     sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc},
@@ -10,6 +11,7 @@ use tracing::warn;
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 
 use crate::{
+    base::runtime::Shutdown,
     core::session::{
         SessionAccepter,
         model::{SessionHandshakeType, SessionType},
@@ -28,6 +30,19 @@ pub struct TaskAccepter {
     sleeper: Arc<dyn Sleeper + Send + Sync>,
     option: FileExchangerOption,
     join_handles: Arc<TokioMutex<Vec<JoinHandle<()>>>>,
+}
+
+#[async_trait]
+impl Shutdown for TaskAccepter {
+    async fn shutdown(&self) {
+        let handles = std::mem::take(&mut *self.join_handles.lock().await);
+        for handle in &handles {
+            handle.abort();
+        }
+        for handle in handles {
+            let _ = handle.await;
+        }
+    }
 }
 
 impl TaskAccepter {

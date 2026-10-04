@@ -7,8 +7,6 @@ use omnius_core_base::clock::Clock;
 use omnius_core_migration::sqlite::{MigrationRequest, SqliteMigrator};
 use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
-use crate::prelude::*;
-
 use super::*;
 
 #[allow(unused)]
@@ -70,6 +68,94 @@ CREATE INDEX IF NOT EXISTS index_root_hash_rank_index_for_blocks ON blocks (root
         Ok(())
     }
 
+    pub async fn get_downloading_root_hashes(&self) -> Result<Vec<OmniHash>> {
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT DISTINCT root_hash FROM files WHERE status = 'Downloading'")
+            .fetch_all(self.db.as_ref())
+            .await?;
+        rows.into_iter().map(|(hash,)| OmniHash::from_str(&hash).map_err(Into::into)).collect()
+    }
+
+    pub async fn transition(&self, id: &str, expected: &SubscribedFileStatus, status: &SubscribedFileStatus, reason: Option<&str>) -> Result<bool> {
+        Ok(sqlx::query("UPDATE files SET status = ?, failed_reason = ?, updated_at = ? WHERE id = ? AND status = ?")
+            .bind(status)
+            .bind(reason)
+            .bind(self.clock.now().naive_utc())
+            .bind(id)
+            .bind(expected)
+            .execute(self.db.as_ref())
+            .await?
+            .rows_affected()
+            != 0)
+    }
+
+    pub async fn cancel(&self, id: &str) -> Result<()> {
+        sqlx::query("UPDATE files SET status = 'Canceled', updated_at = ? WHERE id = ? AND status IN ('Downloading', 'Decoding')")
+            .bind(self.clock.now().naive_utc())
+            .bind(id)
+            .execute(self.db.as_ref())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn mark_downloaded(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<bool> {
+        let mut tx = self.db.begin_with("BEGIN IMMEDIATE").await?;
+        sqlx::query("UPDATE blocks SET downloaded = 1 WHERE root_hash = ? AND block_hash = ?")
+            .bind(root_hash.to_string())
+            .bind(block_hash.to_string())
+            .execute(&mut *tx)
+            .await?;
+        let changed = Self::refresh_progress(&mut tx, root_hash, self.clock.now().naive_utc()).await?;
+        tx.commit().await?;
+        Ok(changed)
+    }
+
+    async fn refresh_progress(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, root_hash: &OmniHash, now: NaiveDateTime) -> Result<bool> {
+        sqlx::query("UPDATE files SET block_count_downloaded = (SELECT COUNT(*) FROM blocks WHERE blocks.root_hash = files.root_hash AND blocks.rank = files.rank AND downloaded = 1), updated_at = ? WHERE root_hash = ? AND status = 'Downloading'")
+            .bind(now).bind(root_hash.to_string()).execute(&mut **tx).await?;
+        Ok(
+            sqlx::query("UPDATE files SET status = 'Decoding' WHERE root_hash = ? AND status = 'Downloading' AND block_count_downloaded = block_count_total")
+                .bind(root_hash.to_string())
+                .execute(&mut **tx)
+                .await?
+                .rows_affected()
+                != 0,
+        )
+    }
+
+    pub async fn advance_layer(&self, file: &SubscribedFile, blocks: &[SubscribedBlock]) -> Result<bool> {
+        let mut tx = self.db.begin_with("BEGIN IMMEDIATE").await?;
+        let changed = sqlx::query(
+            "UPDATE files SET rank = ?, block_count_total = ?, block_count_downloaded = 0, status = 'Downloading', updated_at = ? WHERE id = ? AND status = 'Decoding'",
+        )
+        .bind(file.rank)
+        .bind(file.block_count_total)
+        .bind(self.clock.now().naive_utc())
+        .bind(&file.id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+            != 0;
+        if !changed {
+            return Ok(false);
+        }
+        for block in blocks {
+            // Another subscription may have received this hash after Store checked the key.
+            sqlx::query("INSERT INTO blocks (root_hash, block_hash, rank, `index`, downloaded) VALUES (?, ?, ?, ?, (? OR EXISTS (SELECT 1 FROM blocks WHERE root_hash = ? AND block_hash = ? AND downloaded = 1))) ON CONFLICT DO NOTHING")
+                .bind(block.root_hash.to_string())
+                .bind(block.block_hash.to_string())
+                .bind(block.rank)
+                .bind(block.index)
+                .bind(block.downloaded)
+                .bind(block.root_hash.to_string())
+                .bind(block.block_hash.to_string())
+                .execute(&mut *tx)
+                .await?;
+        }
+        Self::refresh_progress(&mut tx, &file.root_hash, self.clock.now().naive_utc()).await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
     pub async fn get_committed_files(&self) -> Result<Vec<SubscribedFile>> {
         let res: Vec<SubscribedFileRow> = sqlx::query_as(
             r#"
@@ -128,22 +214,6 @@ SELECT id, root_hash, file_path, rank, block_count_downloaded, block_count_total
         .await?;
 
         res.map(|r| r.into()).transpose()
-    }
-
-    pub async fn update_file_status(&self, id: &str, status: &SubscribedFileStatus) -> Result<()> {
-        sqlx::query(
-            r#"
-UPDATE files
-    SET status = ?
-    WHERE id = ?
-"#,
-        )
-        .bind(status)
-        .bind(id)
-        .execute(self.db.as_ref())
-        .await?;
-
-        Ok(())
     }
 
     pub async fn delete_file(&self, id: &str) -> Result<()> {
@@ -242,42 +312,7 @@ SELECT *
         Ok(res)
     }
 
-    pub async fn upsert_blocks(&self, blocks: &[SubscribedBlock]) -> Result<()> {
-        let mut tx = self.db.begin().await?;
-
-        const CHUNK_SIZE: i64 = 100;
-
-        for chunk in blocks.chunks(CHUNK_SIZE as usize) {
-            let mut query_builder: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new(
-                r#"
-INSERT INTO blocks (root_hash, block_hash, rank, `index`, downloaded)
-"#,
-            );
-
-            let rows: Vec<SubscribedBlockRow> = chunk.iter().filter_map(|item| SubscribedBlockRow::from(item).ok()).collect();
-
-            query_builder.push_values(rows, |mut b, row| {
-                b.push_bind(row.root_hash);
-                b.push_bind(row.block_hash);
-                b.push_bind(row.rank);
-                b.push_bind(row.index);
-                b.push_bind(row.downloaded);
-            });
-            query_builder.push(
-                r#"
-    ON CONFLICT(root_hash, block_hash, rank, `index`) DO UPDATE SET
-        downloaded = excluded.downloaded
-"#,
-            );
-            query_builder.build().execute(&mut *tx).await?;
-        }
-
-        tx.commit().await?;
-
-        Ok(())
-    }
-
-    pub async fn upsert_file_and_blocks(&self, file: &SubscribedFile, blocks: &[SubscribedBlock]) -> Result<()> {
+    pub async fn insert_file_and_blocks(&self, file: &SubscribedFile, blocks: &[SubscribedBlock]) -> Result<()> {
         let mut tx = self.db.begin().await?;
 
         let row = SubscribedFileRow::from(file)?;
@@ -285,17 +320,6 @@ INSERT INTO blocks (root_hash, block_hash, rank, `index`, downloaded)
             r#"
 INSERT INTO files (id, root_hash, file_path, rank, block_count_downloaded, block_count_total, attrs, priority, status, failed_reason, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-        root_hash = excluded.root_hash,
-        file_path = excluded.file_path,
-        rank = excluded.rank,
-        block_count_downloaded = excluded.block_count_downloaded,
-        block_count_total = excluded.block_count_total,
-        attrs = excluded.attrs,
-        priority = excluded.priority,
-        status = excluded.status,
-        failed_reason = excluded.failed_reason,
-        updated_at = excluded.updated_at
 "#,
         )
         .bind(row.id)
@@ -333,13 +357,13 @@ INSERT INTO blocks (root_hash, block_hash, rank, `index`, downloaded)
             });
             query_builder.push(
                 r#"
-    ON CONFLICT(root_hash, block_hash, rank, `index`) DO UPDATE SET
-        downloaded = excluded.downloaded
+    ON CONFLICT DO NOTHING
 "#,
             );
             query_builder.build().execute(&mut *tx).await?;
         }
 
+        Self::refresh_progress(&mut tx, &file.root_hash, self.clock.now().naive_utc()).await?;
         tx.commit().await?;
 
         Ok(())
@@ -452,17 +476,17 @@ mod tests {
         let root_hash = hash(b"root");
 
         let file = subscribed_file("1", &root_hash, now);
-        repo.upsert_file_and_blocks(&file, &[]).await?;
+        repo.insert_file_and_blocks(&file, &[]).await?;
         let found = repo.find_file_by_id("1").await?.unwrap();
         assert_eq!(found.rank, 2);
-        assert_eq!(found.block_count_downloaded, 1);
+        assert_eq!(found.block_count_downloaded, 0);
         assert_eq!(found.block_count_total, 3);
         assert_eq!(found.priority, 5);
         assert_eq!(repo.find_file_by_root_hash(&root_hash).await?.unwrap().id, "1");
         assert_eq!(repo.get_committed_files().await?.len(), 1);
         assert!(repo.find_file_by_decoding_next().await?.is_none());
 
-        repo.update_file_status("1", &SubscribedFileStatus::Decoding).await?;
+        repo.transition("1", &SubscribedFileStatus::Downloading, &SubscribedFileStatus::Decoding, None).await?;
         assert_eq!(repo.find_file_by_decoding_next().await?.unwrap().id, "1");
 
         let updated = SubscribedFile {
@@ -473,7 +497,7 @@ mod tests {
             ..file
         };
         let blocks = vec![block(&root_hash, b"a", 1, 0), block(&root_hash, b"b", 1, 1)];
-        repo.upsert_file_and_blocks(&updated, &blocks).await?;
+        repo.advance_layer(&updated, &blocks).await?;
         let found = repo.find_file_by_id("1").await?.unwrap();
         assert_eq!(found.rank, 1);
         assert_eq!(found.block_count_total, 2);
@@ -484,7 +508,7 @@ mod tests {
             downloaded: true,
             ..block(&root_hash, b"a", 1, 0)
         };
-        repo.upsert_blocks(&[downloaded]).await?;
+        repo.mark_downloaded(&root_hash, &downloaded.block_hash).await?;
         let found = repo.find_blocks_by_root_hash_and_block_hash(&root_hash, &hash(b"a")).await?;
         assert_eq!(found.len(), 1);
         assert!(found[0].downloaded);

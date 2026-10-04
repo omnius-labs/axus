@@ -1,5 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use parking_lot::Mutex;
 use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc};
@@ -7,7 +8,7 @@ use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc};
 use omnius_core_base::{clock::Clock, sleeper::Sleeper, tsid::TsidProvider};
 
 use crate::{
-    base::collections::VolatileHashSet,
+    base::{collections::VolatileHashSet, runtime::Shutdown},
     core::{
         negotiator::NodeFinder,
         session::{SessionAccepter, SessionConnector},
@@ -17,6 +18,15 @@ use crate::{
 };
 
 use super::*;
+
+#[derive(Debug, Clone)]
+pub struct FileExchangerOption {
+    #[allow(unused)]
+    pub state_dir: PathBuf,
+    pub max_connected_session_for_publish_count: usize,
+    pub max_connected_session_for_subscribe_count: usize,
+    pub max_accepted_session_count: usize,
+}
 
 #[allow(dead_code)]
 pub struct FileExchanger {
@@ -43,13 +53,26 @@ pub struct FileExchanger {
     task_acceptors: Arc<TokioMutex<Vec<Arc<TaskAccepter>>>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct FileExchangerOption {
-    #[allow(unused)]
-    pub state_dir: PathBuf,
-    pub max_connected_session_for_publish_count: usize,
-    pub max_connected_session_for_subscribe_count: usize,
-    pub max_accepted_session_count: usize,
+#[async_trait]
+impl Shutdown for FileExchanger {
+    async fn shutdown(&self) {
+        let connectors = std::mem::take(&mut *self.task_connectors.lock().await);
+        for task in connectors {
+            task.shutdown().await;
+        }
+        let acceptors = std::mem::take(&mut *self.task_acceptors.lock().await);
+        for task in acceptors {
+            task.shutdown().await;
+        }
+        let publisher = self.file_publisher.lock().await.take();
+        if let Some(publisher) = publisher {
+            publisher.shutdown().await;
+        }
+        let subscriber = self.file_subscriber.lock().await.take();
+        if let Some(subscriber) = subscriber {
+            subscriber.shutdown().await;
+        }
+    }
 }
 
 impl FileExchanger {

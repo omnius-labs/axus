@@ -7,7 +7,7 @@ use omnius_core_base::clock::Clock;
 use omnius_core_migration::sqlite::{MigrationRequest, SqliteMigrator};
 use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
-use crate::{core::negotiator::file::model::PublishedUncommittedFileStatus, prelude::*};
+use crate::core::negotiator::file::model::PublishedUncommittedFileStatus;
 
 use super::*;
 
@@ -89,6 +89,48 @@ CREATE INDEX IF NOT EXISTS index_file_id_rank_index_for_uncommitted_blocks ON un
         Ok(())
     }
 
+    pub async fn retry_file(&self, file: &PublishedUncommittedFile) -> Result<bool> {
+        Ok(sqlx::query(
+            "UPDATE uncommitted_files SET status = 'Pending', failed_reason = NULL, block_size = ?, attrs = ?, priority = ?, updated_at = ? WHERE id = ? AND status = 'Failed'",
+        )
+        .bind(file.block_size)
+        .bind(&file.attrs)
+        .bind(file.priority)
+        .bind(self.clock.now().naive_utc())
+        .bind(&file.id)
+        .execute(self.db.as_ref())
+        .await?
+        .rows_affected()
+            != 0)
+    }
+
+    pub async fn recover(&self) -> Result<()> {
+        let mut tx = self.db.begin().await?;
+        sqlx::query("DELETE FROM uncommitted_blocks").execute(&mut *tx).await?;
+        sqlx::query("UPDATE uncommitted_files SET status = 'Pending', updated_at = ? WHERE status = 'Processing'")
+            .bind(self.clock.now().naive_utc())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn remove_committed_file(&self, root_hash: &OmniHash, file_name: &str) -> Result<()> {
+        let mut tx = self.db.begin_with("BEGIN IMMEDIATE").await?;
+        sqlx::query("DELETE FROM committed_files WHERE root_hash = ? AND file_name = ?")
+            .bind(root_hash.to_string())
+            .bind(file_name)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM committed_blocks WHERE root_hash = ? AND NOT EXISTS (SELECT 1 FROM committed_files WHERE root_hash = ?)")
+            .bind(root_hash.to_string())
+            .bind(root_hash.to_string())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn contains_committed_file(&self, root_hash: &OmniHash) -> Result<bool> {
         let (res,): (i64,) = sqlx::query_as(
             r#"
@@ -139,7 +181,7 @@ SELECT root_hash, file_name, block_size, attrs, created_at, updated_at
         sqlx::query(
             r#"
 INSERT INTO committed_files (root_hash, file_name, block_size, attrs, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
 "#,
         )
         .bind(row.root_hash)
@@ -178,7 +220,7 @@ SELECT COUNT(1)
         sqlx::query(
             r#"
 INSERT INTO committed_files (root_hash, file_name, block_size, attrs, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
 "#,
         )
         .bind(row.root_hash)
@@ -195,7 +237,7 @@ INSERT INTO committed_files (root_hash, file_name, block_size, attrs, created_at
         for chunk in blocks.chunks(CHUNK_SIZE as usize) {
             let mut query_builder: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new(
                 r#"
-INSERT OR IGNORE INTO committed_blocks (root_hash, block_hash, rank, `index`)
+INSERT INTO committed_blocks (root_hash, block_hash, rank, `index`)
 "#,
             );
 
@@ -207,6 +249,7 @@ INSERT OR IGNORE INTO committed_blocks (root_hash, block_hash, rank, `index`)
                 b.push_bind(row.rank);
                 b.push_bind(row.index);
             });
+            query_builder.push(" ON CONFLICT DO NOTHING");
             query_builder.build().execute(&mut *tx).await?;
         }
 
@@ -242,7 +285,7 @@ DELETE FROM uncommitted_blocks
         sqlx::query(
             r#"
 INSERT INTO committed_files (root_hash, file_name, block_size, attrs, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
 "#,
         )
         .bind(row.root_hash)
@@ -364,32 +407,37 @@ INSERT INTO uncommitted_files (id, file_path, file_name, block_size, attrs, prio
         Ok(())
     }
 
-    pub async fn update_uncommitted_file_status(&self, id: &str, status: &PublishedUncommittedFileStatus) -> Result<()> {
-        sqlx::query(
+    pub async fn update_uncommitted_file_status(&self, id: &str, expected: &PublishedUncommittedFileStatus, status: &PublishedUncommittedFileStatus) -> Result<bool> {
+        let changed = sqlx::query(
             r#"
 UPDATE uncommitted_files
-    SET status = ?
-    WHERE id = ?
+    SET status = ?, updated_at = ?
+    WHERE id = ? AND status = ?
 "#,
         )
         .bind(status)
+        .bind(self.clock.now().naive_utc())
         .bind(id)
+        .bind(expected)
         .execute(self.db.as_ref())
-        .await?;
+        .await?
+        .rows_affected()
+            != 0;
 
-        Ok(())
+        Ok(changed)
     }
 
     pub async fn update_uncommitted_file_as_failed(&self, id: &str, reason: &str) -> Result<()> {
         sqlx::query(
             r#"
 UPDATE uncommitted_files
-    SET status = ?, failed_reason = ?
-    WHERE id = ?
+    SET status = ?, failed_reason = ?, updated_at = ?
+    WHERE id = ? AND status = 'Processing'
 "#,
         )
         .bind(PublishedUncommittedFileStatus::Failed)
         .bind(reason)
+        .bind(self.clock.now().naive_utc())
         .bind(id)
         .execute(self.db.as_ref())
         .await?;
@@ -478,8 +526,8 @@ SELECT file_id, block_hash, rank, `index`
         let row = PublishedUncommittedBlockRow::from(item)?;
         sqlx::query(
             r#"
-INSERT OR IGNORE INTO uncommitted_blocks (file_id, block_hash, rank, `index`)
-    VALUES (?, ?, ?, ?)
+INSERT INTO uncommitted_blocks (file_id, block_hash, rank, `index`)
+    VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
 "#,
         )
         .bind(row.file_id.to_string())
@@ -704,7 +752,8 @@ mod tests {
         repo.delete_uncommitted_blocks(std::slice::from_ref(&block)).await?;
         assert!(!repo.contains_uncommitted_block("1", &block.block_hash).await?);
 
-        repo.update_uncommitted_file_status("1", &PublishedUncommittedFileStatus::Processing).await?;
+        repo.update_uncommitted_file_status("1", &PublishedUncommittedFileStatus::Pending, &PublishedUncommittedFileStatus::Processing)
+            .await?;
         assert!(repo.find_uncommitted_file_by_id("1").await?.unwrap().status == PublishedUncommittedFileStatus::Processing);
         assert!(repo.find_uncommitted_file_by_encoding_next().await?.is_none());
 

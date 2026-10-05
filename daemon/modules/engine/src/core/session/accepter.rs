@@ -1,13 +1,15 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use futures::{FutureExt, future::join_all};
+use futures::future::join_all;
 use parking_lot::Mutex;
 use rand::RngExt;
 use tokio::{
+    select,
     sync::{Mutex as TokioMutex, mpsc},
     task::JoinHandle,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use omnius_core_base::sleeper::Sleeper;
@@ -106,6 +108,7 @@ struct TaskAccepter {
     inner: Inner,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
     join_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
+    token: CancellationToken,
 }
 
 impl TaskAccepter {
@@ -126,18 +129,25 @@ impl TaskAccepter {
             inner,
             sleeper,
             join_handle: Arc::new(TokioMutex::new(None)),
+            token: CancellationToken::new(),
         }
     }
 
     pub async fn run(&self) {
         let sleeper = self.sleeper.clone();
         let inner = self.inner.clone();
+        let token = self.token.clone();
         let join_handle = tokio::spawn(async move {
-            loop {
-                sleeper.sleep(std::time::Duration::from_secs(1)).await;
-                let res = inner.accept().await;
-                if let Err(e) = res {
-                    warn!(error_message = e.to_string(), "accept failed");
+            while !token.is_cancelled() {
+                select! {
+                    _ = async {
+                        sleeper.sleep(std::time::Duration::from_secs(1)).await;
+                        let res = inner.accept().await;
+                        if let Err(e) = res {
+                            warn!(error_message = e.to_string(), "accept failed");
+                        }
+                    } => {}
+                    _ = token.cancelled() => break,
                 }
             }
         });
@@ -148,9 +158,9 @@ impl TaskAccepter {
 #[async_trait]
 impl Shutdown for TaskAccepter {
     async fn shutdown(&self) {
+        self.token.cancel();
         if let Some(join_handle) = self.join_handle.lock().await.take() {
-            join_handle.abort();
-            let _ = join_handle.fuse().await;
+            let _ = join_handle.await;
         }
     }
 }
@@ -224,6 +234,66 @@ impl Inner {
             Ok(())
         } else {
             Err(Error::new(ErrorKind::UnsupportedType).with_message(format!("Unsupported session version: {}", version.bits())))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{net::IpAddr, net::SocketAddr, sync::Arc, time::Duration};
+
+    use async_trait::async_trait;
+    use parking_lot::Mutex;
+    use rand::{
+        SeedableRng as _,
+        rngs::{ChaCha20Rng, SysRng},
+    };
+    use rand_core::UnwrapErr;
+    use testresult::TestResult;
+
+    use omnius_core_base::sleeper::FakeSleeper;
+    use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
+
+    use crate::{
+        base::{
+            connection::{ConnectionTcpAccepter, FramedStream},
+            runtime::Shutdown,
+        },
+        prelude::*,
+    };
+
+    use super::{SessionAccepter, SessionType};
+
+    #[tokio::test]
+    async fn shutdown_completes_while_waiting_for_a_connection() -> TestResult {
+        let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
+        let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
+        let session_accepter = SessionAccepter::new(Arc::new(PendingTcpAccepter), signer, Arc::new(FakeSleeper), rng, &[SessionType::NodeFinder]).await;
+
+        // 接続を待つ accept に入るまで待つ
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        assert!(tokio::time::timeout(Duration::from_secs(5), session_accepter.shutdown()).await.is_ok());
+
+        Ok(())
+    }
+
+    /// 接続が来ないまま accept を待ち続ける
+    struct PendingTcpAccepter;
+
+    #[async_trait]
+    impl Shutdown for PendingTcpAccepter {
+        async fn shutdown(&self) {}
+    }
+
+    #[async_trait]
+    impl ConnectionTcpAccepter for PendingTcpAccepter {
+        async fn accept(&self) -> Result<(FramedStream, SocketAddr)> {
+            std::future::pending().await
+        }
+
+        async fn get_global_ip_addresses(&self) -> Result<Vec<IpAddr>> {
+            Ok(vec![])
         }
     }
 }

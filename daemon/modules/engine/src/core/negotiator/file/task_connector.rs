@@ -5,13 +5,14 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::Utc;
-use futures::FutureExt;
 use parking_lot::Mutex;
 use rand::seq::SliceRandom;
 use tokio::{
+    select,
     sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc},
     task::JoinHandle,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
@@ -46,14 +47,15 @@ pub struct TaskConnector {
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     option: FileExchangerOption,
     join_handles: Arc<TokioMutex<Vec<JoinHandle<()>>>>,
+    token: CancellationToken,
 }
 
 #[async_trait]
 impl Shutdown for TaskConnector {
     async fn shutdown(&self) {
+        self.token.cancel();
         for join_handle in self.join_handles.lock().await.drain(..) {
-            join_handle.abort();
-            let _ = join_handle.fuse().await;
+            let _ = join_handle.await;
         }
     }
 }
@@ -86,6 +88,7 @@ impl TaskConnector {
             rng,
             option,
             join_handles: Arc::new(TokioMutex::new(vec![])),
+            token: CancellationToken::new(),
         });
 
         v.clone().start().await?;
@@ -97,11 +100,16 @@ impl TaskConnector {
         {
             let this = self.clone();
             let join_handle = tokio::spawn(async move {
-                loop {
-                    this.sleeper.sleep(std::time::Duration::from_secs(1)).await;
-                    let res = this.connect_for_publish().await;
-                    if let Err(e) = res {
-                        warn!(error_message = e.to_string(), "connect failed");
+                while !this.token.is_cancelled() {
+                    select! {
+                        _ = async {
+                            this.sleeper.sleep(std::time::Duration::from_secs(1)).await;
+                            let res = this.connect_for_publish().await;
+                            if let Err(e) = res {
+                                warn!(error_message = e.to_string(), "connect failed");
+                            }
+                        } => {}
+                        _ = this.token.cancelled() => break,
                     }
                 }
             });
@@ -111,11 +119,16 @@ impl TaskConnector {
         {
             let this = self.clone();
             let join_handle = tokio::spawn(async move {
-                loop {
-                    this.sleeper.sleep(std::time::Duration::from_secs(1)).await;
-                    let res = this.connect_for_subscribe().await;
-                    if let Err(e) = res {
-                        warn!(error_message = e.to_string(), "connect failed");
+                while !this.token.is_cancelled() {
+                    select! {
+                        _ = async {
+                            this.sleeper.sleep(std::time::Duration::from_secs(1)).await;
+                            let res = this.connect_for_subscribe().await;
+                            if let Err(e) = res {
+                                warn!(error_message = e.to_string(), "connect failed");
+                            }
+                        } => {}
+                        _ = this.token.cancelled() => break,
                     }
                 }
             });

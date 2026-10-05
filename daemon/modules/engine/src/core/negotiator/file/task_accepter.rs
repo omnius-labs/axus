@@ -3,9 +3,11 @@ use std::{collections::HashMap, sync::Arc};
 use async_trait::async_trait;
 use chrono::Utc;
 use tokio::{
+    select,
     sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc},
     task::JoinHandle,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
@@ -30,15 +32,14 @@ pub struct TaskAccepter {
     sleeper: Arc<dyn Sleeper + Send + Sync>,
     option: FileExchangerOption,
     join_handles: Arc<TokioMutex<Vec<JoinHandle<()>>>>,
+    token: CancellationToken,
 }
 
 #[async_trait]
 impl Shutdown for TaskAccepter {
     async fn shutdown(&self) {
+        self.token.cancel();
         let handles = std::mem::take(&mut *self.join_handles.lock().await);
-        for handle in &handles {
-            handle.abort();
-        }
         for handle in handles {
             let _ = handle.await;
         }
@@ -63,6 +64,7 @@ impl TaskAccepter {
             clock,
             option,
             join_handles: Arc::new(TokioMutex::new(vec![])),
+            token: CancellationToken::new(),
         });
 
         v.clone().start().await?;
@@ -73,11 +75,16 @@ impl TaskAccepter {
     async fn start(self: Arc<Self>) -> Result<()> {
         let this = self.clone();
         let join_handle = tokio::spawn(async move {
-            loop {
-                this.sleeper.sleep(std::time::Duration::from_secs(1)).await;
-                let res = this.accept().await;
-                if let Err(e) = res {
-                    warn!(error_message = e.to_string(), "connect failed");
+            while !this.token.is_cancelled() {
+                select! {
+                    _ = async {
+                        this.sleeper.sleep(std::time::Duration::from_secs(1)).await;
+                        let res = this.accept().await;
+                        if let Err(e) = res {
+                            warn!(error_message = e.to_string(), "connect failed");
+                        }
+                    } => {}
+                    _ = this.token.cancelled() => break,
                 }
             }
         });

@@ -4,13 +4,14 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::FutureExt;
 use parking_lot::Mutex;
 use rand::seq::SliceRandom as _;
 use tokio::{
+    select,
     sync::{Mutex as TokioMutex, RwLock as TokioRwLock},
     task::JoinHandle,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use omnius_core_base::sleeper::Sleeper;
@@ -35,14 +36,15 @@ pub struct TaskComputer {
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     option: NodeFinderOption,
     join_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
+    token: CancellationToken,
 }
 
 #[async_trait]
 impl Shutdown for TaskComputer {
     async fn shutdown(&self) {
+        self.token.cancel();
         if let Some(join_handle) = self.join_handle.lock().await.take() {
-            join_handle.abort();
-            let _ = join_handle.fuse().await;
+            let _ = join_handle.await;
         }
     }
 }
@@ -71,6 +73,7 @@ impl TaskComputer {
             rng,
             option,
             join_handle: Arc::new(TokioMutex::new(None)),
+            token: CancellationToken::new(),
         });
 
         v.clone().start().await?;
@@ -81,14 +84,24 @@ impl TaskComputer {
     async fn start(self: Arc<Self>) -> Result<()> {
         let this = self.clone();
         *self.join_handle.lock().await = Some(tokio::spawn(async move {
-            if let Err(e) = this.set_initial_node_profile().await {
-                warn!(error_message = e.to_string(), "set initial node profile failed");
+            select! {
+                res = this.set_initial_node_profile() => {
+                    if let Err(e) = res {
+                        warn!(error_message = e.to_string(), "set initial node profile failed");
+                    }
+                }
+                _ = this.token.cancelled() => {}
             }
-            loop {
-                this.sleeper.sleep(this.option.intervals.compute).await;
-                let res = this.compute().await;
-                if let Err(e) = res {
-                    warn!(error_message = e.to_string(), "compute failed");
+            while !this.token.is_cancelled() {
+                select! {
+                    _ = async {
+                        this.sleeper.sleep(this.option.intervals.compute).await;
+                        let res = this.compute().await;
+                        if let Err(e) = res {
+                            warn!(error_message = e.to_string(), "compute failed");
+                        }
+                    } => {}
+                    _ = this.token.cancelled() => break,
                 }
             }
         }));

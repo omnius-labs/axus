@@ -2,11 +2,12 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use futures::FutureExt;
 use tokio::{
+    select,
     sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc},
     task::JoinHandle,
 };
+use tokio_util::sync::CancellationToken;
 
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 
@@ -30,14 +31,15 @@ pub struct TaskAccepter {
     sleeper: Arc<dyn Sleeper + Send + Sync>,
     option: NodeFinderOption,
     join_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
+    token: CancellationToken,
 }
 
 #[async_trait]
 impl Shutdown for TaskAccepter {
     async fn shutdown(&self) {
+        self.token.cancel();
         if let Some(join_handle) = self.join_handle.lock().await.take() {
-            join_handle.abort();
-            let _ = join_handle.fuse().await;
+            let _ = join_handle.await;
         }
     }
 }
@@ -59,6 +61,7 @@ impl TaskAccepter {
             sleeper,
             option,
             join_handle: Arc::new(TokioMutex::new(None)),
+            token: CancellationToken::new(),
         });
 
         v.clone().start().await?;
@@ -69,11 +72,16 @@ impl TaskAccepter {
     async fn start(self: Arc<Self>) -> Result<()> {
         let this = self.clone();
         *self.join_handle.lock().await = Some(tokio::spawn(async move {
-            loop {
-                this.sleeper.sleep(std::time::Duration::from_secs(1)).await;
-                let res = this.accept().await;
-                if let Err(e) = res {
-                    warn!("{:?}", e);
+            while !this.token.is_cancelled() {
+                select! {
+                    _ = async {
+                        this.sleeper.sleep(std::time::Duration::from_secs(1)).await;
+                        let res = this.accept().await;
+                        if let Err(e) = res {
+                            warn!("{:?}", e);
+                        }
+                    } => {}
+                    _ = this.token.cancelled() => break,
                 }
             }
         }));

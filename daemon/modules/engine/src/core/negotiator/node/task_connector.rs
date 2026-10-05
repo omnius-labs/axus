@@ -5,13 +5,14 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::Utc;
-use futures::FutureExt;
 use parking_lot::Mutex;
 use rand::seq::IndexedRandom;
 use tokio::{
+    select,
     sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc},
     task::JoinHandle,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
@@ -42,14 +43,15 @@ pub struct TaskConnector {
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     option: NodeFinderOption,
     join_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
+    token: CancellationToken,
 }
 
 #[async_trait]
 impl Shutdown for TaskConnector {
     async fn shutdown(&self) {
+        self.token.cancel();
         if let Some(join_handle) = self.join_handle.lock().await.take() {
-            join_handle.abort();
-            let _ = join_handle.fuse().await;
+            let _ = join_handle.await;
         }
     }
 }
@@ -82,6 +84,7 @@ impl TaskConnector {
             option,
             rng,
             join_handle: Arc::new(TokioMutex::new(None)),
+            token: CancellationToken::new(),
         });
 
         v.clone().start().await?;
@@ -92,11 +95,16 @@ impl TaskConnector {
     async fn start(self: Arc<Self>) -> Result<()> {
         let this = self.clone();
         *self.join_handle.lock().await = Some(tokio::spawn(async move {
-            loop {
-                this.sleeper.sleep(this.option.intervals.connect).await;
-                let res = this.connect().await;
-                if let Err(e) = res {
-                    warn!(error_message = e.to_string(), "connect failed");
+            while !this.token.is_cancelled() {
+                select! {
+                    _ = async {
+                        this.sleeper.sleep(this.option.intervals.connect).await;
+                        let res = this.connect().await;
+                        if let Err(e) = res {
+                            warn!(error_message = e.to_string(), "connect failed");
+                        }
+                    } => {}
+                    _ = this.token.cancelled() => break,
                 }
             }
         }));

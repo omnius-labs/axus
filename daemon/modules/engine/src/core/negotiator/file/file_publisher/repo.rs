@@ -27,7 +27,11 @@ impl FilePublisherRepo {
             .filename(path)
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .synchronous(sqlx::sqlite::SqliteSynchronous::Full)
             .busy_timeout(std::time::Duration::from_secs(10));
+
+        #[cfg(target_os = "macos")]
+        let options = options.pragma("fullfsync", "ON");
 
         let db = Arc::new(SqlitePool::connect_with(options).await?);
         Self::migrate(&db).await?;
@@ -722,6 +726,29 @@ mod tests {
     };
 
     use super::FilePublisherRepo;
+
+    #[tokio::test]
+    async fn connections_use_durable_pragmas() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (repo, _) = create_repo(dir.path()).await?;
+        // 同時に確保して、pool が新しく開く connection も確認する。
+        let mut connections = Vec::new();
+        for _ in 0..3 {
+            connections.push(repo.db.acquire().await?);
+        }
+        for connection in &mut connections {
+            let mode: String = sqlx::query_scalar("PRAGMA journal_mode").fetch_one(&mut **connection).await?;
+            let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous").fetch_one(&mut **connection).await?;
+            assert_eq!(mode, "wal");
+            assert_eq!(synchronous, 2);
+            #[cfg(target_os = "macos")]
+            {
+                let fullfsync: i64 = sqlx::query_scalar("PRAGMA fullfsync").fetch_one(&mut **connection).await?;
+                assert_eq!(fullfsync, 1);
+            }
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn uncommitted_queries_round_trip() -> TestResult {

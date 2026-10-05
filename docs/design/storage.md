@@ -266,8 +266,13 @@ publisher と subscriber は Store の open の中で、次に示す block の�
 publisher は uncommitted の key と参照のない committed の key を消し、Processing を Pending に戻す。
 subscriber は購読から参照されない root hash の key を消す。
 
-§4.2 の同期条件、§4.3 の 1 transaction での rename と稼働中の sweep、§4.5 の一時出力、出力先の一意制約、置換しない rename による確定と回復は未実装である。
+RocksDB の全書き込みは WAL を有効にした `sync=true` で行う。
+NodeFinder、publisher、subscriber の各 SQLite connection に WAL と `synchronous=FULL` を明示し、macOS では `fullfsync=ON` を指定している。
+購読 block は RocksDB の同期後に SQLite の downloaded と進捗を永続化する。
+
+§4.2 の出力 file と directory entry の同期、§4.3 の 1 transaction での rename と稼働中の sweep、§4.5 の一時出力、出力先の一意制約、置換しない rename による確定と回復は未実装である。
 現状の起動時回復は block の orphan 回収までである。
 これらの手順の検証には、状態遷移の境界ごとの強制終了と、Linux、macOS、Windows での同期条件の確認が必要である。
-macOS の RocksDB に `HAVE_FULLFSYNC` を与える build 設定もなく、設定が RocksDB の build に反映されることの確認も残っている。
+macOS の RocksDB には target 別の `CXXFLAGS` で `HAVE_FULLFSYNC` を与え、aarch64-apple-darwin の生成 object に `fcntl(F_FULLFSYNC)` の分岐が含まれることを確認した。
+x86_64-apple-darwin の build、Linux と Windows の同期条件、電源断の実機試験は未確認である。
 確認済みの不具合は [issues.md](../issues.md) を参照する。

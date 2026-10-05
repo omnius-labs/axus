@@ -1,13 +1,10 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use futures::future::join_all;
 use parking_lot::Mutex;
-use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc};
+use tokio::sync::{Mutex as TokioMutex, mpsc};
 
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 
@@ -38,7 +35,7 @@ pub struct NodeFinder {
 
     session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
     session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
-    sessions: Arc<TokioRwLock<HashMap<Vec<u8>, Arc<SessionStatus>>>>,
+    sessions: Arc<SessionRegistry>,
     connected_node_profiles: Arc<Mutex<VolatileHashSet<NodeProfile>>>,
     connecting_ids: Arc<Mutex<HashSet<Vec<u8>>>>,
     get_want_asset_keys_fn: Arc<FnHub<Vec<AssetKey>, ()>>,
@@ -104,7 +101,7 @@ impl NodeFinder {
 
             session_receiver: Arc::new(TokioMutex::new(rx)),
             session_sender: Arc::new(TokioMutex::new(tx)),
-            sessions: Arc::new(TokioRwLock::new(HashMap::new())),
+            sessions: Arc::new(SessionRegistry::new()),
             connected_node_profiles: Arc::new(Mutex::new(VolatileHashSet::new(Duration::seconds(180), clock))),
             connecting_ids: Arc::new(Mutex::new(HashSet::new())),
             get_want_asset_keys_fn: Arc::new(FnHub::new()),
@@ -122,7 +119,7 @@ impl NodeFinder {
 
     #[allow(unused)]
     pub async fn get_session_count(&self) -> usize {
-        self.sessions.read().await.len()
+        self.sessions.len().await
     }
 
     #[allow(unused)]
@@ -209,8 +206,7 @@ impl NodeFinder {
     pub async fn find_node_profile(&self, key: &AssetKey) -> Result<Vec<Arc<NodeProfile>>> {
         let mut results: Vec<Arc<NodeProfile>> = Vec::new();
 
-        let sessions = self.sessions.read().await;
-        for status in sessions.values() {
+        for (_, status) in self.sessions.statuses().await {
             let received_data_message = status.received_data_message.lock();
             if let Some(node_profiles) = received_data_message.give_asset_key_locations.get(key) {
                 results.extend(node_profiles.clone());

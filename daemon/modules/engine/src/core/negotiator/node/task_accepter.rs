@@ -1,10 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
 use tokio::{
     select,
-    sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc},
+    sync::{Mutex as TokioMutex, mpsc},
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
@@ -24,7 +24,7 @@ use super::*;
 
 #[derive(Clone)]
 pub struct TaskAccepter {
-    sessions: Arc<TokioRwLock<HashMap<Vec<u8>, Arc<SessionStatus>>>>,
+    sessions: Arc<SessionRegistry>,
     session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
     session_accepter: Arc<SessionAccepter>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
@@ -46,7 +46,7 @@ impl Shutdown for TaskAccepter {
 
 impl TaskAccepter {
     pub async fn new(
-        sessions: Arc<TokioRwLock<HashMap<Vec<u8>, Arc<SessionStatus>>>>,
+        sessions: Arc<SessionRegistry>,
         session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
         session_accepter: Arc<SessionAccepter>,
         clock: Arc<dyn Clock<Utc> + Send + Sync>,
@@ -90,13 +90,7 @@ impl TaskAccepter {
     }
 
     async fn accept(&self) -> Result<()> {
-        let session_count = self
-            .sessions
-            .read()
-            .await
-            .iter()
-            .filter(|(_, status)| status.session.handshake_type == SessionHandshakeType::Accepted)
-            .count();
+        let session_count = self.sessions.count_by_handshake_type(&SessionHandshakeType::Accepted).await;
         if session_count >= self.option.max_accepted_session_count {
             return Ok(());
         }

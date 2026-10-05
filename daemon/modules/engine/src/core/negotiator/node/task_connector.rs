@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -9,7 +6,7 @@ use parking_lot::Mutex;
 use rand::seq::IndexedRandom;
 use tokio::{
     select,
-    sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc},
+    sync::{Mutex as TokioMutex, mpsc},
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
@@ -32,7 +29,7 @@ use super::*;
 #[derive(Clone)]
 pub struct TaskConnector {
     my_node_profile: Arc<Mutex<NodeProfile>>,
-    sessions: Arc<TokioRwLock<HashMap<Vec<u8>, Arc<SessionStatus>>>>,
+    sessions: Arc<SessionRegistry>,
     session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
     session_connector: Arc<SessionConnector>,
     connected_node_profiles: Arc<Mutex<VolatileHashSet<NodeProfile>>>,
@@ -60,7 +57,7 @@ impl TaskConnector {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         my_node_profile: Arc<Mutex<NodeProfile>>,
-        sessions: Arc<TokioRwLock<HashMap<Vec<u8>, Arc<SessionStatus>>>>,
+        sessions: Arc<SessionRegistry>,
         session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
         session_connector: Arc<SessionConnector>,
         connected_node_profiles: Arc<Mutex<VolatileHashSet<NodeProfile>>>,
@@ -113,13 +110,7 @@ impl TaskConnector {
     }
 
     async fn connect(&self) -> Result<()> {
-        let session_count = self
-            .sessions
-            .read()
-            .await
-            .iter()
-            .filter(|(_, status)| status.session.handshake_type == SessionHandshakeType::Connected)
-            .count();
+        let session_count = self.sessions.count_by_handshake_type(&SessionHandshakeType::Connected).await;
         if session_count >= self.option.max_connected_session_count {
             return Ok(());
         }
@@ -128,7 +119,7 @@ impl TaskConnector {
 
         let excluded_ids: HashSet<Vec<u8>> = {
             let v1: Vec<Vec<u8>> = self.connected_node_profiles.lock().iter().map(|n| n.id().to_vec()).collect();
-            let v2: Vec<Vec<u8>> = self.sessions.read().await.iter().map(|n| n.0.to_owned()).collect();
+            let v2: Vec<Vec<u8>> = self.sessions.ids().await;
             let my_id = self.my_node_profile.lock().id().to_vec();
             v1.into_iter().chain(v2).chain([my_id]).collect()
         };
@@ -184,11 +175,7 @@ impl TaskConnector {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{HashMap, HashSet},
-        sync::Arc,
-        time::Duration,
-    };
+    use std::{collections::HashSet, sync::Arc, time::Duration};
 
     use async_trait::async_trait;
     use chrono::Utc;
@@ -199,7 +186,7 @@ mod tests {
     };
     use rand_core::UnwrapErr;
     use testresult::TestResult;
-    use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc};
+    use tokio::sync::{Mutex as TokioMutex, mpsc};
 
     use omnius_core_base::{
         clock::{Clock, ClockUtc},
@@ -219,7 +206,7 @@ mod tests {
         prelude::*,
     };
 
-    use super::{NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, TaskConnector};
+    use super::{NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, SessionRegistry, TaskConnector};
 
     #[tokio::test]
     async fn connect_skips_own_node_profile() -> TestResult {
@@ -298,7 +285,7 @@ mod tests {
 
         TaskConnector::new(
             Arc::new(Mutex::new(my_node_profile.clone())),
-            Arc::new(TokioRwLock::new(HashMap::new())),
+            Arc::new(SessionRegistry::new()),
             Arc::new(TokioMutex::new(session_sender)),
             Arc::new(SessionConnector::new(tcp_connector, signer, rng.clone())),
             Arc::new(Mutex::new(VolatileHashSet::new(chrono::Duration::seconds(180), clock.clone()))),

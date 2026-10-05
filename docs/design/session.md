@@ -69,7 +69,8 @@ version 交渉は、双方が共通して対応する手順だけを選ばなけ
 用途間の多重化を session 層に持ち込まないため、上位 protocol は自分の message だけを処理する。
 
 [Shutdown](../../daemon/modules/engine/src/base/runtime/shutdown.rs) は、所有する下位 component を順に停止するための共通 contract である。
-worker は cancellation token または join handle を通じて停止し、所有者の寿命を越えて残らない。
+worker は cancellation token の cancel で自ら終了し、shutdown はその join handle の終了を待つ。
+`abort` で future を外から打ち切らないため、worker は所有者の寿命を越えて残らず、終了時の後始末も必ず通る。
 
 ## 5. 設計判断
 

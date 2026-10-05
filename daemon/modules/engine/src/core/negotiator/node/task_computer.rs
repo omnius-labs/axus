@@ -4,13 +4,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::FutureExt;
 use parking_lot::Mutex;
 use rand::seq::SliceRandom as _;
-use tokio::{
-    sync::{Mutex as TokioMutex, RwLock as TokioRwLock},
-    task::JoinHandle,
-};
+use tokio::{select, sync::Mutex as TokioMutex, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use omnius_core_base::sleeper::Sleeper;
@@ -28,21 +25,22 @@ pub struct TaskComputer {
     my_node_profile: Arc<Mutex<NodeProfile>>,
     node_profile_repo: Arc<NodeFinderRepo>,
     node_profile_fetcher: Arc<dyn NodeProfileFetcher + Send + Sync>,
-    sessions: Arc<TokioRwLock<HashMap<Vec<u8>, Arc<SessionStatus>>>>,
+    sessions: Arc<SessionRegistry>,
     get_want_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
     get_push_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     option: NodeFinderOption,
     join_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
+    token: CancellationToken,
 }
 
 #[async_trait]
 impl Shutdown for TaskComputer {
     async fn shutdown(&self) {
+        self.token.cancel();
         if let Some(join_handle) = self.join_handle.lock().await.take() {
-            join_handle.abort();
-            let _ = join_handle.fuse().await;
+            let _ = join_handle.await;
         }
     }
 }
@@ -53,7 +51,7 @@ impl TaskComputer {
         my_node_profile: Arc<Mutex<NodeProfile>>,
         node_profile_repo: Arc<NodeFinderRepo>,
         node_profile_fetcher: Arc<dyn NodeProfileFetcher + Send + Sync>,
-        sessions: Arc<TokioRwLock<HashMap<Vec<u8>, Arc<SessionStatus>>>>,
+        sessions: Arc<SessionRegistry>,
         get_want_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
         get_push_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
@@ -71,6 +69,7 @@ impl TaskComputer {
             rng,
             option,
             join_handle: Arc::new(TokioMutex::new(None)),
+            token: CancellationToken::new(),
         });
 
         v.clone().start().await?;
@@ -81,14 +80,24 @@ impl TaskComputer {
     async fn start(self: Arc<Self>) -> Result<()> {
         let this = self.clone();
         *self.join_handle.lock().await = Some(tokio::spawn(async move {
-            if let Err(e) = this.set_initial_node_profile().await {
-                warn!(error_message = e.to_string(), "set initial node profile failed");
+            select! {
+                res = this.set_initial_node_profile() => {
+                    if let Err(e) = res {
+                        warn!(error_message = e.to_string(), "set initial node profile failed");
+                    }
+                }
+                _ = this.token.cancelled() => {}
             }
-            loop {
-                this.sleeper.sleep(this.option.intervals.compute).await;
-                let res = this.compute().await;
-                if let Err(e) = res {
-                    warn!(error_message = e.to_string(), "compute failed");
+            while !this.token.is_cancelled() {
+                select! {
+                    _ = async {
+                        this.sleeper.sleep(this.option.intervals.compute).await;
+                        let res = this.compute().await;
+                        if let Err(e) = res {
+                            warn!(error_message = e.to_string(), "compute failed");
+                        }
+                    } => {}
+                    _ = this.token.cancelled() => break,
                 }
             }
         }));
@@ -119,31 +128,26 @@ impl TaskComputer {
         let my_get_push_asset_keys: HashSet<Arc<AssetKey>> = self.get_push_asset_keys_fn.call(&()).into_iter().flatten().map(Arc::new).collect();
 
         let mut received_data_map: HashMap<Vec<u8>, ReceivedTempDataMessage> = HashMap::new();
-        {
-            let sessions = self.sessions.read().await;
-            for (id, status) in sessions.iter() {
-                let data = status.received_data_message.lock();
+        for (id, status) in self.sessions.statuses().await {
+            let data = status.received_data_message.lock();
 
-                let mut want_asset_keys: Vec<Arc<AssetKey>> = data.want_asset_keys.iter().cloned().collect();
-                let mut give_asset_key_locations: Vec<(Arc<AssetKey>, Vec<Arc<NodeProfile>>)> =
-                    data.give_asset_key_locations.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect();
-                let mut push_asset_key_locations: Vec<(Arc<AssetKey>, Vec<Arc<NodeProfile>>)> =
-                    data.push_asset_key_locations.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect();
+            let mut want_asset_keys: Vec<Arc<AssetKey>> = data.want_asset_keys.iter().cloned().collect();
+            let mut give_asset_key_locations: Vec<(Arc<AssetKey>, Vec<Arc<NodeProfile>>)> = data.give_asset_key_locations.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect();
+            let mut push_asset_key_locations: Vec<(Arc<AssetKey>, Vec<Arc<NodeProfile>>)> = data.push_asset_key_locations.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect();
 
-                {
-                    let mut rng = self.rng.lock();
-                    want_asset_keys.shuffle(&mut rng);
-                    give_asset_key_locations.shuffle(&mut rng);
-                    push_asset_key_locations.shuffle(&mut rng);
-                }
-
-                let tmp = ReceivedTempDataMessage {
-                    want_asset_keys,
-                    give_asset_key_locations,
-                    push_asset_key_locations,
-                };
-                received_data_map.insert(id.clone(), tmp);
+            {
+                let mut rng = self.rng.lock();
+                want_asset_keys.shuffle(&mut rng);
+                give_asset_key_locations.shuffle(&mut rng);
+                push_asset_key_locations.shuffle(&mut rng);
             }
+
+            let tmp = ReceivedTempDataMessage {
+                want_asset_keys,
+                give_asset_key_locations,
+                push_asset_key_locations,
+            };
+            received_data_map.insert(id, tmp);
         }
 
         let ids: Vec<&[u8]> = received_data_map.keys().map(|n| n.as_slice()).collect();
@@ -248,12 +252,9 @@ impl TaskComputer {
         }
 
         // Session毎に送信用データを格納する
-        {
-            let mut sessions = self.sessions.write().await;
-            for (id, status) in sessions.iter_mut() {
-                if let Some(data_message) = sending_data_map.remove(id) {
-                    *status.sending_data_message.lock() = data_message;
-                }
+        for (id, status) in self.sessions.statuses().await {
+            if let Some(data_message) = sending_data_map.remove(&id) {
+                *status.sending_data_message.lock() = data_message;
             }
         }
 

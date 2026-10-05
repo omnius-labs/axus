@@ -2,11 +2,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use enumflags2::{BitFlags, make_bitflags};
-use futures::FutureExt;
 use parking_lot::Mutex;
 use tokio::{
     select,
-    sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc},
+    sync::{Mutex as TokioMutex, mpsc},
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
@@ -18,7 +17,7 @@ use crate::{
         connection::{FramedRecvExt as _, FramedSendExt as _},
         runtime::Shutdown,
     },
-    core::session::model::{Session, SessionHandshakeType},
+    core::session::model::Session,
     model::{AssetKey, NodeProfile},
     prelude::*,
 };
@@ -28,7 +27,7 @@ use super::*;
 #[derive(Clone)]
 pub struct TaskCommunicator {
     my_node_profile: Arc<Mutex<NodeProfile>>,
-    sessions: Arc<TokioRwLock<HashMap<Vec<u8>, Arc<SessionStatus>>>>,
+    sessions: Arc<SessionRegistry>,
     node_profile_repo: Arc<NodeFinderRepo>,
     session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
@@ -41,16 +40,14 @@ pub struct TaskCommunicator {
 #[async_trait]
 impl Shutdown for TaskCommunicator {
     async fn shutdown(&self) {
-        if let Some(join_handle) = self.join_handle.lock().await.take() {
-            join_handle.abort();
-            let _ = join_handle.fuse().await;
-        }
-
         self.cancellation_token.cancel();
 
+        if let Some(join_handle) = self.join_handle.lock().await.take() {
+            let _ = join_handle.await;
+        }
+
         for join_handle in self.communicate_join_handles.lock().await.drain(..) {
-            join_handle.abort();
-            let _ = join_handle.fuse().await;
+            let _ = join_handle.await;
         }
     }
 }
@@ -58,7 +55,7 @@ impl Shutdown for TaskCommunicator {
 impl TaskCommunicator {
     pub async fn new(
         my_node_profile: Arc<Mutex<NodeProfile>>,
-        sessions: Arc<TokioRwLock<HashMap<Vec<u8>, Arc<SessionStatus>>>>,
+        sessions: Arc<SessionRegistry>,
         node_profile_repo: Arc<NodeFinderRepo>,
         session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
@@ -86,11 +83,15 @@ impl TaskCommunicator {
     async fn start(self: Arc<Self>) -> Result<()> {
         let this = self.clone();
         *self.join_handle.lock().await = Some(tokio::spawn(async move {
-            loop {
+            while !this.cancellation_token.is_cancelled() {
                 // 終了済みのタスクを削除
                 this.communicate_join_handles.lock().await.retain(|join_handle| !join_handle.is_finished());
 
-                if let Some(status) = this.session_receiver.lock().await.recv().await {
+                let status = select! {
+                    status = async { this.session_receiver.lock().await.recv().await } => status,
+                    _ = this.cancellation_token.cancelled() => break,
+                };
+                if let Some(status) = status {
                     let communicator = this.clone();
                     let join_handle = tokio::spawn(async move {
                         let res = communicator.communicate(status).await;
@@ -108,30 +109,20 @@ impl TaskCommunicator {
 
     async fn communicate(self: Arc<Self>, status: SessionStatus) -> Result<()> {
         let my_node_profile = self.my_node_profile.lock().clone();
-        let other_node_profile = Self::handshake(&status.session, &my_node_profile).await?;
+        // 登録前なので、cancel されたら後始末なしで終える
+        let other_node_profile = select! {
+            res = Self::handshake(&status.session, &my_node_profile) => res?,
+            _ = self.cancellation_token.cancelled() => return Ok(()),
+        };
 
         *status.node_profile.lock() = Some(other_node_profile.clone());
 
         let status = Arc::new(status);
 
-        let replaced = {
-            let mut sessions = self.sessions.write().await;
-            if let Some(existing) = sessions.get(other_node_profile.id())
-                && Self::keeps_existing_session(
-                    my_node_profile.id(),
-                    other_node_profile.id(),
-                    &existing.session.handshake_type,
-                    &status.session.handshake_type,
-                )
-            {
-                return Err(Error::new(ErrorKind::AlreadyExists).with_message("Session already exists"));
-            }
-            sessions.insert(other_node_profile.id().to_vec(), status.clone())
-        };
-
-        if let Some(replaced) = replaced {
-            replaced.cancellation_token.cancel();
-            info!(node_profile = other_node_profile.to_string(), "Session replaced");
+        match self.sessions.register(my_node_profile.id(), other_node_profile.id(), &status).await {
+            Registration::Added => {}
+            Registration::Replaced => info!(node_profile = other_node_profile.to_string(), "Session replaced"),
+            Registration::Rejected => return Err(Error::new(ErrorKind::AlreadyExists).with_message("Session already exists")),
         }
 
         info!(node_profile = other_node_profile.to_string(), "Session established");
@@ -142,26 +133,9 @@ impl TaskCommunicator {
 
         info!(node_profile = other_node_profile.to_string(), "Session closed");
 
-        // 入れ替えで後から登録された Session を消さないよう、自分が登録した Session のときだけ消す
-        {
-            let mut sessions = self.sessions.write().await;
-            if sessions.get(other_node_profile.id()).is_some_and(|current| Arc::ptr_eq(current, &status)) {
-                sessions.remove(other_node_profile.id());
-            }
-        }
+        self.sessions.unregister(other_node_profile.id(), &status).await;
 
         Ok(())
-    }
-
-    /// 同じ相手との Session が重複したとき、既存の Session を残すかどうかを返す。
-    /// node ID が小さい側から張った Session を残す規則にすると、両側が追加の message なしに同じ Session を選ぶ。
-    fn keeps_existing_session(my_id: &[u8], other_id: &[u8], existing: &SessionHandshakeType, new: &SessionHandshakeType) -> bool {
-        let preferred = if my_id < other_id {
-            SessionHandshakeType::Connected
-        } else {
-            SessionHandshakeType::Accepted
-        };
-        *existing == preferred || *new != preferred
     }
 
     pub async fn handshake(session: &Session, node_profile: &NodeProfile) -> Result<NodeProfile> {
@@ -508,20 +482,86 @@ impl RocketPackStruct for DataMessage {
 
 #[cfg(test)]
 mod tests {
-    use enumflags2::{BitFlags, make_bitflags};
-    use testresult::TestResult;
+    use std::{collections::HashMap, sync::Arc, time::Duration};
 
+    use chrono::Utc;
+    use enumflags2::{BitFlags, make_bitflags};
+    use parking_lot::Mutex;
+    use testresult::TestResult;
+    use tokio::sync::{Mutex as TokioMutex, mpsc};
+
+    use omnius_core_base::{
+        clock::{Clock, ClockUtc},
+        sleeper::SleeperImpl,
+    };
     use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
     use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
     use crate::{
-        base::connection::{FramedRecvExt as _, FramedSendExt as _, FramedStream},
+        base::{
+            connection::{FramedRecvExt as _, FramedSendExt as _, FramedStream},
+            runtime::Shutdown as _,
+        },
         core::session::model::{Session, SessionHandshakeType, SessionType},
         model::NodeProfile,
         prelude::*,
     };
 
-    use super::{HelloMessage, NodeFinderVersion, ProfileMessage, TaskCommunicator};
+    use super::{HelloMessage, NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, NodeFinderVersion, ProfileMessage, SessionRegistry, SessionStatus, TaskCommunicator};
+
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+    #[tokio::test]
+    async fn shutdown_completes_while_waiting_for_a_session() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (task, _session_sender) = create_task_communicator(dir.path().to_str().unwrap(), Arc::new(SessionRegistry::new())).await?;
+
+        assert!(tokio::time::timeout(SHUTDOWN_TIMEOUT, task.shutdown()).await.is_ok());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shutdown_completes_during_handshake() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let sessions = Arc::new(SessionRegistry::new());
+        let (task, session_sender) = create_task_communicator(dir.path().to_str().unwrap(), sessions.clone()).await?;
+
+        // 相手が応答しないので、handshake の待機に入ったまま止まる
+        let (session, _peer, _) = session_pair()?;
+        session_sender.send(SessionStatus::new(session, Arc::new(ClockUtc))).await?;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        assert!(tokio::time::timeout(SHUTDOWN_TIMEOUT, task.shutdown()).await.is_ok());
+        assert_eq!(sessions.len().await, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shutdown_removes_the_registered_session() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let sessions = Arc::new(SessionRegistry::new());
+        let (task, session_sender) = create_task_communicator(dir.path().to_str().unwrap(), sessions.clone()).await?;
+
+        // peer を保持し続けることで、Session は相手の切断では終わらず shutdown まで残る
+        let (session, peer, peer_node_profile) = session_pair()?;
+        let peer_task = tokio::spawn(answer_handshake(peer.clone(), peer_node_profile));
+        session_sender.send(SessionStatus::new(session, Arc::new(ClockUtc))).await?;
+        peer_task.await??;
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
+            while sessions.len().await == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+
+        assert!(tokio::time::timeout(SHUTDOWN_TIMEOUT, task.shutdown()).await.is_ok());
+        assert_eq!(sessions.len().await, 0);
+        drop(peer);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn handshake_succeeds_with_common_version() -> TestResult {
@@ -579,24 +619,26 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn both_nodes_keep_the_session_dialed_by_the_smaller_id() {
-        use SessionHandshakeType::{Accepted, Connected};
+    async fn create_task_communicator(state_dir: &str, sessions: Arc<SessionRegistry>) -> Result<(Arc<TaskCommunicator>, mpsc::Sender<SessionStatus>)> {
+        let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
+        let (session_sender, session_receiver) = mpsc::channel(20);
 
-        let small: &[u8] = &[1];
-        let large: &[u8] = &[2];
+        let task = TaskCommunicator::new(
+            Arc::new(Mutex::new(node_profile("me"))),
+            sessions,
+            Arc::new(NodeFinderRepo::new(state_dir, clock).await?),
+            Arc::new(TokioMutex::new(session_receiver)),
+            Arc::new(SleeperImpl),
+            NodeFinderOption {
+                state_dir: state_dir.to_string(),
+                max_connected_session_count: 3,
+                max_accepted_session_count: 3,
+                intervals: NodeFinderIntervals::default(),
+            },
+        )
+        .await?;
 
-        // 小さい ID の側が張った接続を X、大きい ID の側が張った接続を Y とすると、
-        // 小さい側では X が Connected、Y が Accepted に、大きい側では X が Accepted、Y が Connected に見える
-        for (my_id, other_id, x, y) in [(small, large, Connected, Accepted), (large, small, Accepted, Connected)] {
-            // X が先に登録された場合は X を残し、Y が先に登録された場合は X に入れ替える
-            assert!(TaskCommunicator::keeps_existing_session(my_id, other_id, &x, &y));
-            assert!(!TaskCommunicator::keeps_existing_session(my_id, other_id, &y, &x));
-        }
-
-        // 同じ方向の接続が重複した場合は、既存の Session を残す
-        assert!(TaskCommunicator::keeps_existing_session(small, large, &Accepted, &Accepted));
-        assert!(TaskCommunicator::keeps_existing_session(large, small, &Connected, &Connected));
+        Ok((task, session_sender))
     }
 
     async fn answer_handshake(peer: FramedStream, node_profile: NodeProfile) -> Result<()> {

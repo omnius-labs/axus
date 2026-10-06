@@ -29,6 +29,7 @@
 | [購読の復号が既存出力を上書きし、中断時に削除する](./issues/subscriber-overwrites-existing-output.md) | 高 | 2026-10-04 | - |
 | [受信 message の大きさが認証前から 64 MiB まで通る](./issues/unbounded-message-sizes.md) | 中 | 2026-09-25 | - |
 | [file の metadata 確定前に実体の電源断耐久性を確保していない](./issues/file-storage-durability-boundary.md) | 中 | 2026-10-04 | - |
+| [異常終了した daemon の lock file が残り、再起動できなくなる](./issues/daemon-lock-survives-abnormal-exit.md) | 中 | 2026-10-06 | - |
 | [公開 commit の途中失敗で移動済み block が稼働中に回収されない](./issues/publisher-partial-commit-cleanup.md) | 低 | 2026-10-04 | - |
 | [アドレスが変わった node が既知 node に重複して残る](./issues/node-profile-rows-keyed-by-uri.md) | 低 | 2026-09-24 | - |
 

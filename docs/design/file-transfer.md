@@ -375,13 +375,16 @@ Task の状態遷移と失敗の記録は期待する状態を条件に更新し
 Task は子 CancellationToken で実行中の処理を取り消し、shutdown は worker の終了を待つ。
 
 入口には cancel と remove がある。
-公開側は commit と cancel で uncommitted file を消す。Failed の同じ path と file 名への import は既存の行と一時 ID を Pending に戻して使い回しており、§4.1 の新しい一時 ID による置き換えは未実装である。
+公開側は commit と cancel で uncommitted file を消す。
+Failed の同じ path と file 名への import は、SQLite の 1 transaction で古い行を消し、新しい一時 ID の Pending の行を作る。
+古い試行の block の回収が遅れても、新しい試行の block を消さない。
 購読側は同じ root hash の購読を許し、共有 block の進捗をすべての Downloading の購読へ反映する。
 取得済みの block が揃っていれば受信を待たずに次の layer を復号し、相手を探す root hash は Downloading のものだけを返す。
 Completed の出力 file は remove でも残す。
 
 §4.2 の一時出力、出力先予約、Finalizing とその回復は未実装である。
-§2 の稼働中の sweep も未実装であり、失敗した試行の block は起動時の回収まで残る。
+公開側は §2 の稼働中の sweep を行い、失敗した回収を TaskEncoder が間隔を延ばしながら再試行する。
+購読側の稼働中の block と一時出力の sweep は未実装である。
 永続化の残作業は [storage.md §6](./storage.md#6-現状と残作業) に集約する。
 
 FileExchanger には接続と受理の task はあるが、block 要求と応答の message および送受信 loop がない。

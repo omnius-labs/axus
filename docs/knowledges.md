@@ -25,7 +25,7 @@ Axus の設計判断と実装状況は設計文書、コードの不具合は is
 
 | 項目 | 検証対象 | 出所 | 最終確認日 |
 | --- | --- | --- | --- |
-| [RocksDB の電源断耐久性は sync 指定と build 時の定義に依存する](./knowledges/rocksdb-write-durability.md) | rocksdb 0.24.0 / librocksdb-sys 0.17.3+10.4.2 | 文献のみ | 2026-10-04 |
+| [RocksDB の電源断耐久性は sync 指定と build 時の定義に依存する](./knowledges/rocksdb-write-durability.md) | rocksdb 0.24.0 / librocksdb-sys 0.17.3+10.4.2 / cc 1.2.56 | 検証済み | 2026-10-06 |
 | [SQLite の WAL の電源断耐久性は同期条件に依存する](./knowledges/sqlite-wal-durability.md) | SQLx 0.9.0 / libsqlite3-sys 0.30.1 / bundled SQLite 3.46.0 | 文献のみ | 2026-10-04 |
 | [file の I/O 完了だけでは内容と directory entry の永続化は揃わない](./knowledges/filesystem-sync-durability.md) | Tokio 1.52.3 / Rust std 1.96.0 / Linux man-pages 6.19 / Apple fsync(2) archived manual | 文献のみ | 2026-10-04 |
 | [置換しない rename は OS ごとに別の API で提供される](./knowledges/filesystem-output-publication.md) | Linux man-pages 6.19 / macOS 26.6.2 rename(2) / Microsoft Learn MoveFileExW / Rust std 1.96.0 | 文献のみ | 2026-10-04 |

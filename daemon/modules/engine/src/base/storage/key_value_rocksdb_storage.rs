@@ -9,9 +9,18 @@ use crate::prelude::*;
 pub struct KeyValueRocksdbStorage {
     db: Arc<rocksdb::TransactionDB<rocksdb::MultiThreaded>>,
     tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>>,
+    #[cfg(test)]
+    db_options: rocksdb::Options,
 }
 
 impl KeyValueRocksdbStorage {
+    fn write_options() -> rocksdb::WriteOptions {
+        let mut options = rocksdb::WriteOptions::default();
+        options.set_sync(true);
+        options.disable_wal(false);
+        options
+    }
+
     #[allow(unused)]
     pub async fn new<P: AsRef<Path>>(state_dir: P, tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>>) -> Result<Self> {
         tokio::fs::create_dir_all(&state_dir).await?;
@@ -20,6 +29,8 @@ impl KeyValueRocksdbStorage {
         db_opts.create_if_missing(true);
         db_opts.create_missing_column_families(true);
         db_opts.set_atomic_flush(true);
+        #[cfg(test)]
+        db_opts.enable_statistics();
 
         let names_opts = rocksdb::Options::default();
 
@@ -41,7 +52,12 @@ impl KeyValueRocksdbStorage {
 
         let db = Arc::new(rocksdb::TransactionDB::open_cf_descriptors(&db_opts, &txn_db_opts, state_dir, cfs)?);
 
-        Ok(Self { db, tsid_provider })
+        Ok(Self {
+            db,
+            tsid_provider,
+            #[cfg(test)]
+            db_options: db_opts,
+        })
     }
 
     #[allow(unused)]
@@ -55,7 +71,7 @@ impl KeyValueRocksdbStorage {
         let db = self.db.clone();
 
         tokio::task::spawn_blocking(move || {
-            let txn = db.transaction();
+            let txn = db.transaction_opt(&Self::write_options(), &rocksdb::TransactionOptions::default());
 
             let cf_names = db.cf_handle("names").expect("missing CF");
             let cf_blocks = db.cf_handle("blocks").expect("missing CF");
@@ -92,6 +108,47 @@ impl KeyValueRocksdbStorage {
 
             txn.commit()?;
 
+            Ok(())
+        })
+        .await?
+    }
+
+    pub async fn rename_keys<K>(&self, renames: &[(K, K)], deletions: &[K]) -> Result<()>
+    where
+        K: AsRef<[u8]>,
+    {
+        let renames: Vec<_> = renames.iter().map(|(old, new)| (old.as_ref().to_vec(), new.as_ref().to_vec())).collect();
+        let deletions: Vec<_> = deletions.iter().map(|key| key.as_ref().to_vec()).collect();
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let cf_names = db.cf_handle("names").expect("missing CF");
+            let cf_blocks = db.cf_handle("blocks").expect("missing CF");
+            let cf_metas = db.cf_handle("metas").expect("missing CF");
+            let txn = db.transaction_opt(&Self::write_options(), &rocksdb::TransactionOptions::default());
+
+            // 単一 key の rename と同じ順で lock し、削除と移動をまとめて確定する。
+            let mut names: Vec<_> = renames.iter().flat_map(|(old, new)| [old, new]).chain(deletions.iter()).collect();
+            names.sort();
+            names.dedup();
+            for name in names {
+                txn.get_for_update_cf(&cf_names, name, true)?;
+            }
+            for name in deletions {
+                if let Some(id) = txn.get_cf(&cf_names, &name)? {
+                    txn.delete_cf(&cf_names, name)?;
+                    txn.delete_cf(&cf_blocks, &id)?;
+                    txn.delete_cf(&cf_metas, &id)?;
+                }
+            }
+            for (old, new) in renames {
+                let id = txn.get_cf(&cf_names, &old)?.ok_or_else(|| Error::new(ErrorKind::NotFound))?;
+                if txn.get_cf(&cf_names, &new)?.is_some() {
+                    return Err(Error::new(ErrorKind::AlreadyExists));
+                }
+                txn.put_cf(&cf_names, new, id)?;
+                txn.delete_cf(&cf_names, old)?;
+            }
+            txn.commit()?;
             Ok(())
         })
         .await?
@@ -138,7 +195,7 @@ impl KeyValueRocksdbStorage {
             let cf_blocks = db.cf_handle("blocks").expect("missing CF");
             let cf_metas = db.cf_handle("metas").expect("missing CF");
 
-            let txn = db.transaction();
+            let txn = db.transaction_opt(&Self::write_options(), &rocksdb::TransactionOptions::default());
 
             if !overwrite {
                 let id = match txn.get_cf(&cf_names, &name)? {
@@ -214,7 +271,7 @@ impl KeyValueRocksdbStorage {
             let cf_names = db.cf_handle("names").expect("missing CF");
             let cf_blocks = db.cf_handle("blocks").expect("missing CF");
 
-            let txn = db.transaction();
+            let txn = db.transaction_opt(&Self::write_options(), &rocksdb::TransactionOptions::default());
 
             if !overwrite {
                 let id = match txn.get_cf(&cf_names, &name)? {
@@ -282,7 +339,7 @@ impl KeyValueRocksdbStorage {
             let cf_names = db.cf_handle("names").expect("missing CF");
             let cf_metas = db.cf_handle("metas").expect("missing CF");
 
-            let txn = db.transaction();
+            let txn = db.transaction_opt(&Self::write_options(), &rocksdb::TransactionOptions::default());
 
             let id = match txn.get_cf(&cf_names, &name)? {
                 Some(id) => id,
@@ -334,7 +391,7 @@ impl KeyValueRocksdbStorage {
             let cf_blocks = db.cf_handle("blocks").expect("missing CF");
             let cf_metas = db.cf_handle("metas").expect("missing CF");
 
-            let txn = db.transaction();
+            let txn = db.transaction_opt(&Self::write_options(), &rocksdb::TransactionOptions::default());
 
             let id = match txn.get_cf(&cf_names, &name)? {
                 Some(id) => id,
@@ -378,7 +435,7 @@ impl KeyValueRocksdbStorage {
                 batch.delete_cf(&cf_blocks, &id);
             }
 
-            db.write(batch)?;
+            db.write_opt(batch, &Self::write_options())?;
 
             Ok(())
         })
@@ -415,7 +472,9 @@ impl KeyValueRocksdbStorage {
                 iter.next();
             }
 
-            db.write(batch)?;
+            iter.status()?;
+
+            db.write_opt(batch, &Self::write_options())?;
 
             Ok(())
         })
@@ -436,6 +495,11 @@ pub struct BlobStorageKeyIterator<'a> {
 impl<'a> BlobStorageKeyIterator<'a> {
     fn new(iter: rocksdb::DBRawIteratorWithThreadMode<'a, rocksdb::TransactionDB<rocksdb::MultiThreaded>>) -> Self {
         Self { iter }
+    }
+
+    pub fn status(&self) -> Result<()> {
+        self.iter.status()?;
+        Ok(())
     }
 }
 
@@ -477,6 +541,76 @@ mod tests {
         let tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>> = Arc::new(Mutex::new(TsidProviderImpl::new(clock, ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng)), 8)));
         let storage = KeyValueRocksdbStorage::new(temp_dir.path(), tsid_provider.clone()).await?;
         Ok((temp_dir, storage))
+    }
+
+    fn wal_stat(storage: &KeyValueRocksdbStorage, name: &str) -> u64 {
+        let statistics = storage.db_options.get_statistics().unwrap();
+        statistics
+            .lines()
+            .find(|line| line.starts_with(&format!("{name} ")))
+            .unwrap()
+            .split_whitespace()
+            .last()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn all_writes_sync_the_wal() -> TestResult<()> {
+        let (_temp_dir, storage) = create_test_storage().await?;
+        // 実際の書き込みで WAL の byte 数と同期回数が増えることを確認する。
+        macro_rules! durable_write {
+            ($operation:expr) => {{
+                let synced = wal_stat(&storage, "rocksdb.wal.synced");
+                let bytes = wal_stat(&storage, "rocksdb.wal.bytes");
+                $operation.await?;
+                assert!(wal_stat(&storage, "rocksdb.wal.synced") > synced);
+                assert!(wal_stat(&storage, "rocksdb.wal.bytes") > bytes);
+            }};
+        }
+        durable_write!(storage.put_value("a", Bytes::from_static(b"value"), true));
+        durable_write!(storage.put_value("a", Bytes::from_static(b"updated"), false));
+        durable_write!(storage.put_value_with_meta("b", Bytes::from_static(b"value"), Bytes::from_static(b"meta"), true));
+        durable_write!(storage.put_meta("a", Bytes::from_static(b"meta")));
+        durable_write!(storage.put_value("bulk_old", Bytes::from_static(b"value"), true));
+        durable_write!(storage.rename_keys(&[("bulk_old", "bulk_new")], &[]));
+        durable_write!(storage.delete("bulk_new"));
+        durable_write!(storage.rename_key("a", "c", false));
+        durable_write!(storage.delete("c"));
+        durable_write!(storage.delete_bulk(&["b"]));
+        durable_write!(storage.put_value("orphan", Bytes::from_static(b"value"), true));
+        durable_write!(storage.shrink(|_| false));
+        assert!(storage.get_keys()?.next().is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn batch_rename_rolls_back_deletions_and_syncs_on_commit() -> TestResult<()> {
+        let (dir, storage) = create_test_storage().await?;
+        storage
+            .put_value_with_meta("stale", Bytes::from_static(b"old"), Bytes::from_static(b"old meta"), true)
+            .await?;
+        storage.put_value_with_meta("u1", Bytes::from_static(b"one"), Bytes::from_static(b"meta"), true).await?;
+        storage.put_value("u2", Bytes::from_static(b"two"), true).await?;
+        let result = storage.rename_keys(&[("u1", "c1"), ("missing", "c2")], &["stale"]).await;
+        assert_eq!(result.unwrap_err().kind(), &ErrorKind::NotFound);
+        assert_eq!(storage.get_value("u1").await?, Some(b"one".to_vec()));
+        assert_eq!(storage.get_value("stale").await?, Some(b"old".to_vec()));
+        assert_eq!(storage.get_meta("stale").await?, Some(b"old meta".to_vec()));
+        assert!(!storage.contains_key("c1").await?);
+        let synced = wal_stat(&storage, "rocksdb.wal.synced");
+        storage.rename_keys(&[("u1", "c1"), ("u2", "c2")], &["stale"]).await?;
+        assert!(wal_stat(&storage, "rocksdb.wal.synced") > synced);
+        let ids = storage.tsid_provider.clone();
+        drop(storage);
+        let storage = KeyValueRocksdbStorage::new(dir.path(), ids).await?;
+        assert_eq!(storage.get_keys()?.count(), 2);
+        assert_eq!(storage.get_value("c1").await?, Some(b"one".to_vec()));
+        assert_eq!(storage.get_meta("c1").await?, Some(b"meta".to_vec()));
+        assert_eq!(storage.get_value("c2").await?, Some(b"two".to_vec()));
+        assert!(!storage.contains_key("stale").await?);
+        Ok(())
     }
 
     #[tokio::test]

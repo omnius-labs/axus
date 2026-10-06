@@ -29,7 +29,6 @@
 | [購読の復号が既存出力を上書きし、中断時に削除する](./issues/subscriber-overwrites-existing-output.md) | 高 | 2026-10-04 | - |
 | [受信 message の大きさが認証前から 64 MiB まで通る](./issues/unbounded-message-sizes.md) | 中 | 2026-09-25 | - |
 | [購読の出力確定前に file と directory entry の永続化を確保していない](./issues/file-storage-durability-boundary.md) | 中 | 2026-10-06 | - |
-| [公開 commit の途中失敗で移動済み block が稼働中に回収されない](./issues/publisher-partial-commit-cleanup.md) | 低 | 2026-10-04 | - |
 | [アドレスが変わった node が既知 node に重複して残る](./issues/node-profile-rows-keyed-by-uri.md) | 低 | 2026-09-24 | - |
 | [Kadex::find が 2 件以上を求めると近い node を取りこぼす](./issues/kadex-find-drops-candidates.md) | 低 | 2026-09-25 | - |
 | [FileExchanger の起動失敗が握り潰される](./issues/file-exchanger-drops-start-error.md) | 低 | 2026-09-25 | - |
@@ -39,7 +38,6 @@
 既知 node の重複は、NodeProfile の到達先の真正性（[trust-security.md](./design/trust-security.md#nodeprofile-の到達先の真正性)）を決めると保存形式も変わり得るため、あわせて扱う。
 FileExchanger の起動失敗は、FileExchanger を AxusService へ結線する前に直す。
 購読出力の保護と出力の永続化は、一時出力から Completed までの同じ確定手順に関わるため、[storage.md §4.5](./design/storage.md#45-出力の確定と回復) に沿って修正する。
-公開 commit の途中失敗は、[storage.md §4.3](./design/storage.md#43-公開の-commit-と回収) の 1 transaction の rename と sweep で扱う。
 
 ## 3. ここに含めていないもの
 

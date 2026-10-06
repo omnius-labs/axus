@@ -9,6 +9,7 @@ use std::{
     collections::{HashMap, hash_map::Entry},
     io::Cursor,
     sync::Arc,
+    time::Duration,
 };
 use tokio::{
     fs::File,
@@ -51,17 +52,45 @@ impl TaskEncoder {
         });
         let this = task.clone();
         *task.join_handle.lock().await = Some(tokio::spawn(async move {
-            while !this.token.is_cancelled() {
-                if this.encode().await {
-                    continue;
-                }
-                tokio::select! {
-                    _ = this.enqueue_notify.notified() => {},
-                    _ = this.token.cancelled() => break,
-                }
-            }
+            tokio::join!(this.run_encoding(), this.run_sweeps());
         }));
         Ok(task)
+    }
+
+    async fn run_encoding(&self) {
+        while !self.token.is_cancelled() {
+            if self.encode().await {
+                continue;
+            }
+            tokio::select! {
+                _ = self.enqueue_notify.notified() => {},
+                _ = self.token.cancelled() => break,
+            }
+        }
+    }
+
+    async fn run_sweeps(&self) {
+        let mut delay = Duration::from_secs(1);
+        while !self.token.is_cancelled() {
+            if !self.store.needs_sweep() {
+                tokio::select! {
+                    _ = self.store.sweep_requested() => {},
+                    _ = self.token.cancelled() => break,
+                }
+                continue;
+            }
+            match self.store.sweep().await {
+                Ok(()) => delay = Duration::from_secs(1),
+                Err(error) => {
+                    warn!(?error, "publisher block sweep retry failed");
+                    tokio::select! {
+                        _ = self.sleeper.sleep(delay) => {},
+                        _ = self.token.cancelled() => break,
+                    }
+                    delay = (delay * 2).min(Duration::from_secs(60));
+                }
+            }
+        }
     }
 
     pub fn wake(&self) {

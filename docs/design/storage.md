@@ -263,16 +263,23 @@ block の移動前に commit の対象を記録し、失敗分を永続的に記
 
 NodeFinder、publisher、subscriber の repository と block storage がある。
 publisher と subscriber は Store の open の中で、次に示す block の回収を終えてから、Task と入口の操作を受け付ける。
-publisher は uncommitted の key と参照のない committed の key を消し、Processing を Pending に戻す。
+publisher はすべての uncommitted key を消し、Processing を Pending に戻した後、sweep で参照のない key を回収する。
 subscriber は購読から参照されない root hash の key を消す。
 
 RocksDB の全書き込みは WAL を有効にした `sync=true` で行う。
 NodeFinder、publisher、subscriber の各 SQLite connection に WAL と `synchronous=FULL` を明示し、macOS では `fullfsync=ON` を指定している。
 購読 block は RocksDB の同期後に SQLite の downloaded と進捗を永続化する。
 
-§4.2 の出力 file と directory entry の同期、§4.3 の 1 transaction での rename と稼働中の sweep、§4.5 の一時出力、出力先の一意制約、置換しない rename による確定と回復は未実装である。
-現状の起動時回復は block の orphan 回収までである。
-これらの手順の検証には、状態遷移の境界ごとの強制終了と、Linux、macOS、Windows での同期条件の確認が必要である。
+公開の commit は、同じ root の孤立した key の削除と、重複 hash を除いた全 block の rename を 1 つの RocksDB transaction で同期し、その後に SQLite の 1 transaction で metadata を確定する。
+同じ root の committed file があれば、実体と block index を共有する。
+publisher の稼働中の sweep は、mutex 内で削除する時点の SQLite の参照を読み、参照のない key を同期して削除する。
+commit と実体の削除の失敗後に sweep を行い、再び失敗した間は TaskEncoder が間隔を延ばして再試行する。
+再試行の必要性は memory にだけ保持する。
+
+§4.2 の出力 file と directory entry の同期、§4.5 の一時出力、出力先の一意制約、置換しない rename による確定と回復は未実装である。
+subscriber の稼働中の block と一時出力の sweep も未実装であり、起動時回復は block の orphan 回収までである。
+公開 commit の各 storage の commit 前後で処理を中断して Store を開き直す test と、rename、metadata commit、sweep の失敗の注入 test で回収と再公開を確認している。
+購読の出力確定の境界での回復と、OS クラッシュ後の回復は未確認である。
 macOS の RocksDB には target 別の `CXXFLAGS` で `HAVE_FULLFSYNC` を与え、aarch64-apple-darwin の生成 object に `fcntl(F_FULLFSYNC)` の分岐が含まれることを確認した。
 x86_64-apple-darwin の build、Linux と Windows の同期条件、電源断の実機試験は未確認である。
 確認済みの不具合は [issues.md](../issues.md) を参照する。

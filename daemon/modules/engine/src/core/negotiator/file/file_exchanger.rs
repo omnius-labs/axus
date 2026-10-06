@@ -21,14 +21,12 @@ use super::*;
 
 #[derive(Debug, Clone)]
 pub struct FileExchangerOption {
-    #[allow(unused)]
     pub state_dir: PathBuf,
     pub max_connected_session_for_publish_count: usize,
     pub max_connected_session_for_subscribe_count: usize,
     pub max_accepted_session_count: usize,
 }
 
-#[allow(dead_code)]
 pub struct FileExchanger {
     session_connector: Arc<SessionConnector>,
     session_accepter: Arc<SessionAccepter>,
@@ -39,11 +37,17 @@ pub struct FileExchanger {
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     option: FileExchangerOption,
 
+    // SessionStatus の受信処理は未実装である。
+    #[allow(dead_code)]
     session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
     session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
     sessions: Arc<TokioRwLock<HashMap<Vec<u8>, Arc<SessionStatus>>>>,
     connected_node_profiles: Arc<Mutex<VolatileHashSet<Arc<NodeProfile>>>>,
+    // 公開する asset key の管理は未実装である。
+    #[allow(dead_code)]
     push_asset_keys: Arc<Mutex<Vec<AssetKey>>>,
+    // 購読する asset key の管理は未実装である。
+    #[allow(dead_code)]
     want_asset_keys: Arc<Mutex<Vec<AssetKey>>>,
 
     file_publisher: Arc<TokioMutex<Option<Arc<FilePublisher>>>>,
@@ -76,8 +80,9 @@ impl Shutdown for FileExchanger {
 }
 
 impl FileExchanger {
+    // AxusService への結線が未実装のため、constructor はまだ呼ばれない。
+    #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
-    #[allow(unused)]
     pub async fn new(
         session_connector: Arc<SessionConnector>,
         session_accepter: Arc<SessionAccepter>,
@@ -113,7 +118,10 @@ impl FileExchanger {
             task_connectors: Arc::new(TokioMutex::new(Vec::new())),
             task_acceptors: Arc::new(TokioMutex::new(Vec::new())),
         };
-        v.start().await;
+        if let Err(error) = v.start().await {
+            v.shutdown().await;
+            return Err(error);
+        }
 
         Ok(v)
     }
@@ -161,6 +169,194 @@ impl FileExchanger {
             .await?;
             self.task_acceptors.lock().await.push(task);
         }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use omnius_core_base::{clock::ClockUtc, sleeper::SleeperImpl, tsid::TsidProviderImpl};
+    use omnius_core_omnikit::model::omni_addr::OmniAddr;
+    use rand::{SeedableRng as _, rngs::ChaCha20Rng};
+    use testresult::TestResult;
+
+    use crate::{
+        base::connection::{ConnectionTcpAccepterImpl, ConnectionTcpConnectorImpl, TcpProxyOption, TcpProxyType},
+        core::{
+            identity::NodeIdentity,
+            negotiator::{NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, NodeProfileFetcherImpl},
+            session::model::SessionType,
+        },
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn new_fails_when_state_directory_cannot_be_created() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let clock = Arc::new(ClockUtc);
+        let sleeper = Arc::new(SleeperImpl);
+        let rng = Arc::new(Mutex::new(ChaCha20Rng::seed_from_u64(0)));
+        let identity = NodeIdentity::load_or_create(&dir.path().join("identity")).await?;
+        let tcp_accepter = Arc::new(ConnectionTcpAccepterImpl::new(&OmniAddr::create_tcp("127.0.0.1".parse()?, 0), false).await?);
+        let tcp_connector = Arc::new(
+            ConnectionTcpConnectorImpl::new(TcpProxyOption {
+                typ: TcpProxyType::None,
+                addr: None,
+            })
+            .await?,
+        );
+        let session_accepter = Arc::new(
+            SessionAccepter::new(
+                tcp_accepter,
+                identity.signer(),
+                sleeper.clone(),
+                rng.clone(),
+                &[SessionType::NodeFinder, SessionType::FileExchanger],
+            )
+            .await,
+        );
+        let session_connector = Arc::new(SessionConnector::new(tcp_connector, identity.signer(), rng.clone()));
+        let repo_dir = dir.path().join("repo");
+        tokio::fs::create_dir_all(&repo_dir).await?;
+        let node_profile_repo = Arc::new(NodeFinderRepo::new(repo_dir.to_str().unwrap(), clock.clone()).await?);
+        let node_finder = Arc::new(
+            NodeFinder::new(
+                NodeProfile::new(identity.public_key().to_vec(), vec![]),
+                session_connector.clone(),
+                session_accepter.clone(),
+                node_profile_repo,
+                Arc::new(NodeProfileFetcherImpl::new(&[])),
+                clock.clone(),
+                sleeper.clone(),
+                rng.clone(),
+                NodeFinderOption {
+                    state_dir: dir.path().join("finder").to_str().unwrap().to_string(),
+                    max_connected_session_count: 3,
+                    max_accepted_session_count: 3,
+                    intervals: NodeFinderIntervals::default(),
+                },
+            )
+            .await?,
+        );
+        let tsid_provider = Arc::new(Mutex::new(TsidProviderImpl::new(ClockUtc, ChaCha20Rng::seed_from_u64(1), 8)));
+
+        // 通常 file の下には state directory を作れない
+        let state_file = dir.path().join("state-file");
+        tokio::fs::write(&state_file, b"").await?;
+        let result = FileExchanger::new(
+            session_connector,
+            session_accepter.clone(),
+            node_finder.clone(),
+            tsid_provider,
+            clock,
+            sleeper,
+            rng,
+            FileExchangerOption {
+                state_dir: state_file.join("state"),
+                max_connected_session_for_publish_count: 3,
+                max_connected_session_for_subscribe_count: 3,
+                max_accepted_session_count: 3,
+            },
+        )
+        .await;
+
+        if let Ok(exchanger) = &result {
+            exchanger.shutdown().await;
+        }
+        node_finder.shutdown().await;
+        session_accepter.shutdown().await;
+
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn new_shuts_down_publisher_when_subscriber_start_fails() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let clock = Arc::new(ClockUtc);
+        let sleeper = Arc::new(SleeperImpl);
+        let rng = Arc::new(Mutex::new(ChaCha20Rng::seed_from_u64(0)));
+        let identity = NodeIdentity::load_or_create(&dir.path().join("identity")).await?;
+        let tcp_accepter = Arc::new(ConnectionTcpAccepterImpl::new(&OmniAddr::create_tcp("127.0.0.1".parse()?, 0), false).await?);
+        let tcp_connector = Arc::new(
+            ConnectionTcpConnectorImpl::new(TcpProxyOption {
+                typ: TcpProxyType::None,
+                addr: None,
+            })
+            .await?,
+        );
+        let session_accepter = Arc::new(
+            SessionAccepter::new(
+                tcp_accepter,
+                identity.signer(),
+                sleeper.clone(),
+                rng.clone(),
+                &[SessionType::NodeFinder, SessionType::FileExchanger],
+            )
+            .await,
+        );
+        let session_connector = Arc::new(SessionConnector::new(tcp_connector, identity.signer(), rng.clone()));
+        let repo_dir = dir.path().join("repo");
+        tokio::fs::create_dir_all(&repo_dir).await?;
+        let node_profile_repo = Arc::new(NodeFinderRepo::new(repo_dir.to_str().unwrap(), clock.clone()).await?);
+        let node_finder = Arc::new(
+            NodeFinder::new(
+                NodeProfile::new(identity.public_key().to_vec(), vec![]),
+                session_connector.clone(),
+                session_accepter.clone(),
+                node_profile_repo,
+                Arc::new(NodeProfileFetcherImpl::new(&[])),
+                clock.clone(),
+                sleeper.clone(),
+                rng.clone(),
+                NodeFinderOption {
+                    state_dir: dir.path().join("finder").to_str().unwrap().to_string(),
+                    max_connected_session_count: 3,
+                    max_accepted_session_count: 3,
+                    intervals: NodeFinderIntervals::default(),
+                },
+            )
+            .await?,
+        );
+        let tsid_provider = Arc::new(Mutex::new(TsidProviderImpl::new(ClockUtc, ChaCha20Rng::seed_from_u64(1), 8)));
+
+        // publisher の起動後に、通常 file として置いた subscriber の起動を失敗させる。
+        let state_dir = dir.path().join("state");
+        tokio::fs::create_dir_all(&state_dir).await?;
+        tokio::fs::write(state_dir.join("file_subscriber"), b"").await?;
+        let result = FileExchanger::new(
+            session_connector,
+            session_accepter.clone(),
+            node_finder.clone(),
+            tsid_provider.clone(),
+            clock.clone(),
+            sleeper.clone(),
+            rng,
+            FileExchangerOption {
+                state_dir: state_dir.clone(),
+                max_connected_session_for_publish_count: 3,
+                max_connected_session_for_subscribe_count: 3,
+                max_accepted_session_count: 3,
+            },
+        )
+        .await;
+
+        if let Ok(exchanger) = &result {
+            exchanger.shutdown().await;
+        }
+        node_finder.shutdown().await;
+        session_accepter.shutdown().await;
+
+        assert!(result.is_err());
+
+        assert!(state_dir.join("file_publisher/blocks/LOCK").is_file());
+
+        // encoder が終了して store を解放していれば、同じ RocksDB を開き直せる。
+        let publisher = FilePublisher::new(&state_dir.join("file_publisher"), tsid_provider, clock, sleeper).await?;
+        publisher.shutdown().await;
 
         Ok(())
     }

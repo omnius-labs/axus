@@ -31,7 +31,6 @@
 | [file の metadata 確定前に実体の電源断耐久性を確保していない](./issues/file-storage-durability-boundary.md) | 中 | 2026-10-04 | - |
 | [公開 commit の途中失敗で移動済み block が稼働中に回収されない](./issues/publisher-partial-commit-cleanup.md) | 低 | 2026-10-04 | - |
 | [アドレスが変わった node が既知 node に重複して残る](./issues/node-profile-rows-keyed-by-uri.md) | 低 | 2026-09-24 | - |
-| [別の設定 directory から同じ state directory を使う daemon を止められない](./issues/daemon-lock-not-on-state-dir.md) | 低 | 2026-09-25 | - |
 
 応答しない接続と受信 message の大きさは、どちらも Session と NodeFinder の入力境界の問題であり、期限と上限をあわせて設計すると効率がよい。
 既知 node の重複は、NodeProfile の到達先の真正性（[trust-security.md](./design/trust-security.md#nodeprofile-の到達先の真正性)）を決めると保存形式も変わり得るため、あわせて扱う。

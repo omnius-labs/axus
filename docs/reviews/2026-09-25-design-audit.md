@@ -368,3 +368,5 @@ issues.md の daemon-lock-not-on-state-dir として起票した。
 - 署名鍵の file が書き込み途中で読まれる疑いは、一時 file に書いてから rename していることで否定した。
 
 ## 6. その後
+
+- 2026-10-06: R-13 を修正し、daemon の lock を設定 directory から `core.state_dir` 内の `axus.lock` へ移した。

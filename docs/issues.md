@@ -33,6 +33,7 @@
 | [Kadex::find が 2 件以上を求めると近い node を取りこぼす](./issues/kadex-find-drops-candidates.md) | 低 | 2026-09-25 | - |
 | [FileExchanger の起動失敗が握り潰される](./issues/file-exchanger-drops-start-error.md) | 低 | 2026-09-25 | - |
 | [別の設定 directory から同じ state directory を使う daemon を止められない](./issues/daemon-lock-not-on-state-dir.md) | 低 | 2026-09-25 | - |
+| [delete_bulk が存在しない key を含むと何も削除せずに成功する](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | 低 | 2026-10-06 | - |
 
 応答しない接続と受信 message の大きさは、どちらも Session と NodeFinder の入力境界の問題であり、期限と上限をあわせて設計すると効率がよい。
 既知 node の重複は、NodeProfile の到達先の真正性（[trust-security.md](./design/trust-security.md#nodeprofile-の到達先の真正性)）を決めると保存形式も変わり得るため、あわせて扱う。

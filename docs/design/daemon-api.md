@@ -27,8 +27,9 @@ P2P transport、探索、file protocol の意味論は、それぞれの設計�
 
 ## 3. process のライフサイクル
 
-[Executor](../../daemon/entrypoints/daemon/src/executor.rs) は設定 directory を決定し、file lock を取得して多重起動を防ぐ。
-続いて設定と logging を初期化し、[DaemonState](../../daemon/entrypoints/daemon/src/state.rs) を構築して [ApiServer](../../daemon/entrypoints/daemon/src/server.rs) を起動する。
+[Executor](../../daemon/entrypoints/daemon/src/executor.rs) は設定 directory を決定して設定を読み込み、`core.state_dir` を作成して、その中の `axus.lock` を取得する。
+同じ永続状態を使う daemon の多重起動を、この lock で防ぐ。
+続いて logging を初期化し、[DaemonState](../../daemon/entrypoints/daemon/src/state.rs) を構築して [ApiServer](../../daemon/entrypoints/daemon/src/server.rs) を起動する。
 SIGINT または SIGTERM は共通の cancellation token に変換し、HTTP server と engine の停止を同じ process 境界で管理する。
 
 DaemonState は daemon の所有物を保持し、終了時には `AxusService::shutdown()` を起点として下位 task を停止する。

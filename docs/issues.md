@@ -29,15 +29,12 @@
 | [購読の復号が既存出力を上書きし、中断時に削除する](./issues/subscriber-overwrites-existing-output.md) | 高 | 2026-10-04 | - |
 | [受信 message の大きさが認証前から 64 MiB まで通る](./issues/unbounded-message-sizes.md) | 中 | 2026-09-25 | - |
 | [購読の出力確定前に file と directory entry の永続化を確保していない](./issues/file-storage-durability-boundary.md) | 中 | 2026-10-06 | - |
+| [異常終了した daemon の lock file が残り、再起動できなくなる](./issues/daemon-lock-survives-abnormal-exit.md) | 中 | 2026-10-06 | - |
 | [アドレスが変わった node が既知 node に重複して残る](./issues/node-profile-rows-keyed-by-uri.md) | 低 | 2026-09-24 | - |
-| [Kadex::find が 2 件以上を求めると近い node を取りこぼす](./issues/kadex-find-drops-candidates.md) | 低 | 2026-09-25 | - |
-| [FileExchanger の起動失敗が握り潰される](./issues/file-exchanger-drops-start-error.md) | 低 | 2026-09-25 | - |
-| [別の設定 directory から同じ state directory を使う daemon を止められない](./issues/daemon-lock-not-on-state-dir.md) | 低 | 2026-09-25 | - |
 | [delete_bulk が存在しない key を含むと何も削除せずに成功する](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | 低 | 2026-10-06 | - |
 
 応答しない接続と受信 message の大きさは、どちらも Session と NodeFinder の入力境界の問題であり、期限と上限をあわせて設計すると効率がよい。
 既知 node の重複は、NodeProfile の到達先の真正性（[trust-security.md](./design/trust-security.md#nodeprofile-の到達先の真正性)）を決めると保存形式も変わり得るため、あわせて扱う。
-FileExchanger の起動失敗は、FileExchanger を AxusService へ結線する前に直す。
 購読出力の保護と出力の永続化は、一時出力から Completed までの同じ確定手順に関わるため、[storage.md §4.5](./design/storage.md#45-出力の確定と回復) に沿って修正する。
 
 ## 3. ここに含めていないもの

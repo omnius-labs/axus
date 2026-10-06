@@ -1,4 +1,4 @@
-use std::{path::Path, str::FromStr as _, sync::Arc};
+use std::{collections::HashSet, path::Path, str::FromStr as _, sync::Arc};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use sqlx::{QueryBuilder, sqlite::SqlitePool};
@@ -15,6 +15,10 @@ use super::*;
 pub struct FilePublisherRepo {
     db: Arc<SqlitePool>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
+    #[cfg(test)]
+    commit_pause: parking_lot::Mutex<Option<(bool, Arc<tokio::sync::Notify>)>>,
+    #[cfg(test)]
+    fail_after_commit: std::sync::atomic::AtomicBool,
 }
 
 #[allow(unused)]
@@ -27,12 +31,23 @@ impl FilePublisherRepo {
             .filename(path)
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .synchronous(sqlx::sqlite::SqliteSynchronous::Full)
             .busy_timeout(std::time::Duration::from_secs(10));
+
+        #[cfg(target_os = "macos")]
+        let options = options.pragma("fullfsync", "ON");
 
         let db = Arc::new(SqlitePool::connect_with(options).await?);
         Self::migrate(&db).await?;
 
-        Ok(Self { db, clock })
+        Ok(Self {
+            db,
+            clock,
+            #[cfg(test)]
+            commit_pause: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            fail_after_commit: std::sync::atomic::AtomicBool::new(false),
+        })
     }
 
     async fn migrate(db: &SqlitePool) -> Result<()> {
@@ -89,19 +104,82 @@ CREATE INDEX IF NOT EXISTS index_file_id_rank_index_for_uncommitted_blocks ON un
         Ok(())
     }
 
-    pub async fn retry_file(&self, file: &PublishedUncommittedFile) -> Result<bool> {
-        Ok(sqlx::query(
-            "UPDATE uncommitted_files SET status = 'Pending', failed_reason = NULL, block_size = ?, attrs = ?, priority = ?, updated_at = ? WHERE id = ? AND status = 'Failed'",
+    pub async fn replace_failed_file(&self, old_id: &str, file: &PublishedUncommittedFile) -> Result<bool> {
+        let mut tx = self.db.begin().await?;
+        let deleted = sqlx::query("DELETE FROM uncommitted_files WHERE id = ? AND status = 'Failed'")
+            .bind(old_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        if deleted == 0 {
+            return Ok(false);
+        }
+        sqlx::query("DELETE FROM uncommitted_blocks WHERE file_id = ?").bind(old_id).execute(&mut *tx).await?;
+        let row = PublishedUncommittedFileRow::from(file)?;
+        sqlx::query(
+            r#"
+INSERT INTO uncommitted_files (id, file_path, file_name, block_size, attrs, priority, status, failed_reason, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"#,
         )
-        .bind(file.block_size)
-        .bind(&file.attrs)
-        .bind(file.priority)
-        .bind(self.clock.now().naive_utc())
-        .bind(&file.id)
-        .execute(self.db.as_ref())
-        .await?
-        .rows_affected()
-            != 0)
+        .bind(row.id)
+        .bind(row.file_path)
+        .bind(row.file_name)
+        .bind(row.block_size)
+        .bind(row.attrs)
+        .bind(row.priority)
+        .bind(row.status)
+        .bind(row.failed_reason)
+        .bind(row.created_at)
+        .bind(row.updated_at)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn get_block_references(&self) -> Result<(HashSet<String>, HashSet<String>)> {
+        let mut tx = self.db.begin().await?;
+        let roots: Vec<String> = sqlx::query_scalar("SELECT DISTINCT root_hash FROM committed_files").fetch_all(&mut *tx).await?;
+        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM uncommitted_files WHERE status IN ('Pending', 'Processing')")
+            .fetch_all(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok((roots.into_iter().collect(), ids.into_iter().collect()))
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_db(&self) -> &SqlitePool {
+        &self.db
+    }
+
+    #[cfg(test)]
+    pub(super) fn pause_commit(&self, after_commit: bool) -> Arc<tokio::sync::Notify> {
+        let reached = Arc::new(tokio::sync::Notify::new());
+        *self.commit_pause.lock() = Some((after_commit, reached.clone()));
+        reached
+    }
+
+    #[cfg(test)]
+    async fn interrupt_commit(&self, after_commit: bool) {
+        let reached = {
+            let mut pause = self.commit_pause.lock();
+            if pause.as_ref().is_some_and(|(after, _)| *after == after_commit) {
+                pause.take().map(|(_, reached)| reached)
+            } else {
+                None
+            }
+        };
+        if let Some(reached) = reached {
+            reached.notify_one();
+            std::future::pending::<()>().await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn fail_after_commit(&self) {
+        self.fail_after_commit.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub async fn recover(&self) -> Result<()> {
@@ -273,7 +351,16 @@ DELETE FROM uncommitted_blocks
         .execute(&mut *tx)
         .await?;
 
+        #[cfg(test)]
+        self.interrupt_commit(false).await;
         tx.commit().await?;
+        #[cfg(test)]
+        {
+            self.interrupt_commit(true).await;
+            if self.fail_after_commit.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                return Err(Error::new(ErrorKind::IoError).with_message("injected error after SQLite commit"));
+            }
+        }
 
         Ok(())
     }
@@ -317,7 +404,16 @@ DELETE FROM uncommitted_blocks
         .execute(&mut *tx)
         .await?;
 
+        #[cfg(test)]
+        self.interrupt_commit(false).await;
         tx.commit().await?;
+        #[cfg(test)]
+        {
+            self.interrupt_commit(true).await;
+            if self.fail_after_commit.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                return Err(Error::new(ErrorKind::IoError).with_message("injected error after SQLite commit"));
+            }
+        }
 
         Ok(())
     }
@@ -722,6 +818,60 @@ mod tests {
     };
 
     use super::FilePublisherRepo;
+
+    #[tokio::test]
+    async fn failed_replacement_is_atomic_and_requires_failed_status() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (repo, now) = create_repo(dir.path()).await?;
+        repo.insert_uncommitted_file(&uncommitted_file("old", "a", now)).await?;
+        let replacement = uncommitted_file("new", "a", now);
+        assert!(!repo.replace_failed_file("old", &replacement).await?);
+        assert!(repo.contains_uncommitted_file("old").await?);
+        assert!(!repo.contains_uncommitted_file("new").await?);
+        repo.update_uncommitted_file_status("old", &PublishedUncommittedFileStatus::Pending, &PublishedUncommittedFileStatus::Processing)
+            .await?;
+        repo.update_uncommitted_file_as_failed("old", "failure").await?;
+        let block = PublishedUncommittedBlock {
+            file_id: "old".to_string(),
+            block_hash: hash(b"block"),
+            rank: 0,
+            index: 0,
+        };
+        repo.insert_or_ignore_uncommitted_block(&block).await?;
+        repo.insert_uncommitted_file(&uncommitted_file("new", "b", now)).await?;
+        assert!(repo.replace_failed_file("old", &replacement).await.is_err());
+        assert!(repo.contains_uncommitted_file("old").await?);
+        assert!(repo.contains_uncommitted_block("old", &block.block_hash).await?);
+        repo.delete_uncommitted_file("new").await?;
+        assert!(repo.replace_failed_file("old", &replacement).await?);
+        assert!(!repo.contains_uncommitted_file("old").await?);
+        assert!(!repo.contains_uncommitted_block("old", &block.block_hash).await?);
+        assert!(repo.find_uncommitted_file_by_id("new").await?.unwrap().status == PublishedUncommittedFileStatus::Pending);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn connections_use_durable_pragmas() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (repo, _) = create_repo(dir.path()).await?;
+        // 同時に確保して、pool が新しく開く connection も確認する。
+        let mut connections = Vec::new();
+        for _ in 0..3 {
+            connections.push(repo.db.acquire().await?);
+        }
+        for connection in &mut connections {
+            let mode: String = sqlx::query_scalar("PRAGMA journal_mode").fetch_one(&mut **connection).await?;
+            let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous").fetch_one(&mut **connection).await?;
+            assert_eq!(mode, "wal");
+            assert_eq!(synchronous, 2);
+            #[cfg(target_os = "macos")]
+            {
+                let fullfsync: i64 = sqlx::query_scalar("PRAGMA fullfsync").fetch_one(&mut **connection).await?;
+                assert_eq!(fullfsync, 1);
+            }
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn uncommitted_queries_round_trip() -> TestResult {

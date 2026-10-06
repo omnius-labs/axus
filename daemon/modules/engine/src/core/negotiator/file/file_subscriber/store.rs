@@ -173,6 +173,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn downloaded_progress_survives_reopen_with_block() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(dir.path(), ids.clone(), clock.clone()).await?;
+        let root = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"root");
+        let id = store.subscribe(&root, "output", None, 0).await?;
+        assert!(store.write_block(&root, &root, Bytes::from_static(b"root")).await?);
+        drop(store);
+        let store = FileSubscriberStore::open(dir.path(), ids, clock).await?;
+        let file = store.find_file(&id).await?.unwrap();
+        assert_eq!(file.block_count_downloaded, 1);
+        assert!(file.status == SubscribedFileStatus::Decoding);
+        assert!(store.blocks(&root, SubscribedFile::UNKNOWN_ROOT_RANK).await?[0].downloaded);
+        assert_eq!(store.read_block(&root, &root).await?, Some(b"root".to_vec()));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn duplicate_subscriptions_share_progress_and_remove() -> TestResult {
         let dir = tempfile::tempdir()?;
         let (ids, clock) = dependencies();

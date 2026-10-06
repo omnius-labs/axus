@@ -369,4 +369,6 @@ issues.md の daemon-lock-not-on-state-dir として起票した。
 
 ## 6. その後
 
+- 2026-10-06: R-8 を修正し、`Kadex::find` の繰り下げを末尾まで広げた。
+- 2026-10-06: R-12 を修正し、`FileExchanger::new` が `start` の失敗を返し、そのとき起動済みの構成要素を停止するようにした。
 - 2026-10-06: R-13 を修正し、daemon の lock を設定 directory から `core.state_dir` 内の `axus.lock` へ移した。

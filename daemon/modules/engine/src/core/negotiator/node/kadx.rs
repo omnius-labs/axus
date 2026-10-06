@@ -1,4 +1,4 @@
-use std::cmp::{self, Ordering};
+use std::cmp::Ordering;
 
 pub struct Kadex;
 
@@ -39,7 +39,7 @@ impl Kadex {
                 continue;
             }
 
-            for j in ((left + 1)..(results.len() - 1)).rev() {
+            for j in ((left + 1)..results.len()).rev() {
                 results.swap(j - 1, j);
             }
 
@@ -47,23 +47,6 @@ impl Kadex {
         }
 
         results.into_iter().take_while(|v| v.value != base).map(|v| v.value).collect::<Vec<&'a [u8]>>()
-    }
-
-    #[allow(unused)]
-    pub fn distance(x: &[u8], y: &[u8]) -> u8 {
-        let mut res: u8 = 0;
-        let len = cmp::min(x.len(), y.len());
-
-        for i in 0..len {
-            let v = x[i] ^ y[i];
-            res = (8 - v.leading_zeros()) as u8;
-            if res != 0 {
-                res += ((len - (i + 1)) * 8) as u8;
-                break;
-            }
-        }
-
-        res
     }
 
     pub fn compare(x: &[u8], y: &[u8]) -> Ordering {
@@ -123,21 +106,31 @@ mod tests {
     }
 
     #[test]
-    pub fn distance_test() {
-        let x: Vec<u8> = vec![1, 1, 1, 1];
-        let y: Vec<u8> = vec![1, 1, 1, 1];
-        let res = Kadex::distance(&x, &y);
-        assert_eq!(res, 0);
+    pub fn find_farthest_first_test() {
+        let candidates = [vec![1, 0], vec![0, 1], vec![1, 1], vec![0, 2], vec![0, 3]];
+        let expected: Vec<&[u8]> = candidates.iter().map(Vec::as_slice).collect();
+        let elements: Vec<&[u8]> = expected.iter().copied().rev().collect();
+        let base = vec![255, 255];
+        let target = vec![0, 0];
 
-        let x: Vec<u8> = vec![1, 1, 1, 1];
-        let y: Vec<u8> = vec![0, 1, 1, 1];
-        let res = Kadex::distance(&x, &y);
-        assert_eq!(res, 25);
+        for count in [1, 2, 3, 7] {
+            let res = Kadex::find(&base, &target, &elements, count);
+            assert_eq!(res, expected[..count.min(expected.len())]);
+        }
+    }
 
-        let x: Vec<u8> = vec![0, 0, 0, 1];
-        let y: Vec<u8> = vec![0, 0, 0, 0];
-        let res = Kadex::distance(&x, &y);
-        assert_eq!(res, 1);
+    #[test]
+    pub fn find_shuffled_test() {
+        let candidates = [vec![1, 0], vec![0, 1], vec![1, 1], vec![0, 2], vec![0, 3]];
+        let expected: Vec<&[u8]> = candidates.iter().map(Vec::as_slice).collect();
+        let elements = vec![expected[2], expected[4], expected[0], expected[3], expected[1]];
+        let base = vec![255, 255];
+        let target = vec![0, 0];
+
+        for count in [1, 2, 3, 7] {
+            let res = Kadex::find(&base, &target, &elements, count);
+            assert_eq!(res, expected[..count.min(expected.len())]);
+        }
     }
 
     #[test]

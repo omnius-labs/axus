@@ -104,6 +104,7 @@ node ID は Session の署名で確かめた公開鍵から導出するため、
 設定がなければ、特定のアドレスで待ち受けるときはそのアドレスを、不特定のアドレスで待ち受けるときは到達できる local IP と UPnP の外部 IP に待ち受けポートを付けて載せる。
 UPnP は設定 `p2p.use_upnp` で有効にしたときだけ使う。
 アドレスは起動時に 1 回だけ決め、IP が変わったときは再起動で反映する。
+8 件を超える場合は先頭の 8 件へ切り詰め、警告を記録して起動を続ける。
 
 **理由**
 node 自身が知っている情報だけで決まるため、handshake に message を足す必要がない。
@@ -123,9 +124,36 @@ NodeFinder の Session は、Hello/Profile 交換を含め、相手の message �
 shutdown は受信期限を待たずに cancellation token で送受信 task を終了させ、その終了を待つ。
 
 **理由**
-相手は毎周期 DataMessage を送るため、3 周期分の猶予を取ったうえで、無応答の Session が接続資源を占有し続けることを防ぐためである。
+相手は毎周期 DataMessage を送るため、3 周期分の猶予を取ったうえで、無応答の Session が接続資源を占有し続けることを防げる。
 期限を通信周期から導くことで、周期の設定を変えても、送信頻度に対する猶予の比率を保てる。
 Hello/Profile 交換にも適用し、Session の認証と用途選択を終えたまま応答しない接続も閉じる。
+
+#### DataMessage と NodeProfile の要素数
+
+**決定**
+送受信する DataMessage の要素数を次の範囲に収める。
+
+| 対象 | 1 message の上限 |
+| --- | --- |
+| `push_node_profiles` | 32 件 |
+| `want_asset_keys` | 1024 件 |
+| `give_asset_key_locations` | 1024 件 |
+| `push_asset_key_locations` | 1024 件 |
+| 各 AssetKey に付ける NodeProfile | 8 件 |
+| NodeProfile の `addrs` | 8 件 |
+
+受信側は要素数を読んだ直後、Vec や HashMap を確保する前に上限を検査し、超過した message の Session を閉じる。
+NodeProfile のアドレス数は wire の decode で検査するため、Hello の後の ProfileMessage にも適用する。
+設定と保存に使う `axus:node/...` の URI の解釈には、この wire の制約を適用しない。
+送信側は既存の rng で候補を無作為に選び、各件数を上限以下にする。
+URI から得た既知 node のアドレスが上限を超える場合も、送信する profile だけを無作為に 8 件へ絞る。
+複数 message 分を保持する受信状態は、TTL と集積件数の上限を別に持つ。
+
+**理由**
+frame の byte 数だけでなく、要素数と所在情報の広がりも制限し、受信側の確保量と処理量、中継で消費する資源を抑えるためである。
+既知 node の 32 件は従来の受信後の切り詰めと同じ値であり、ほかの上限とともに decode の入力境界へ移す。
+送信側も同じ上限を守ることで、相手に拒否される message を組み立てずに済む。
+件数を絞るときに無作為に選ぶと、毎回同じ候補だけが伝播する偏りを抑えられる。
 
 ### 6.2 保留
 
@@ -152,7 +180,9 @@ AxusService の起動経路から 2 node を起動し、Session の確立と Ass
 各 task の周期は NodeFinderOption で指定し、結合試験では短い周期を使う。
 Hello/Profile 交換と確立後の受信期限を通信周期から導き、無応答の Session を閉じる。
 空の DataMessage の定期送信、受信による期限の更新、受信待機中の shutdown を test で確認している。
-DataMessage の要素数の上限は未実装である。
+DataMessage と NodeProfile の要素数を確保前の decode で検査し、超過した Session を閉じる。
+TaskComputer は同じ上限で無作為に候補を絞り、自 node のアドレスは起動時に 8 件以下にする。
+上限ちょうどの受理、各上限の超過による切断、大量情報を持つ node 間の往復、URI の解釈の維持を test で確認している。
 
 重複した Session の解消は、互いを bootstrap に指定した 2 node の結合試験で確認している。
 lookup で得た NodeProfile には、相手が広告したアドレスが含まれることを結合試験で確認している。

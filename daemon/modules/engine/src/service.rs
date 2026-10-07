@@ -101,9 +101,6 @@ impl AxusService {
         tokio::fs::create_dir_all(&node_finder_dir).await?;
 
         let my_node_profile = NodeProfile::new(identity.public_key().to_vec(), my_addrs);
-        // 他の node の設定 p2p.bootstrap_nodes に書けるよう、自 node の NodeProfile を URI で記録する
-        info!(node_profile = my_node_profile.to_string(), "node profile");
-
         let result = NodeFinder::new(
             my_node_profile,
             session_connector,
@@ -121,6 +118,9 @@ impl AxusService {
             },
         )
         .await?;
+
+        // 他の node の設定 p2p.bootstrap_nodes に書けるよう、起動時の制約を適用した NodeProfile を記録する
+        info!(node_profile = result.my_node_profile().to_string(), "node profile");
 
         Ok(result)
     }
@@ -338,6 +338,22 @@ mod tests {
 
         service.shutdown().await;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn startup_truncates_advertised_addresses_to_the_wire_limit() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let addrs: Vec<_> = (0..12).map(|i| OmniAddr::create_tcp("127.0.0.1".parse().unwrap(), 1000 + i)).collect();
+        let option = AxusServiceOption {
+            advertise_addrs: addrs.clone(),
+            ..fast_option(vec![])
+        };
+        let service = AxusService::new(dir.path().join("state"), format!("127.0.0.1:{}", free_port()?), dir.path(), option).await?;
+        let profile = service.node_finder.my_node_profile();
+        assert_eq!(profile.addrs, addrs[..NodeProfile::MAX_WIRE_ADDRS]);
+        assert_eq!(NodeProfile::import(&profile.export()?)?, profile);
+        service.shutdown().await;
         Ok(())
     }
 

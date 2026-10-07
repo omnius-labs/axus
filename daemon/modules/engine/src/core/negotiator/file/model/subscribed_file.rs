@@ -26,12 +26,10 @@ impl SubscribedFile {
     const TEMPORARY_SEPARATOR: &str = ".axus-";
     const TEMPORARY_SUFFIX: &str = ".part";
 
-    #[cfg(test)]
     pub fn temporary_output_name(output_name: &str, id: &str) -> String {
         format!(".{output_name}{}{id}{}", Self::TEMPORARY_SEPARATOR, Self::TEMPORARY_SUFFIX)
     }
 
-    #[cfg(test)]
     pub fn temporary_output_path(&self) -> std::path::PathBuf {
         std::path::Path::new(&self.output_directory).join(Self::temporary_output_name(&self.output_name, &self.id))
     }

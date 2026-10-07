@@ -7,7 +7,6 @@ use omnius_core_omnikit::generated::omni_hash::OmniHash;
 use parking_lot::Mutex;
 use std::{path::Path, sync::Arc};
 use tokio_util::bytes::Bytes;
-#[allow(dead_code)]
 mod output_publication;
 mod repo;
 mod store;
@@ -46,13 +45,13 @@ impl FileSubscriber {
     }
     pub async fn cancel(&self, id: &str) -> Result<()> {
         self.store.cancel(id).await?;
-        self.task_decoder.cancel(id);
-        Ok(())
+        self.task_decoder.cancel(id).await;
+        self.store.discard_output(id).await
     }
     pub async fn remove(&self, id: &str) -> Result<()> {
-        self.store.remove(id).await?;
-        self.task_decoder.cancel(id);
-        Ok(())
+        self.store.cancel(id).await?;
+        self.task_decoder.cancel(id).await;
+        self.store.remove(id).await
     }
     pub async fn write_block(&self, root_hash: &OmniHash, block_hash: &OmniHash, bytes: Bytes) -> Result<()> {
         if self.store.write_block(root_hash, block_hash, bytes).await? {
@@ -180,7 +179,7 @@ mod tests {
                             subscriber.write_block(&root_hash, &block.block_hash, value).await?;
                         }
                     }
-                    SubscribedFileStatus::Decoding => {}
+                    SubscribedFileStatus::Decoding | SubscribedFileStatus::Finalizing => {}
                     _ => return Err(Error::new(ErrorKind::UnexpectedError).with_message(format!("decode failed: {:?}", file.failed_reason))),
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;

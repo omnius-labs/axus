@@ -274,7 +274,8 @@ block の移動前に commit の対象を記録し、失敗分を永続的に記
 NodeFinder、publisher、subscriber の repository と block storage がある。
 publisher と subscriber は Store の open の中で、次に示す block の回収を終えてから、Task と入口の操作を受け付ける。
 publisher はすべての uncommitted key を消し、Processing を Pending に戻した後、sweep で参照のない key を回収する。
-subscriber は購読から参照されない root hash の key を消す。
+subscriber は Finalizing の出力を §4.5 の規則で回復し、購読から参照されない root hash の key と、Canceled と Failed の一時出力を消す。
+出力先に届かず判定できない購読は Finalizing のまま残し、ほかの購読の回復と open を進める。
 
 RocksDB の全書き込みは WAL を有効にした `sync=true` で行う。
 NodeFinder、publisher、subscriber の各 SQLite connection に WAL と `synchronous=FULL` を明示し、macOS では `fullfsync=ON` を指定している。
@@ -288,11 +289,17 @@ commit と実体の削除の失敗後に sweep を行い、再び失敗した間
 
 出力先は解決した親 directory の絶対 path と最終 entry 名で保存し、進行中の購読に対する部分一意 index と、symlink を辿らない既存 entry の確認で登録時の衝突を拒否する。
 一時出力の予約名は、ASCII の大小文字を区別せず登録時に拒否する。
-置換しない rename と親 directory の同期は OutputPublication に実装している。
-§4.2 の出力 file と directory entry の同期、§4.5 の一時出力、Finalizing、置換しない rename による確定と回復を購読に適用する処理は未実装である。
-subscriber の稼働中の block と一時出力の sweep も未実装であり、起動時回復は block の orphan 回収までである。
+rank 0 は一時出力へ復号し、writer の `flush` と file の `sync_all` の後、Finalizing を条件付き更新で記録する。
+配置は OS 別の置換しない rename で行い、Linux と macOS では親 directory の `sync_all`、Windows では `MOVEFILE_WRITE_THROUGH` の成功後に Completed を記録する。
+Finalizing の回復と、確定前の cancel/remove による一時出力の回収を実装している。
+subscriber の稼働中の sweep は参照のない root と、Canceled と Failed の一時出力を回収する。
+Finalizing の配置と sweep の I/O 障害は、TaskDecoder が間隔を延ばしながら再試行する。
+再試行の待機は CancellationToken の cancel と shutdown に応答する。
 公開 commit の各 storage の commit 前後で処理を中断して Store を開き直す test と、rename、metadata commit、sweep の失敗の注入 test で回収と再公開を確認している。
-購読の出力確定の境界での回復と、OS クラッシュ後の回復は未確認である。
+購読の一時出力作成、file 同期、Finalizing の記録、rename、Completed の記録前の各境界で Store を開き直す test と、配置・同期・一時出力回収の失敗の注入 test で、回復と既存出力の保護を確認している。
+OS クラッシュ後の回復は未確認である。
 macOS の RocksDB には target 別の `CXXFLAGS` で `HAVE_FULLFSYNC` を与え、aarch64-apple-darwin の生成 object に `fcntl(F_FULLFSYNC)` の分岐が含まれることを確認した。
-x86_64-apple-darwin の build、Linux と Windows の同期条件、電源断の実機試験は未確認である。
+置換しない配置の module は aarch64-apple-darwin、x86_64-unknown-linux-gnu、x86_64-pc-windows-msvc で型検査を通している。
+macOS では engine の test で既存 entry の保護と、file・親 directory の同期呼び出しが成功することを確認している。
+x86_64-apple-darwin の build、Linux と Windows の engine 全体の build と同期の実行、電源断の実機試験は未確認である。
 確認済みの不具合は [issues.md](../issues.md) を参照する。

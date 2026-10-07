@@ -96,12 +96,23 @@ CREATE INDEX IF NOT EXISTS index_root_hash_rank_index_for_blocks ON blocks (root
     }
 
     pub async fn cancel(&self, id: &str) -> Result<()> {
+        let mut tx = self.db.begin_with("BEGIN IMMEDIATE").await?;
         sqlx::query("UPDATE files SET status = 'Canceled', updated_at = ? WHERE id = ? AND status IN ('Downloading', 'Decoding')")
             .bind(self.clock.now().naive_utc())
             .bind(id)
-            .execute(self.db.as_ref())
+            .execute(&mut *tx)
             .await?;
+        let status: Option<SubscribedFileStatus> = sqlx::query_scalar("SELECT status FROM files WHERE id = ?").bind(id).fetch_optional(&mut *tx).await?;
+        if status == Some(SubscribedFileStatus::Finalizing) {
+            return Err(Error::new(ErrorKind::Reject).with_message("subscription is finalizing"));
+        }
+        tx.commit().await?;
         Ok(())
+    }
+
+    pub async fn find_finalizing_files(&self) -> Result<Vec<SubscribedFile>> {
+        let rows: Vec<SubscribedFileRow> = sqlx::query_as("SELECT * FROM files WHERE status = 'Finalizing'").fetch_all(self.db.as_ref()).await?;
+        rows.into_iter().map(SubscribedFileRow::into).collect()
     }
 
     pub async fn mark_downloaded(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<bool> {
@@ -173,8 +184,7 @@ SELECT *
         .fetch_all(self.db.as_ref())
         .await?;
 
-        let res: Vec<SubscribedFile> = res.into_iter().filter_map(|r| r.into().ok()).collect();
-        Ok(res)
+        res.into_iter().map(SubscribedFileRow::into).collect()
     }
 
     pub async fn find_file_by_id(&self, id: &str) -> Result<Option<SubscribedFile>> {
@@ -242,6 +252,9 @@ SELECT *
         };
 
         let file = res.into()?;
+        if file.status == SubscribedFileStatus::Finalizing {
+            return Err(Error::new(ErrorKind::Reject).with_message("subscription is finalizing"));
+        }
 
         sqlx::query(
             r#"

@@ -387,9 +387,11 @@ Failed の同じ path と file 名への import は、SQLite の 1 transaction �
 Completed の出力 file は remove でも残す。
 
 §4.2 の出力先予約と、file、directory、symlink を含む既存 entry の登録時の拒否を実装している。
-一時出力、Finalizing とその回復は未実装である。
+rank 0 は Store が作成した一時出力だけへ復号し、file の同期、Finalizing の記録、置換しない配置、配置の同期、Completed の記録を順に行う。
+Finalizing の回復と、確定中の cancel/remove の拒否を実装している。
 公開側は §2 の稼働中の sweep を行い、失敗した回収を TaskEncoder が間隔を延ばしながら再試行する。
-購読側の稼働中の block と一時出力の sweep は未実装である。
+購読側も、参照のない root の block と、Canceled と Failed の一時出力を sweep で回収する。
+TaskDecoder は Finalizing の配置と sweep の失敗を、間隔を延ばしながら再試行する。
 永続化の残作業は [storage.md §6](./storage.md#6-現状と残作業) に集約する。
 
 FileExchanger には接続と受理の task はあるが、block 要求と応答の message および送受信 loop がない。

@@ -1,13 +1,13 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
-use futures::future::join_all;
 use parking_lot::Mutex;
 use rand::RngExt;
 use tokio::{
     select,
-    sync::{Mutex as TokioMutex, mpsc},
-    task::JoinHandle,
+    sync::{Mutex as TokioMutex, Semaphore, mpsc},
+    task::{JoinHandle, JoinSet},
+    time::{Instant, timeout_at},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -18,7 +18,7 @@ use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
 use crate::{
     base::{
-        connection::{ConnectionTcpAccepter, FramedRecvExt as _, FramedSendExt as _},
+        connection::{ConnectionTcpAccepter, FramedRecvExt as _, FramedSendExt as _, FramedStream},
         runtime::Shutdown,
     },
     core::session::message::{HelloMessage, SessionVersion, V1ChallengeMessage, V1RequestMessage, V1SignatureMessage},
@@ -27,17 +27,13 @@ use crate::{
 
 use super::{
     message::{V1RequestType, V1ResultMessage, V1ResultType},
-    model::{Session, SessionHandshakeType, SessionType},
+    model::{Session, SessionHandshakeType, SessionOption, SessionType},
 };
 
 pub struct SessionAccepter {
     tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
-    signer: Arc<OmniSigner>,
-    sleeper: Arc<dyn Sleeper + Send + Sync>,
-    rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     receivers: Arc<TokioMutex<HashMap<SessionType, mpsc::Receiver<Session>>>>,
-    senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<Session>>>>,
-    task_acceptors: Arc<TokioMutex<Vec<TaskAccepter>>>,
+    task_accepter: TaskAccepter,
 }
 
 impl SessionAccepter {
@@ -47,6 +43,7 @@ impl SessionAccepter {
         sleeper: Arc<dyn Sleeper + Send + Sync>,
         rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         supported_types: &[SessionType],
+        option: SessionOption,
     ) -> Self {
         let mut senders = HashMap::<SessionType, mpsc::Sender<Session>>::new();
         let mut receivers = HashMap::<SessionType, mpsc::Receiver<Session>>::new();
@@ -60,25 +57,13 @@ impl SessionAccepter {
             receivers.insert(typ.clone(), rx);
         }
 
-        let result = Self {
+        let task_accepter = TaskAccepter::new(Arc::new(TokioMutex::new(senders)), tcp_accepter.clone(), signer, rng, sleeper, option);
+        task_accepter.run().await;
+
+        Self {
             tcp_accepter,
-            signer,
-            rng,
-            sleeper,
             receivers: Arc::new(TokioMutex::new(receivers)),
-            senders: Arc::new(TokioMutex::new(senders)),
-            task_acceptors: Arc::new(TokioMutex::new(Vec::new())),
-        };
-        result.run().await;
-
-        result
-    }
-
-    async fn run(&self) {
-        for _ in 0..3 {
-            let task = TaskAccepter::new(self.senders.clone(), self.tcp_accepter.clone(), self.signer.clone(), self.rng.clone(), self.sleeper.clone());
-            task.run().await;
-            self.task_acceptors.lock().await.push(task);
+            task_accepter,
         }
     }
 
@@ -95,9 +80,7 @@ impl SessionAccepter {
 #[async_trait]
 impl Shutdown for SessionAccepter {
     async fn shutdown(&self) {
-        let mut task_acceptors = self.task_acceptors.lock().await;
-        let task_acceptors: Vec<TaskAccepter> = task_acceptors.drain(..).collect();
-        join_all(task_acceptors.iter().map(|task| task.shutdown())).await;
+        self.task_accepter.shutdown().await;
 
         self.tcp_accepter.shutdown().await;
     }
@@ -106,6 +89,7 @@ impl Shutdown for SessionAccepter {
 #[derive(Clone)]
 struct TaskAccepter {
     inner: Inner,
+    tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
     join_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
     token: CancellationToken,
@@ -114,19 +98,16 @@ struct TaskAccepter {
 impl TaskAccepter {
     pub fn new(
         senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<Session>>>>,
-        tcp_connector: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
+        tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
         signer: Arc<OmniSigner>,
         rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
+        option: SessionOption,
     ) -> Self {
-        let inner = Inner {
-            senders,
-            tcp_connector,
-            signer,
-            rng,
-        };
+        let inner = Inner { senders, signer, rng, option };
         Self {
             inner,
+            tcp_accepter,
             sleeper,
             join_handle: Arc::new(TokioMutex::new(None)),
             token: CancellationToken::new(),
@@ -135,19 +116,69 @@ impl TaskAccepter {
 
     pub async fn run(&self) {
         let sleeper = self.sleeper.clone();
+        let tcp_accepter = self.tcp_accepter.clone();
         let inner = self.inner.clone();
         let token = self.token.clone();
         let join_handle = tokio::spawn(async move {
+            let semaphore = Arc::new(Semaphore::new(inner.option.max_pending_handshake_count));
+            let mut handshakes = JoinSet::new();
             while !token.is_cancelled() {
+                // 完了した task を残さず、TCP の受理を続ける
+                while let Some(result) = handshakes.try_join_next() {
+                    if let Err(e) = result {
+                        warn!(error_message = e.to_string(), "handshake task failed");
+                    }
+                }
                 select! {
-                    _ = async {
-                        sleeper.sleep(std::time::Duration::from_secs(1)).await;
-                        let res = inner.accept().await;
-                        if let Err(e) = res {
-                            warn!(error_message = e.to_string(), "accept failed");
-                        }
-                    } => {}
+                    biased;
                     _ = token.cancelled() => break,
+                    result = handshakes.join_next(), if !handshakes.is_empty() => {
+                        if let Some(Err(e)) = result {
+                            warn!(error_message = e.to_string(), "handshake task failed");
+                        }
+                    }
+                    result = tcp_accepter.accept() => {
+                        let (stream, addr) = match result {
+                            Ok(connection) => connection,
+                            Err(e) => {
+                                warn!(error_message = e.to_string(), "accept failed");
+                                select! {
+                                    _ = token.cancelled() => break,
+                                    _ = sleeper.sleep(std::time::Duration::from_secs(1)) => {}
+                                }
+                                continue;
+                            }
+                        };
+                        let deadline = Instant::now() + inner.option.handshake_timeout;
+                        let Ok(permit) = semaphore.clone().try_acquire_owned() else {
+                            warn!(address = %addr, "pending handshake limit reached");
+                            drop(stream);
+                            continue;
+                        };
+                        let inner = inner.clone();
+                        let token = token.clone();
+                        handshakes.spawn(async move {
+                            let _permit = permit;
+                            select! {
+                                biased;
+                                _ = token.cancelled() => {}
+                                result = timeout_at(deadline, inner.handshake(stream, addr)) => {
+                                    match result {
+                                        Ok(Ok(())) => {}
+                                        Ok(Err(e)) => warn!(address = %addr, error_message = e.to_string(), "handshake failed"),
+                                        Err(e) => warn!(address = %addr, error_message = e.to_string(), "handshake timed out"),
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+            // JoinSet を空にしてから破棄し、cancel された全 task の終了を待つ
+            token.cancel();
+            while let Some(result) = handshakes.join_next().await {
+                if let Err(e) = result {
+                    warn!(error_message = e.to_string(), "handshake task failed");
                 }
             }
         });
@@ -168,14 +199,14 @@ impl Shutdown for TaskAccepter {
 #[derive(Clone)]
 struct Inner {
     senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<Session>>>>,
-    tcp_connector: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
     signer: Arc<OmniSigner>,
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
+    option: SessionOption,
 }
 
 impl Inner {
-    async fn accept(&self) -> Result<()> {
-        let (stream, addr) = self.tcp_connector.accept().await?;
+    async fn handshake(&self, stream: FramedStream, addr: SocketAddr) -> Result<()> {
+        stream.set_max_frame_length(self.option.handshake_max_frame_length).await;
 
         let send_hello_message = HelloMessage { version: SessionVersion::V1 };
         stream.sender.lock().await.send_message(&send_hello_message).await?;
@@ -215,6 +246,8 @@ impl Inner {
                     result_type: V1ResultType::Accept,
                 };
                 stream.sender.lock().await.send_message(&send_session_result_message).await?;
+
+                stream.set_max_frame_length(typ.max_frame_length()).await;
 
                 let session = Session {
                     typ,
@@ -262,13 +295,21 @@ mod tests {
         prelude::*,
     };
 
-    use super::{SessionAccepter, SessionType};
+    use super::{SessionAccepter, SessionOption, SessionType};
 
     #[tokio::test]
     async fn shutdown_completes_while_waiting_for_a_connection() -> TestResult {
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
-        let session_accepter = SessionAccepter::new(Arc::new(PendingTcpAccepter), signer, Arc::new(FakeSleeper), rng, &[SessionType::NodeFinder]).await;
+        let session_accepter = SessionAccepter::new(
+            Arc::new(PendingTcpAccepter),
+            signer,
+            Arc::new(FakeSleeper),
+            rng,
+            &[SessionType::NodeFinder],
+            SessionOption::default(),
+        )
+        .await;
 
         // 接続を待つ accept に入るまで待つ
         tokio::time::sleep(Duration::from_millis(100)).await;

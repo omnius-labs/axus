@@ -63,6 +63,12 @@ pub struct NodeFinderIntervals {
     pub communicate: std::time::Duration,
 }
 
+impl NodeFinderIntervals {
+    pub fn receive_timeout(&self) -> std::time::Duration {
+        self.communicate * 3
+    }
+}
+
 impl Default for NodeFinderIntervals {
     fn default() -> Self {
         Self {
@@ -76,7 +82,7 @@ impl Default for NodeFinderIntervals {
 impl NodeFinder {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        my_node_profile: NodeProfile,
+        mut my_node_profile: NodeProfile,
         session_connector: Arc<SessionConnector>,
         session_accepter: Arc<SessionAccepter>,
         node_profile_repo: Arc<NodeFinderRepo>,
@@ -86,6 +92,14 @@ impl NodeFinder {
         rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         option: NodeFinderOption,
     ) -> Result<Self> {
+        if my_node_profile.addrs.len() > NodeProfile::MAX_WIRE_ADDRS {
+            warn!(
+                address_count = my_node_profile.addrs.len(),
+                max_address_count = NodeProfile::MAX_WIRE_ADDRS,
+                "too many addresses to advertise; truncating node profile"
+            );
+            my_node_profile.addrs.truncate(NodeProfile::MAX_WIRE_ADDRS);
+        }
         let (tx, rx) = mpsc::channel(20);
 
         let v = Self {

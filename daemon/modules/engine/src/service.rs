@@ -22,7 +22,10 @@ use crate::{
     core::{
         identity::NodeIdentity,
         negotiator::{NodeFinder, NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, NodeProfileFetcherImpl},
-        session::{SessionAccepter, SessionConnector, model::SessionType},
+        session::{
+            SessionAccepter, SessionConnector,
+            model::{SessionOption, SessionType},
+        },
     },
     model::NodeProfile,
     prelude::*,
@@ -73,8 +76,18 @@ impl AxusService {
         let signer = identity.signer();
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
 
-        let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), sleeper.clone(), rng.clone(), &[SessionType::NodeFinder]).await);
-        let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, rng.clone()));
+        let session_accepter = Arc::new(
+            SessionAccepter::new(
+                tcp_accepter.clone(),
+                signer.clone(),
+                sleeper.clone(),
+                rng.clone(),
+                &[SessionType::NodeFinder],
+                SessionOption::default(),
+            )
+            .await,
+        );
+        let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, rng.clone(), SessionOption::default()));
 
         let node_ref_repo_dir = state_dir.join("repo");
         tokio::fs::create_dir_all(&node_ref_repo_dir).await?;
@@ -88,9 +101,6 @@ impl AxusService {
         tokio::fs::create_dir_all(&node_finder_dir).await?;
 
         let my_node_profile = NodeProfile::new(identity.public_key().to_vec(), my_addrs);
-        // 他の node の設定 p2p.bootstrap_nodes に書けるよう、自 node の NodeProfile を URI で記録する
-        info!(node_profile = my_node_profile.to_string(), "node profile");
-
         let result = NodeFinder::new(
             my_node_profile,
             session_connector,
@@ -108,6 +118,9 @@ impl AxusService {
             },
         )
         .await?;
+
+        // 他の node の設定 p2p.bootstrap_nodes に書けるよう、起動時の制約を適用した NodeProfile を記録する
+        info!(node_profile = result.my_node_profile().to_string(), "node profile");
 
         Ok(result)
     }
@@ -328,13 +341,30 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn startup_truncates_advertised_addresses_to_the_wire_limit() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let addrs: Vec<_> = (0..12).map(|i| OmniAddr::create_tcp("127.0.0.1".parse().unwrap(), 1000 + i)).collect();
+        let option = AxusServiceOption {
+            advertise_addrs: addrs.clone(),
+            ..fast_option(vec![])
+        };
+        let service = AxusService::new(dir.path().join("state"), format!("127.0.0.1:{}", free_port()?), dir.path(), option).await?;
+        let profile = service.node_finder.my_node_profile();
+        assert_eq!(profile.addrs, addrs[..NodeProfile::MAX_WIRE_ADDRS]);
+        assert_eq!(NodeProfile::import(&profile.export()?)?, profile);
+        service.shutdown().await;
+        Ok(())
+    }
+
     fn fast_option(bootstrap_node_profiles: Vec<NodeProfile>) -> AxusServiceOption {
         AxusServiceOption {
             bootstrap_node_profiles,
             node_finder_intervals: NodeFinderIntervals {
                 connect: Duration::from_millis(100),
                 compute: Duration::from_millis(100),
-                communicate: Duration::from_millis(100),
+                // 受理 worker の 1 秒の待機より、Hello の受信期限を長くする
+                communicate: Duration::from_millis(500),
             },
             ..Default::default()
         }

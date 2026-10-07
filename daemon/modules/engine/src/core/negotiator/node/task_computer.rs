@@ -217,30 +217,20 @@ impl TaskComputer {
         // Session毎にデータを実体化する
         let mut sending_data_map: HashMap<Vec<u8>, SendingDataMessage> = HashMap::new();
 
-        let push_node_profiles: Vec<Arc<NodeProfile>> = push_node_profiles.into_iter().collect();
+        let push_node_profiles = self.select_node_profiles(push_node_profiles.into_iter().collect(), DataMessage::MAX_PUSH_NODE_PROFILES);
 
         for id in received_data_map.keys() {
-            let want_asset_keys = sending_want_asset_key_map
-                .get(id.as_slice())
-                .unwrap_or(&Vec::new())
-                .iter()
-                .take(1024 * 256)
-                .cloned()
-                .collect();
-            let give_asset_key_locations = sending_give_asset_key_location_map
-                .get(id.as_slice())
-                .unwrap_or(&HashMap::new())
-                .iter()
-                .take(1024 * 256)
-                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-                .collect();
-            let push_asset_key_locations = sending_push_asset_key_location_map
-                .get(id.as_slice())
-                .unwrap_or(&HashMap::new())
-                .iter()
-                .take(1024 * 256)
-                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-                .collect();
+            let mut want_asset_keys = sending_want_asset_key_map.remove(id.as_slice()).unwrap_or_default();
+            want_asset_keys.shuffle(&mut self.rng.lock());
+            want_asset_keys.truncate(DataMessage::MAX_WANT_ASSET_KEYS);
+            let give_asset_key_locations = self.select_asset_key_locations(
+                sending_give_asset_key_location_map.remove(id.as_slice()).unwrap_or_default(),
+                DataMessage::MAX_GIVE_ASSET_KEY_LOCATIONS,
+            );
+            let push_asset_key_locations = self.select_asset_key_locations(
+                sending_push_asset_key_location_map.remove(id.as_slice()).unwrap_or_default(),
+                DataMessage::MAX_PUSH_ASSET_KEY_LOCATIONS,
+            );
 
             let data_message = SendingDataMessage {
                 push_node_profiles: push_node_profiles.clone(),
@@ -259,6 +249,31 @@ impl TaskComputer {
         }
 
         Ok(())
+    }
+
+    fn select_node_profiles(&self, mut profiles: Vec<Arc<NodeProfile>>, max_count: usize) -> Vec<Arc<NodeProfile>> {
+        let mut rng = self.rng.lock();
+        profiles.shuffle(&mut rng);
+        profiles.truncate(max_count);
+        for profile in &mut profiles {
+            // URI から取得した既知 node も、送信時には wire の上限へ収める
+            if profile.addrs.len() > NodeProfile::MAX_WIRE_ADDRS {
+                let profile = Arc::make_mut(profile);
+                profile.addrs.shuffle(&mut rng);
+                profile.addrs.truncate(NodeProfile::MAX_WIRE_ADDRS);
+            }
+        }
+        profiles
+    }
+
+    fn select_asset_key_locations(&self, locations: HashMap<Arc<AssetKey>, &HashSet<Arc<NodeProfile>>>, max_count: usize) -> HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>> {
+        let mut locations: Vec<_> = locations.into_iter().collect();
+        locations.shuffle(&mut self.rng.lock());
+        locations.truncate(max_count);
+        locations
+            .into_iter()
+            .map(|(key, profiles)| (key, self.select_node_profiles(profiles.iter().cloned().collect(), DataMessage::MAX_LOCATION_NODE_PROFILES)))
+            .collect()
     }
 }
 

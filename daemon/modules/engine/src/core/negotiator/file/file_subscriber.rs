@@ -7,6 +7,8 @@ use omnius_core_omnikit::generated::omni_hash::OmniHash;
 use parking_lot::Mutex;
 use std::{path::Path, sync::Arc};
 use tokio_util::bytes::Bytes;
+#[allow(dead_code)]
+mod output_publication;
 mod repo;
 mod store;
 mod task_decoder;

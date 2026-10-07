@@ -2508,6 +2508,7 @@ dependencies = [
  "fast-socks5",
  "futures",
  "hex",
+ "libc",
  "local-ip-address",
  "nom 8.0.0",
  "omnius-core-base",
@@ -2531,6 +2532,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 # 置換しない rename は OS ごとに別の API で提供される
 
-**出所: 文献のみ**（Linux man-pages 6.19 / macOS 26.6.2 rename(2) / Microsoft Learn MoveFileExW・MoveFile / Rust std 1.96.0 ソース / 2026-10-04）
+**出所: 文献と動作確認**（Linux man-pages 6.19 / macOS 26.6.2 rename(2) / Microsoft Learn MoveFileExW・MoveFile / Rust std 1.96.0 ソース / 2026-10-04、2026-10-07）
 
 [knowledges.md](../knowledges.md) の 1 項目。
 
@@ -23,11 +23,16 @@ Windows の `MOVEFILE_WRITE_THROUGH` を指定した `MoveFileExW` は、移動�
 どの API も、rename は同じ filesystem または volume の中で 1 つの名前を別の名前に付け替える。
 Windows の `MOVEFILE_COPY_ALLOWED` を指定すると volume をまたぐ移動が copy と削除になるが、付け替えではなくなる。
 
+macOS 26.6.2 の `/private/tmp` の filesystem で、`renamex_np` の `RENAME_EXCL` による配置が成功し、移動元の名前が消えて移動先に内容が残ることを確認した。
+移動先に通常 file、directory、symlink、dangling symlink がある場合は、すべて `EEXIST` で失敗し、移動元と既存の内容を保持した。
+
 ## 根拠
 
 [Linux man-pages 6.19 rename(2)](https://man7.org/linux/man-pages/man2/rename.2.html)、macOS 26.6.2 の `man 2 rename`、[Microsoft Learn MoveFileExW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)、[Microsoft Learn MoveFile](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefile) を 2026-10-04 に参照した。
 `std::fs::rename` の対応先は Rust 1.96.0 の配布ソース `library/std/src/fs.rs` の文書 comment で確認した。
-各 OS での実行と、電源断の試験は行っていない。
+2026-10-07 に、Python の `ctypes` から macOS の `renamex_np` を呼び、一時 directory で配置と 4 種の既存 entry の拒否を確認した。
+macOS では engine の配置 test も実行し、同じ既存 entry の保護と親 directory の同期の成功を確認した。
+Linux と Windows での実行と電源断の試験は未確認である。
 
 ## 含意
 

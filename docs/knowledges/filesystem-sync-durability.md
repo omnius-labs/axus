@@ -1,6 +1,6 @@
 # file の I/O 完了だけでは内容と directory entry の永続化は揃わない
 
-**出所: 文献のみ**（Tokio 1.52.3 / Rust std 1.96.0 ソース / Linux man-pages 6.19 / Apple fsync(2) archived manual / 2026-10-04）
+**出所: 文献と動作確認**（Tokio 1.52.3 / Rust std 1.96.0 ソース / Linux man-pages 6.19 / Apple fsync(2) archived manual / 2026-10-04、2026-10-07）
 
 [knowledges.md](../knowledges.md) の 1 項目。
 
@@ -18,11 +18,14 @@ Apple の fsync(2) manual は、`fsync` 後も device の cache に書き込み�
 API の成功が device の故障まで保証するものではない。
 OS と保存先が要求する同期を守ることが前提である。
 
+macOS 26.6.2 の `/private/tmp` の一時 directory を読み出し用に開き、`fcntl(F_FULLFSYNC)` が成功することを確認した。
+
 ## 根拠
 
 [Tokio 1.52.3 File](https://docs.rs/tokio/1.52.3/tokio/fs/struct.File.html#method.sync_all) と同版の配布ソース `src/fs/file.rs` の `sync_all`、[Linux man-pages 6.19 fsync(2)](https://man7.org/linux/man-pages/man2/fsync.2.html)、[Apple fsync(2)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html) を 2026-10-04 に参照した。
 std の呼び出し先は、`daemon/rust-toolchain.toml` が固定する Rust 1.96.0 の配布ソース `library/std/src/sys/fs/unix.rs` の `fsync` と `library/std/src/sys/fs/windows.rs` の `fsync` で確認した。
 Apple の資料は archived manual であり、対象の macOS/filesystem での同期可否は別途確認が必要である。
+2026-10-07 に Python の `fcntl` から一時 directory の descriptor に `F_FULLFSYNC` を指定し、呼び出しの成功を確認した。
 device cache や電源断の実機試験は行っていない。
 
 ## 含意

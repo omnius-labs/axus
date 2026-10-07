@@ -101,6 +101,8 @@ clap = { version = "4.6.1", features = ["derive"] }
 toml = "1.0.6"
 strum = { version = "0.28.0", features = ["derive"] }
 enumflags2 = "0.7.12"
+libc = "0.2.183"
+windows-sys = { version = "0.61.2", default-features = false }
 
 axum = { version = "0.8", features = ["multipart"] }
 axum-extra = { version = "0.12", features = [

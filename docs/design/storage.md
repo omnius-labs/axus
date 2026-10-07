@@ -288,7 +288,8 @@ commit と実体の削除の失敗後に sweep を行い、再び失敗した間
 
 出力先は解決した親 directory の絶対 path と最終 entry 名で保存し、進行中の購読に対する部分一意 index と、symlink を辿らない既存 entry の確認で登録時の衝突を拒否する。
 一時出力の予約名は、ASCII の大小文字を区別せず登録時に拒否する。
-§4.2 の出力 file と directory entry の同期、§4.5 の一時出力、Finalizing、置換しない rename による確定と回復は未実装である。
+置換しない rename と親 directory の同期は OutputPublication に実装している。
+§4.2 の出力 file と directory entry の同期、§4.5 の一時出力、Finalizing、置換しない rename による確定と回復を購読に適用する処理は未実装である。
 subscriber の稼働中の block と一時出力の sweep も未実装であり、起動時回復は block の orphan 回収までである。
 公開 commit の各 storage の commit 前後で処理を中断して Store を開き直す test と、rename、metadata commit、sweep の失敗の注入 test で回収と再公開を確認している。
 購読の出力確定の境界での回復と、OS クラッシュ後の回復は未確認である。

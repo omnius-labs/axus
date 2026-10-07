@@ -62,6 +62,8 @@ sequenceDiagram
 
 用途の確定を認証の後に置くことで、未認証の接続を NodeFinder や FileExchanger の queue に入れない。
 version 交渉は、双方が共通して対応する手順だけを選ばなければならない。
+Session の handshake は TCP 接続後から認証と用途選択の完了までとし、期限、同時数、frame 上限を §5.1 のとおり制限する。
+NodeFinder の Hello/Profile 交換は、その後に上位 protocol で行う。
 
 ## 4. 用途と停止
 
@@ -83,6 +85,36 @@ NodeFinder と FileExchanger は別の Session を使い、用途ごとの受理
 
 **理由**
 message protocol と接続資源を用途ごとに隔離し、一方の負荷が他方の処理を占有しないようにするためである。
+
+#### handshake の期限と並列度
+
+**決定**
+受理側と発信側は、TCP 接続後の handshake 全体に 1 つの 10 秒の期限を設け、期限を超えた接続を閉じる。
+version、challenge、signature、用途の各交換で期限を延長しない。
+受理側は接続ごとの handshake を並行して進め、同時数を 64 本以下に制限する。
+上限を超えた接続は読み書きせずに閉じ、log に記録する。
+shutdown は handshake の task も cancellation token で終了させ、その終了を待つ。
+
+**理由**
+応答しない相手が受理と発信を占有する時間を制限し、認証前の相手による接続資源の消費を抑えるためである。
+接続ごとに処理すると、1 本の無応答接続がほかの handshake を止めない。
+同時数にも上限を置くことで、期限が来るまで大量の task と stream が残ることを防ぐ。
+
+**却下案**
+少数の worker が handshake を直列に処理する方式は、無応答接続が worker を占有すると次の接続を受理できなくなるため採用しない。
+
+#### 用途に応じた frame 上限
+
+**決定**
+handshake 中の frame は送受信とも 16 KiB 以下とする。
+用途選択後は NodeFinder の上限を 4 MiB、FileExchanger の上限を 64 MiB に切り替える。
+受信 frame が上限を超えた Session は閉じる。
+FileExchanger の確立後の受信期限は、block 交換 protocol を定義するときに決める。
+
+**理由**
+認証前の message に必要な範囲へ上限を下げ、受信側が frame のために確保する memory を抑えるためである。
+NodeFinder も伝播情報の受信で資源を消費するため、確立後に 4 MiB の上限を持つ。
+FileExchanger は block 交換 protocol が未定義なので、既存の 64 MiB を維持する。
 
 ### 5.2 保留
 
@@ -129,8 +161,10 @@ V1 しか存在しないため、どちらの規則でも交渉結果が変わ�
 ## 6. 現状と残作業
 
 version、challenge、signature、用途選択の message があり、Session は暗号化されていない FramedStream を保持する。
-FramedStream は送受信の frame 上限を変更でき、SessionOption は handshake の期限、同時数、frame 上限の設定を持つ。
-設定は SessionAccepter と SessionConnector の構築時に渡すが、handshake への適用と用途選択後の frame 上限の切り替えは未実装である。
+SessionOption の期限、同時数、frame 上限を SessionAccepter と SessionConnector に渡し、handshake の入力境界で強制する。
+受理側は TCP の受理と接続ごとの handshake task を分け、shutdown は cancel 後にすべての task の終了を待つ。
+用途選択後の frame 上限の切り替えも実装している。
+NodeFinder の Hello/Profile 交換時と確立後の受信期限、DataMessage の要素数の上限は未実装である。
 secure channel と複数 version の選択規則を定めるまで、信頼できない network での FileExchanger と Profile 交換は有効にしない。
 
 確認済みの不具合は [issues.md](../issues.md) を参照する。

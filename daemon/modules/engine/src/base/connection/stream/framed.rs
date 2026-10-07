@@ -13,6 +13,7 @@ pub struct FramedStream {
 }
 
 impl FramedStream {
+    pub const NODE_FINDER_MAX_FRAME_LENGTH: usize = 4 * 1024 * 1024;
     pub const FILE_EXCHANGER_MAX_FRAME_LENGTH: usize = 64 * 1024 * 1024;
 
     pub fn new<R, W>(reader: R, writer: W) -> Self
@@ -25,7 +26,6 @@ impl FramedStream {
         Self { receiver, sender }
     }
 
-    #[allow(unused)]
     pub async fn set_max_frame_length(&self, max_frame_length: usize) {
         self.receiver.lock().await.set_max_frame_length(max_frame_length);
         self.sender.lock().await.set_max_frame_length(max_frame_length);

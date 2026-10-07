@@ -188,6 +188,7 @@ impl TaskCommunicator {
                 _ = this.cancellation_token.cancelled() => {}
                 _ = sender.status.cancellation_token.cancelled() => {}
             };
+            sender.status.cancellation_token.cancel();
         })
     }
 
@@ -213,6 +214,7 @@ impl TaskCommunicator {
                 _ = this.cancellation_token.cancelled() => {}
                 _ = receiver.status.cancellation_token.cancelled() => {}
             }
+            receiver.status.cancellation_token.cancel();
         })
     }
 }
@@ -482,13 +484,14 @@ impl RocketPackStruct for DataMessage {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc, time::Duration};
+    use std::{sync::Arc, time::Duration};
 
     use chrono::Utc;
     use enumflags2::{BitFlags, make_bitflags};
     use parking_lot::Mutex;
     use testresult::TestResult;
     use tokio::sync::{Mutex as TokioMutex, mpsc};
+    use tokio_util::bytes::Bytes;
 
     use omnius_core_base::{
         clock::{Clock, ClockUtc},
@@ -564,6 +567,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn oversized_node_finder_frame_closes_both_workers_and_removes_the_session() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let sessions = Arc::new(SessionRegistry::new());
+        let intervals = NodeFinderIntervals {
+            communicate: Duration::from_millis(10),
+            ..NodeFinderIntervals::default()
+        };
+        let (task, session_sender) = create_task_communicator_with_intervals(dir.path().to_str().unwrap(), sessions.clone(), intervals).await?;
+        let (session, peer, peer_node_profile) = session_pair()?;
+        session.stream.set_max_frame_length(FramedStream::NODE_FINDER_MAX_FRAME_LENGTH).await;
+        let answer = answer_handshake(peer.clone(), peer_node_profile);
+        session_sender.send(SessionStatus::new(session, Arc::new(ClockUtc))).await?;
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
+            while sessions.len().await == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+
+        // 送信側だけが動き続けないことを、相手からの EOF と登録解除で確かめる
+        let send = async { peer.sender.lock().await.send(Bytes::from(vec![0; FramedStream::NODE_FINDER_MAX_FRAME_LENGTH + 1])).await };
+        let receive = async {
+            loop {
+                if peer.receiver.lock().await.recv().await.is_err() {
+                    break;
+                }
+            }
+        };
+        let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, async { tokio::join!(send, receive) }).await?;
+        assert_eq!(sessions.len().await, 0);
+        task.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn handshake_succeeds_with_common_version() -> TestResult {
         let (session, peer, peer_node_profile) = session_pair()?;
 
@@ -620,6 +659,14 @@ mod tests {
     }
 
     async fn create_task_communicator(state_dir: &str, sessions: Arc<SessionRegistry>) -> Result<(Arc<TaskCommunicator>, mpsc::Sender<SessionStatus>)> {
+        create_task_communicator_with_intervals(state_dir, sessions, NodeFinderIntervals::default()).await
+    }
+
+    async fn create_task_communicator_with_intervals(
+        state_dir: &str,
+        sessions: Arc<SessionRegistry>,
+        intervals: NodeFinderIntervals,
+    ) -> Result<(Arc<TaskCommunicator>, mpsc::Sender<SessionStatus>)> {
         let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
         let (session_sender, session_receiver) = mpsc::channel(20);
 
@@ -633,7 +680,7 @@ mod tests {
                 state_dir: state_dir.to_string(),
                 max_connected_session_count: 3,
                 max_accepted_session_count: 3,
-                intervals: NodeFinderIntervals::default(),
+                intervals,
             },
         )
         .await?;

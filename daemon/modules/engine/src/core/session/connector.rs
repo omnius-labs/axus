@@ -4,9 +4,10 @@ use omnius_core_omnikit::generated::omni_sign::OmniSigner;
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 use parking_lot::Mutex;
 use rand::RngExt;
+use tokio::time::{Instant, timeout_at};
 
 use crate::{
-    base::connection::{ConnectionTcpConnector, FramedRecvExt as _, FramedSendExt as _},
+    base::connection::{ConnectionTcpConnector, FramedRecvExt as _, FramedSendExt as _, FramedStream},
     core::session::message::{V1ChallengeMessage, V1SignatureMessage},
     prelude::*,
 };
@@ -20,7 +21,6 @@ pub struct SessionConnector {
     tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync>,
     signer: Arc<OmniSigner>,
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
-    #[allow(unused)]
     option: SessionOption,
 }
 
@@ -36,6 +36,14 @@ impl SessionConnector {
 
     pub async fn connect(&self, addr: &OmniAddr, typ: &SessionType) -> Result<Session> {
         let stream = self.tcp_connector.connect(addr).await?;
+        let deadline = Instant::now() + self.option.handshake_timeout;
+        timeout_at(deadline, self.handshake(stream, addr, typ))
+            .await
+            .map_err(|e| Error::from_error(e, ErrorKind::NetworkError).with_message("Session handshake timed out"))?
+    }
+
+    async fn handshake(&self, stream: FramedStream, addr: &OmniAddr, typ: &SessionType) -> Result<Session> {
+        stream.set_max_frame_length(self.option.handshake_max_frame_length).await;
 
         let send_hello_message = HelloMessage { version: SessionVersion::V1 };
         stream.sender.lock().await.send_message(&send_hello_message).await?;
@@ -70,6 +78,8 @@ impl SessionConnector {
             if received_session_result_message.result_type == V1ResultType::Reject {
                 return Err(Error::new(ErrorKind::Reject).with_message("Session rejected"));
             }
+
+            stream.set_max_frame_length(typ.max_frame_length()).await;
 
             let session = Session {
                 typ: typ.clone(),

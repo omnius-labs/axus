@@ -11,13 +11,19 @@ pub enum SessionType {
     FileExchanger,
 }
 
+impl SessionType {
+    pub fn max_frame_length(&self) -> usize {
+        match self {
+            Self::NodeFinder => FramedStream::NODE_FINDER_MAX_FRAME_LENGTH,
+            Self::FileExchanger => FramedStream::FILE_EXCHANGER_MAX_FRAME_LENGTH,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionOption {
-    #[allow(unused)]
     pub handshake_timeout: Duration,
-    #[allow(unused)]
     pub max_pending_handshake_count: usize,
-    #[allow(unused)]
     pub handshake_max_frame_length: usize,
 }
 

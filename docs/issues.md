@@ -26,8 +26,13 @@
 | 項目 | 深刻度 | 調査日 | Issue |
 | --- | --- | --- | --- |
 | [異常終了した daemon の lock file が残り、再起動できなくなる](./issues/daemon-lock-survives-abnormal-exit.md) | 中 | 2026-10-06 | - |
+| [確立後の send_message と受理待ちの Session に期限がない](./issues/session-accept-and-message-without-deadline.md) | 中 | 2026-10-07 | - |
+| [output_lock が全購読で共通で、出力中の購読が他の購読の確定を止める](./issues/output-lock-shared-across-subscriptions.md) | 中 | 2026-10-07 | - |
+| [Failed や Canceled の行の出力先 directory が消えると、sweep の再試行が続き remove もできなくなる](./issues/vanished-output-directory-blocks-sweep-and-remove.md) | 中 | 2026-10-07 | - |
 | [アドレスが変わった node が既知 node に重複して残る](./issues/node-profile-rows-keyed-by-uri.md) | 低 | 2026-09-24 | - |
 | [delete_bulk が存在しない key を含むと何も削除せずに成功する](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | 低 | 2026-10-06 | - |
+| [最大構成の DataMessage が frame 上限の約 4 MiB になり得る](./issues/data-message-can-grow-to-frame-limit.md) | 低 | 2026-10-07 | - |
+| [TaskCommunicator::start が受理 channel が閉じても loop を抜けない](./issues/task-communicator-spins-on-closed-session-channel.md) | 低 | 2026-10-07 | - |
 
 既知 node の重複は、NodeProfile の到達先の真正性（[trust-security.md](./design/trust-security.md#nodeprofile-の到達先の真正性)）を決めると保存形式も変わり得るため、あわせて扱う。
 

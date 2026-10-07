@@ -1,6 +1,10 @@
 [profile.release]
 debug = 1
 
+# librocksdb-sys の C++ と生成 bindings にデバッグ情報を付けず、dev の build 時間と target ディレクトリの大きさを減らす。
+[profile.dev.package.librocksdb-sys]
+debug = false
+
 [workspace]
 members = [
   "./refs/core-rs/modules/base",

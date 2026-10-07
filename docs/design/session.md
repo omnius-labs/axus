@@ -64,6 +64,7 @@ sequenceDiagram
 version 交渉は、双方が共通して対応する手順だけを選ばなければならない。
 Session の handshake は TCP 接続後から認証と用途選択の完了までとし、期限、同時数、frame 上限を §5.1 のとおり制限する。
 NodeFinder の Hello/Profile 交換は、その後に上位 protocol で行う。
+この交換と確立後の受信には通信周期の 3 倍の期限を適用し、詳細は [node-finder.md](./node-finder.md#61-決定済み) が正とする。
 
 ## 4. 用途と停止
 
@@ -164,7 +165,8 @@ version、challenge、signature、用途選択の message があり、Session �
 SessionOption の期限、同時数、frame 上限を SessionAccepter と SessionConnector に渡し、handshake の入力境界で強制する。
 受理側は TCP の受理と接続ごとの handshake task を分け、shutdown は cancel 後にすべての task の終了を待つ。
 用途選択後の frame 上限の切り替えも実装している。
-NodeFinder の Hello/Profile 交換時と確立後の受信期限、DataMessage の要素数の上限は未実装である。
+NodeFinder の Hello/Profile 交換時と確立後の受信期限は、通信周期の 3 倍として実装している。
+DataMessage の要素数の上限は未実装である。
 secure channel と複数 version の選択規則を定めるまで、信頼できない network での FileExchanger と Profile 交換は有効にしない。
 
 確認済みの不具合は [issues.md](../issues.md) を参照する。

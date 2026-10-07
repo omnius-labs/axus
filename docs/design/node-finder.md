@@ -61,6 +61,9 @@ flowchart LR
 [TaskComputer](../../daemon/modules/engine/src/core/negotiator/node/task_computer.rs) は、全 Session の受信状態と上位 component の要求を見て、次に送る DataMessage を計算する。
 [TaskCommunicator](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs) は、Session ごとの handshake と送受信だけを担当する。
 判断を 1 箇所へ集約することで、接続ごとの worker に routing policy が分散しない。
+送信は通信周期ごとに行い、受信も 1 件の処理ごとに通信周期の残りを待つ。
+待つのは処理の後であり、§6.1 の受信期限は message を受信した時点で更新するため、待ち時間が期限を延ばすことはない。
+周期より速く送る相手の message で、受信側が保存処理を繰り返さないようにする。
 
 FileExchanger から必要な AssetKey を受け取る境界には [FnHub](../../daemon/modules/engine/src/base/sync/fn_hub.rs) を使う。
 発火側と登録側を分けることで、NodeFinder は FileExchanger の具象型を参照しない。
@@ -110,6 +113,20 @@ UPnP はルーターのポート開放の設定を変えるため、利用者が
 **却下案**
 接続先から見えた接続元アドレスを handshake で返してもらう案は、NAT の外側のアドレスを知れるが、handshake の message が増え、相手の申告を検証する手段も必要になるため採らない。
 
+#### NodeFinder の受信期限
+
+**決定**
+NodeFinder の Session は、Hello/Profile 交換を含め、相手の message を通信周期の 3 倍の間受信しなければ閉じる。
+通信周期は NodeFinderIntervals::communicate から取り、既定の 20 秒では受信期限は 60 秒となる。
+期限は Hello、Profile、DataMessage の各受信時に更新し、自 node の送信では延長しない。
+確立後は、内容が空でも通信周期ごとに必ず DataMessage を送る。
+shutdown は受信期限を待たずに cancellation token で送受信 task を終了させ、その終了を待つ。
+
+**理由**
+相手は毎周期 DataMessage を送るため、3 周期分の猶予を取ったうえで、無応答の Session が接続資源を占有し続けることを防ぐためである。
+期限を通信周期から導くことで、周期の設定を変えても、送信頻度に対する猶予の比率を保てる。
+Hello/Profile 交換にも適用し、Session の認証と用途選択を終えたまま応答しない接続も閉じる。
+
 ### 6.2 保留
 
 #### NodeFinder の能動探索と冗長度
@@ -133,6 +150,9 @@ UPnP はルーターのポート開放の設定を変えるため、利用者が
 接続、受理、計算、通信の task と SQLite repo があり、lookup は接続中 Session の受信状態だけを走査する。
 AxusService の起動経路から 2 node を起動し、Session の確立と AssetKey の lookup を結合試験で確認している。
 各 task の周期は NodeFinderOption で指定し、結合試験では短い周期を使う。
+Hello/Profile 交換と確立後の受信期限を通信周期から導き、無応答の Session を閉じる。
+空の DataMessage の定期送信、受信による期限の更新、受信待機中の shutdown を test で確認している。
+DataMessage の要素数の上限は未実装である。
 
 重複した Session の解消は、互いを bootstrap に指定した 2 node の結合試験で確認している。
 lookup で得た NodeProfile には、相手が広告したアドレスが含まれることを結合試験で確認している。

@@ -63,6 +63,12 @@ pub struct NodeFinderIntervals {
     pub communicate: std::time::Duration,
 }
 
+impl NodeFinderIntervals {
+    pub fn receive_timeout(&self) -> std::time::Duration {
+        self.communicate * 3
+    }
+}
+
 impl Default for NodeFinderIntervals {
     fn default() -> Self {
         Self {

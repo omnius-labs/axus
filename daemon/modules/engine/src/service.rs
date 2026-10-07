@@ -347,7 +347,8 @@ mod tests {
             node_finder_intervals: NodeFinderIntervals {
                 connect: Duration::from_millis(100),
                 compute: Duration::from_millis(100),
-                communicate: Duration::from_millis(100),
+                // 受理 worker の 1 秒の待機より、Hello の受信期限を長くする
+                communicate: Duration::from_millis(500),
             },
             ..Default::default()
         }

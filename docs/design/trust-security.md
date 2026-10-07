@@ -48,6 +48,9 @@ Session の認証と用途選択までの handshake は、TCP 接続後から全
 上限を超えた接続は読み書きせずに閉じ、期限を超えた接続も閉じる。
 frame の上限は handshake 中が 16 KiB、用途選択後は NodeFinder が 4 MiB、FileExchanger が 64 MiB であり、受信時に上限を超えた Session は閉じる。
 これらは認証前後の相手による受信側の資源消費を抑えるための制約であり、詳細と採用理由は [session.md](./session.md#51-決定済み) が正とする。
+NodeFinder は Hello/Profile 交換中も、確立後も、通信周期の 3 倍の間受信がなければ Session を閉じる。
+既定の通信周期は 20 秒なので受信期限は 60 秒であり、内容が空でも相手は毎周期 DataMessage を送る。
+この送信の約束を根拠に無応答の相手による接続資源の占有を制限し、期限は周期の設定値から導く（[node-finder.md](./node-finder.md#61-決定済み)）。
 FileExchanger は受信 block を hash 検証し、Profile 交換は署名と version 検証を通す。
 
 ## 4. 設計判断
@@ -113,5 +116,6 @@ README は Web of Trust による検索と公開の保護を掲げるが、信�
 Session は challenge signature を交換するが、通信を暗号化していない。
 署名鍵は state directory に保存し、node ID は公開鍵から導出して NodeFinder の handshake で照合する。
 Session の handshake の期限と同時数、handshake 中と用途選択後の frame 上限を実装している。
-NodeFinder の Hello/Profile 交換時と確立後の受信期限、DataMessage の要素数の上限は未実装である。
+NodeFinder の Hello/Profile 交換時と確立後の受信期限を、通信周期の 3 倍として実装している。
+DataMessage の要素数の上限は未実装である。
 NodeProfile の到達先の真正性と Web of Trust の policy を決め、信頼できない network へ適用する前に secure channel を選ぶ。

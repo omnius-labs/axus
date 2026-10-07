@@ -13,18 +13,25 @@ use crate::{
 
 use super::{
     message::{HelloMessage, SessionVersion, V1RequestMessage, V1RequestType, V1ResultMessage, V1ResultType},
-    model::{Session, SessionHandshakeType, SessionType},
+    model::{Session, SessionHandshakeType, SessionOption, SessionType},
 };
 
 pub struct SessionConnector {
     tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync>,
     signer: Arc<OmniSigner>,
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
+    #[allow(unused)]
+    option: SessionOption,
 }
 
 impl SessionConnector {
-    pub fn new(tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync>, signer: Arc<OmniSigner>, rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>) -> Self {
-        Self { tcp_connector, signer, rng }
+    pub fn new(tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync>, signer: Arc<OmniSigner>, rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>, option: SessionOption) -> Self {
+        Self {
+            tcp_connector,
+            signer,
+            rng,
+            option,
+        }
     }
 
     pub async fn connect(&self, addr: &OmniAddr, typ: &SessionType) -> Result<Session> {

@@ -129,6 +129,8 @@ V1 しか存在しないため、どちらの規則でも交渉結果が変わ�
 ## 6. 現状と残作業
 
 version、challenge、signature、用途選択の message があり、Session は暗号化されていない FramedStream を保持する。
+FramedStream は送受信の frame 上限を変更でき、SessionOption は handshake の期限、同時数、frame 上限の設定を持つ。
+設定は SessionAccepter と SessionConnector の構築時に渡すが、handshake への適用と用途選択後の frame 上限の切り替えは未実装である。
 secure channel と複数 version の選択規則を定めるまで、信頼できない network での FileExchanger と Profile 交換は有効にしない。
 
 確認済みの不具合は [issues.md](../issues.md) を参照する。

@@ -22,7 +22,10 @@ use crate::{
     core::{
         identity::NodeIdentity,
         negotiator::{NodeFinder, NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, NodeProfileFetcherImpl},
-        session::{SessionAccepter, SessionConnector, model::SessionType},
+        session::{
+            SessionAccepter, SessionConnector,
+            model::{SessionOption, SessionType},
+        },
     },
     model::NodeProfile,
     prelude::*,
@@ -73,8 +76,18 @@ impl AxusService {
         let signer = identity.signer();
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
 
-        let session_accepter = Arc::new(SessionAccepter::new(tcp_accepter.clone(), signer.clone(), sleeper.clone(), rng.clone(), &[SessionType::NodeFinder]).await);
-        let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, rng.clone()));
+        let session_accepter = Arc::new(
+            SessionAccepter::new(
+                tcp_accepter.clone(),
+                signer.clone(),
+                sleeper.clone(),
+                rng.clone(),
+                &[SessionType::NodeFinder],
+                SessionOption::default(),
+            )
+            .await,
+        );
+        let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, rng.clone(), SessionOption::default()));
 
         let node_ref_repo_dir = state_dir.join("repo");
         tokio::fs::create_dir_all(&node_ref_repo_dir).await?;

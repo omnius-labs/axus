@@ -39,7 +39,7 @@ mod tests {
         core::session::{
             SessionAccepter, SessionConnector,
             message::{HelloMessage, SessionVersion, V1ChallengeMessage, V1RequestMessage, V1RequestType, V1ResultMessage, V1ResultType, V1SignatureMessage},
-            model::SessionType,
+            model::{SessionOption, SessionType},
         },
         prelude::*,
     };
@@ -62,8 +62,16 @@ mod tests {
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
         let sleeper = Arc::new(FakeSleeper);
 
-        let session_accepter = SessionAccepter::new(tcp_accepter.clone(), signer.clone(), sleeper.clone(), rng.clone(), &[SessionType::NodeFinder]).await;
-        let session_connector = SessionConnector::new(tcp_connector, signer, rng);
+        let session_accepter = SessionAccepter::new(
+            tcp_accepter.clone(),
+            signer.clone(),
+            sleeper.clone(),
+            rng.clone(),
+            &[SessionType::NodeFinder],
+            SessionOption::default(),
+        )
+        .await;
+        let session_connector = SessionConnector::new(tcp_connector, signer, rng, SessionOption::default());
 
         let client = Arc::new(
             session_connector
@@ -99,8 +107,8 @@ mod tests {
         let sleeper = Arc::new(FakeSleeper);
         let addr = OmniAddr::create_tcp("127.0.0.1".parse()?, 1);
 
-        let session_accepter = SessionAccepter::new(tcp_accepter, signer.clone(), sleeper, rng.clone(), &[SessionType::NodeFinder]).await;
-        let session_connector = SessionConnector::new(tcp_connector.clone(), signer.clone(), rng);
+        let session_accepter = SessionAccepter::new(tcp_accepter, signer.clone(), sleeper, rng.clone(), &[SessionType::NodeFinder], SessionOption::default()).await;
+        let session_connector = SessionConnector::new(tcp_connector.clone(), signer.clone(), rng, SessionOption::default());
 
         for _ in 0..3 {
             match tokio::time::timeout(TEST_TIMEOUT, session_connector.connect(&addr, &SessionType::FileExchanger)).await? {
@@ -136,9 +144,10 @@ mod tests {
             sleeper,
             rng.clone(),
             &[SessionType::NodeFinder, SessionType::FileExchanger, SessionType::FileExchanger],
+            SessionOption::default(),
         )
         .await;
-        let session_connector = SessionConnector::new(tcp_connector, signer, rng);
+        let session_connector = SessionConnector::new(tcp_connector, signer, rng, SessionOption::default());
 
         let client = tokio::time::timeout(TEST_TIMEOUT, session_connector.connect(&addr, &SessionType::FileExchanger)).await??;
         let server = tokio::time::timeout(TEST_TIMEOUT, session_accepter.accept(&SessionType::FileExchanger)).await??;

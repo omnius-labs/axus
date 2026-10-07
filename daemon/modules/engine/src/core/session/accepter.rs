@@ -27,7 +27,7 @@ use crate::{
 
 use super::{
     message::{V1RequestType, V1ResultMessage, V1ResultType},
-    model::{Session, SessionHandshakeType, SessionType},
+    model::{Session, SessionHandshakeType, SessionOption, SessionType},
 };
 
 pub struct SessionAccepter {
@@ -38,6 +38,8 @@ pub struct SessionAccepter {
     receivers: Arc<TokioMutex<HashMap<SessionType, mpsc::Receiver<Session>>>>,
     senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<Session>>>>,
     task_acceptors: Arc<TokioMutex<Vec<TaskAccepter>>>,
+    #[allow(unused)]
+    option: SessionOption,
 }
 
 impl SessionAccepter {
@@ -47,6 +49,7 @@ impl SessionAccepter {
         sleeper: Arc<dyn Sleeper + Send + Sync>,
         rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         supported_types: &[SessionType],
+        option: SessionOption,
     ) -> Self {
         let mut senders = HashMap::<SessionType, mpsc::Sender<Session>>::new();
         let mut receivers = HashMap::<SessionType, mpsc::Receiver<Session>>::new();
@@ -68,6 +71,7 @@ impl SessionAccepter {
             receivers: Arc::new(TokioMutex::new(receivers)),
             senders: Arc::new(TokioMutex::new(senders)),
             task_acceptors: Arc::new(TokioMutex::new(Vec::new())),
+            option,
         };
         result.run().await;
 
@@ -262,13 +266,21 @@ mod tests {
         prelude::*,
     };
 
-    use super::{SessionAccepter, SessionType};
+    use super::{SessionAccepter, SessionOption, SessionType};
 
     #[tokio::test]
     async fn shutdown_completes_while_waiting_for_a_connection() -> TestResult {
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
-        let session_accepter = SessionAccepter::new(Arc::new(PendingTcpAccepter), signer, Arc::new(FakeSleeper), rng, &[SessionType::NodeFinder]).await;
+        let session_accepter = SessionAccepter::new(
+            Arc::new(PendingTcpAccepter),
+            signer,
+            Arc::new(FakeSleeper),
+            rng,
+            &[SessionType::NodeFinder],
+            SessionOption::default(),
+        )
+        .await;
 
         // 接続を待つ accept に入るまで待つ
         tokio::time::sleep(Duration::from_millis(100)).await;

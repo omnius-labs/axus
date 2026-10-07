@@ -123,7 +123,7 @@ impl TaskDecoder {
             return Ok(None);
         }
         if file.rank == 0 {
-            let mut output = File::create(&file.file_path).await?;
+            let mut output = File::create(file.output_path()).await?;
             let result = async {
                 if self.decode_bytes(&mut output, &file.root_hash, &hashes, token).await?.is_none() {
                     return Ok(None);
@@ -136,7 +136,7 @@ impl TaskDecoder {
             .await;
             drop(output);
             if !matches!(result, Ok(Some(()))) {
-                match tokio::fs::remove_file(&file.file_path).await {
+                match tokio::fs::remove_file(file.output_path()).await {
                     Ok(()) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                     Err(error) => return Err(error.into()),

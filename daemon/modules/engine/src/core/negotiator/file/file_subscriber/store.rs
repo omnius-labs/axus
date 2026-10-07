@@ -44,12 +44,34 @@ impl FileSubscriberStore {
 
     pub async fn subscribe(&self, root_hash: &OmniHash, file_path: &str, attrs: Option<&str>, priority: i64) -> Result<String> {
         let _guard = self.lock.read().await;
+        let path = Path::new(file_path);
+        let output_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| Error::new(ErrorKind::InvalidFormat).with_message("invalid output entry name"))?;
+        if SubscribedFile::is_reserved_output_name(output_name) {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("output entry name is reserved for temporary subscriber output"));
+        }
+        let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let directory = tokio::fs::canonicalize(parent).await?;
+        if !tokio::fs::metadata(&directory).await?.is_dir() {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("output parent is not a directory"));
+        }
+        match tokio::fs::symlink_metadata(directory.join(output_name)).await {
+            Ok(_) => return Err(Error::new(ErrorKind::AlreadyExists).with_message("output entry already exists")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let output_directory = directory
+            .to_str()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidFormat).with_message("invalid output directory"))?;
         let id = self.tsid_provider.lock().create().to_string();
         let now = self.clock.now();
         let file = SubscribedFile {
             id: id.clone(),
             root_hash: root_hash.clone(),
-            file_path: file_path.to_string(),
+            output_directory: output_directory.to_string(),
+            output_name: output_name.to_string(),
             rank: SubscribedFile::UNKNOWN_ROOT_RANK,
             block_count_downloaded: 0,
             block_count_total: 1,
@@ -170,6 +192,106 @@ mod tests {
             Arc::new(Mutex::new(TsidProviderImpl::new(ClockUtc, ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng)), 8))),
             Arc::new(ClockUtc),
         )
+    }
+
+    #[tokio::test]
+    async fn subscribe_rejects_reserved_names_but_accepts_similar_names() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let root = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"root");
+        for name in [".output.axus-0.000000000.aa.part", ".output.AXUS-0.000000000.AA.PART", ".output.AxUs-0.000000000.aA.Part"] {
+            let reserved = dir.path().join(name);
+            let error = store.subscribe(&root, reserved.to_str().unwrap(), None, 0).await.unwrap_err();
+            assert_eq!(*error.kind(), ErrorKind::InvalidFormat);
+            assert!(error.to_string().contains("reserved"));
+            assert!(!reserved.exists());
+        }
+        for name in [
+            "output.axus-0.000000000.00.part",
+            ".output.axus-0.000000000.00.parts",
+            ".output.axus-0.00000000.00.part",
+            ".output.axus-0.000000000.gg.part",
+            ".output.axus-name.part",
+        ] {
+            store.subscribe(&root, dir.path().join(name).to_str().unwrap(), None, 0).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn subscribe_rejects_another_subscriptions_temporary_output() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let root = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"root");
+        let id = store.subscribe(&root, dir.path().join("foo").to_str().unwrap(), None, 0).await?;
+        let file = store.find_file(&id).await?.unwrap();
+        let error = store.subscribe(&root, file.temporary_output_path().to_str().unwrap(), None, 0).await.unwrap_err();
+        assert_eq!(*error.kind(), ErrorKind::InvalidFormat);
+        assert!(error.to_string().contains("reserved"));
+        assert!(store.find_file(&id).await?.unwrap().status == SubscribedFileStatus::Downloading);
+        assert!(!file.temporary_output_path().exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn subscribe_rejects_existing_file_and_directory() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let root = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"root");
+        let output = dir.path().join("file");
+        tokio::fs::write(&output, b"original").await?;
+        assert!(store.subscribe(&root, output.to_str().unwrap(), None, 0).await.is_err());
+        assert_eq!(tokio::fs::read(&output).await?, b"original");
+        let output = dir.path().join("directory");
+        tokio::fs::create_dir(&output).await?;
+        tokio::fs::write(output.join("child"), b"original").await?;
+        assert!(store.subscribe(&root, output.to_str().unwrap(), None, 0).await.is_err());
+        assert_eq!(tokio::fs::read(output.join("child")).await?, b"original");
+        assert!(store.repo.get_committed_files().await?.is_empty());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn subscribe_rejects_symlink_and_dangling_symlink() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let root = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"root");
+        let target = dir.path().join("target");
+        tokio::fs::write(&target, b"original").await?;
+        for name in ["link", "dangling"] {
+            let output = dir.path().join(name);
+            let destination = if name == "link" { target.clone() } else { dir.path().join("missing") };
+            std::os::unix::fs::symlink(&destination, &output)?;
+            assert!(store.subscribe(&root, output.to_str().unwrap(), None, 0).await.is_err());
+            assert_eq!(tokio::fs::read_link(&output).await?, destination);
+        }
+        assert_eq!(tokio::fs::read(&target).await?, b"original");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn subscribe_resolves_parent_before_reserving_output() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let parent = dir.path().join("parent");
+        tokio::fs::create_dir(&parent).await?;
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(&parent, &alias)?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let root = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"root");
+        let id = store.subscribe(&root, alias.join("output").to_str().unwrap(), None, 0).await?;
+        let file = store.find_file(&id).await?.unwrap();
+        assert_eq!(file.output_directory, tokio::fs::canonicalize(&parent).await?.to_str().unwrap());
+        assert!(store.subscribe(&root, parent.join("output").to_str().unwrap(), None, 0).await.is_err());
+        store.cancel(&id).await?;
+        store.subscribe(&root, parent.join("output").to_str().unwrap(), None, 0).await?;
+        Ok(())
     }
 
     #[tokio::test]

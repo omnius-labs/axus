@@ -150,9 +150,13 @@ Completed の出力 file は利用者の file として扱い、remove でも消
 #### 出力先の予約と確定
 
 subscribe は出力先に file、directory、symlink などの既存 entry があれば失敗し、上書きしない。
+`.<entry 名>.axus-<購読 ID>.part` の形の名前は daemon が所有する一時出力の予約名であり、利用者の file の最終出力先として登録できない。
+予約名は登録時に名前の文字列だけで判定し、ASCII の大小文字を区別せず、既存 entry とは区別できるエラーで拒否する。
+購読 A の一時出力名を購読 B の最終出力先として登録し、B の完了後に A が一時出力を作り直すと、B の完成済み出力を消すためである。
+予約名の生成と判定の規則は [storage.md §4.5](./storage.md#45-出力の確定と回復) に従う。
 同じ出力先を Downloading、Decoding、Finalizing の購読が使っている場合も、開始時に拒否する。
 同じ root hash を異なる出力先へ購読することは許す。
-この開始時の拒否は早期検出であり、大小文字や Unicode 正規化だけが違う別表記までは判定しない。
+予約名以外の開始時の拒否は早期検出であり、大小文字や Unicode 正規化だけが違う別表記までは判定しない。
 別表記の衝突と、開始後に外部 process が作った entry は、確定時に上書きしない配置が失敗することで検出し、Failed にする。
 
 一時出力への書き込みを終えても、まだ Completed ではない。
@@ -382,7 +386,8 @@ Failed の同じ path と file 名への import は、SQLite の 1 transaction �
 取得済みの block が揃っていれば受信を待たずに次の layer を復号し、相手を探す root hash は Downloading のものだけを返す。
 Completed の出力 file は remove でも残す。
 
-§4.2 の一時出力、出力先予約、Finalizing とその回復は未実装である。
+§4.2 の出力先予約と、file、directory、symlink を含む既存 entry の登録時の拒否を実装している。
+一時出力、Finalizing とその回復は未実装である。
 公開側は §2 の稼働中の sweep を行い、失敗した回収を TaskEncoder が間隔を延ばしながら再試行する。
 購読側の稼働中の block と一時出力の sweep は未実装である。
 永続化の残作業は [storage.md §6](./storage.md#6-現状と残作業) に集約する。

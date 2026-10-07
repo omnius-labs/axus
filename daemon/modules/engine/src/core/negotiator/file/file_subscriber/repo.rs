@@ -43,7 +43,8 @@ impl FileSubscriberRepo {
 CREATE TABLE IF NOT EXISTS files (
     id TEXT NOT NULL PRIMARY KEY,
     root_hash TEXT NOT NULL,
-    file_path TEXT NOT NULL,
+    output_directory TEXT NOT NULL,
+    output_name TEXT NOT NULL,
     rank INTEGER NOT NULL,
     block_count_downloaded INTEGER NOT NULL,
     block_count_total INTEGER NOT NULL,
@@ -54,6 +55,8 @@ CREATE TABLE IF NOT EXISTS files (
     created_at TIMESTAMP NOT NULL,
     updated_at TIMESTAMP NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS index_active_output_for_files ON files (output_directory, output_name)
+    WHERE status IN ('Downloading', 'Decoding', 'Finalizing');
 CREATE TABLE IF NOT EXISTS blocks (
     root_hash TEXT NOT NULL,
     block_hash TEXT NOT NULL,
@@ -177,7 +180,7 @@ SELECT *
     pub async fn find_file_by_id(&self, id: &str) -> Result<Option<SubscribedFile>> {
         let res: Option<SubscribedFileRow> = sqlx::query_as(
             r#"
-SELECT id, root_hash, file_path, rank, block_count_downloaded, block_count_total, attrs, priority, status, failed_reason, created_at, updated_at
+SELECT id, root_hash, output_directory, output_name, rank, block_count_downloaded, block_count_total, attrs, priority, status, failed_reason, created_at, updated_at
     FROM files
     WHERE id = ?
 "#,
@@ -192,7 +195,7 @@ SELECT id, root_hash, file_path, rank, block_count_downloaded, block_count_total
     pub async fn find_file_by_root_hash(&self, root_hash: &OmniHash) -> Result<Option<SubscribedFile>> {
         let res: Option<SubscribedFileRow> = sqlx::query_as(
             r#"
-SELECT id, root_hash, file_path, rank, block_count_downloaded, block_count_total, attrs, priority, status, failed_reason, created_at, updated_at
+SELECT id, root_hash, output_directory, output_name, rank, block_count_downloaded, block_count_total, attrs, priority, status, failed_reason, created_at, updated_at
     FROM files
     WHERE root_hash = ?
 "#,
@@ -207,7 +210,7 @@ SELECT id, root_hash, file_path, rank, block_count_downloaded, block_count_total
     pub async fn find_file_by_decoding_next(&self) -> Result<Option<SubscribedFile>> {
         let res: Option<SubscribedFileRow> = sqlx::query_as(
             r#"
-SELECT id, root_hash, file_path, rank, block_count_downloaded, block_count_total, attrs, priority, status, failed_reason, created_at, updated_at
+SELECT id, root_hash, output_directory, output_name, rank, block_count_downloaded, block_count_total, attrs, priority, status, failed_reason, created_at, updated_at
     FROM files
     WHERE status = 'Decoding'
     ORDER BY priority ASC, created_at ASC
@@ -322,13 +325,14 @@ SELECT *
         let row = SubscribedFileRow::from(file)?;
         sqlx::query(
             r#"
-INSERT INTO files (id, root_hash, file_path, rank, block_count_downloaded, block_count_total, attrs, priority, status, failed_reason, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO files (id, root_hash, output_directory, output_name, rank, block_count_downloaded, block_count_total, attrs, priority, status, failed_reason, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#,
         )
         .bind(row.id)
         .bind(row.root_hash)
-        .bind(row.file_path)
+        .bind(row.output_directory)
+        .bind(row.output_name)
         .bind(row.rank)
         .bind(row.block_count_downloaded)
         .bind(row.block_count_total)
@@ -378,7 +382,8 @@ INSERT INTO blocks (root_hash, block_hash, rank, `index`, downloaded)
 struct SubscribedFileRow {
     pub id: String,
     pub root_hash: String,
-    pub file_path: String,
+    pub output_directory: String,
+    pub output_name: String,
     pub rank: i64,
     pub block_count_downloaded: i64,
     pub block_count_total: i64,
@@ -395,7 +400,8 @@ impl SubscribedFileRow {
         Ok(SubscribedFile {
             id: self.id,
             root_hash: OmniHash::from_str(self.root_hash.as_str()).unwrap(),
-            file_path: self.file_path,
+            output_directory: self.output_directory,
+            output_name: self.output_name,
             rank: self.rank as u32,
             block_count_downloaded: self.block_count_downloaded as u32,
             block_count_total: self.block_count_total as u32,
@@ -413,7 +419,8 @@ impl SubscribedFileRow {
         Ok(Self {
             id: item.id.to_string(),
             root_hash: item.root_hash.to_string(),
-            file_path: item.file_path.clone(),
+            output_directory: item.output_directory.clone(),
+            output_name: item.output_name.clone(),
             rank: item.rank as i64,
             block_count_downloaded: item.block_count_downloaded as i64,
             block_count_total: item.block_count_total as i64,
@@ -547,6 +554,33 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn active_output_reservations_follow_status_transactions() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (repo, now) = create_repo(dir.path()).await?;
+        let root = hash(b"root");
+        let first = subscribed_file("first", &root, now);
+        let second = subscribed_file("second", &root, now);
+        repo.insert_file_and_blocks(&first, &[]).await?;
+        for status in [SubscribedFileStatus::Downloading, SubscribedFileStatus::Decoding, SubscribedFileStatus::Finalizing] {
+            if status != SubscribedFileStatus::Downloading {
+                let current = repo.find_file_by_id("first").await?.unwrap();
+                assert!(repo.transition("first", &current.status, &status, None).await?);
+            }
+            assert!(repo.insert_file_and_blocks(&second, &[]).await.is_err());
+            assert!(repo.find_file_by_id("second").await?.is_none());
+        }
+        for terminal in [SubscribedFileStatus::Completed, SubscribedFileStatus::Failed, SubscribedFileStatus::Canceled] {
+            let current = repo.find_file_by_id("first").await?.unwrap();
+            assert!(repo.transition("first", &current.status, &terminal, None).await?);
+            repo.insert_file_and_blocks(&second, &[]).await?;
+            repo.delete_file("second").await?;
+        }
+        repo.delete_file("first").await?;
+        repo.insert_file_and_blocks(&second, &[]).await?;
+        Ok(())
+    }
+
     async fn create_repo(dir: &std::path::Path) -> TestResult<(FileSubscriberRepo, DateTime<Utc>)> {
         let clock = Arc::new(FakeClockUtc::new(DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")?.into()));
         let now = clock.now();
@@ -557,7 +591,8 @@ mod tests {
         SubscribedFile {
             id: id.to_string(),
             root_hash: root_hash.clone(),
-            file_path: "/tmp/a.txt".to_string(),
+            output_directory: "/tmp".to_string(),
+            output_name: "a.txt".to_string(),
             rank: 2,
             block_count_downloaded: 1,
             block_count_total: 3,

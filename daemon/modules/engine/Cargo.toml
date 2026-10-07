@@ -36,6 +36,12 @@ parking_lot = { workspace = true }
 strum = { workspace = true }
 enumflags2 = { workspace = true }
 
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 testresult = { workspace = true }

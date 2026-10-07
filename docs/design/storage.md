@@ -135,11 +135,21 @@ publisher の remove も同じ順序で行い、参照確認には publisher の
 出力先は購読の行に、解決した親 directory の絶対 path と最終 entry 名の組として記録する。
 Downloading、Decoding、Finalizing の行に限る部分一意 index を置き、同じ出力先の進行中の購読を登録時に拒否する。
 状態が Completed、Failed、Canceled に変わるか行が消えると、同じ transaction で一意制約の対象から外れる。
-名前は表記どおりに比較するため、大小文字や Unicode 正規化だけが違う別表記は登録時に拒否されず、確定時の配置で検出する。
+出力先の一意制約は名前を表記どおりに比較するため、大小文字や Unicode 正規化だけが違う別表記は登録時に拒否されず、確定時の配置で検出する。
 既存 entry の確認は symlink を辿らず、dangling symlink も衝突として扱う。
 
 **一時出力の名前は、出力先と同じ directory の `.<entry 名>.axus-<購読 ID>.part` とし、daemon がこの名前の file を所有する。**
 所有の判定はこの名前だけで行い、file の識別情報を記録しない。
+この形の名前は予約名とし、利用者の file の最終出力先として登録できない。
+登録時の判定は名前の文字列だけで行い、購読 ID の形式は一時出力の生成と合わせる。
+名前の生成と予約名の判定は同じ型の `impl` に置く。
+購読 A の一時出力名を購読 B の最終出力先として受け付けると、B の完了後に A が一時出力を作り直す際、B の完成済み出力を消すためである。
+予約名の判定に限り、登録時の例外として ASCII の大小文字を区別しない。
+`.axus-`、`.part`、購読 ID の hex 部分は大小どちらでも一致するとみなす。
+一時出力を作り直す際の削除は rename より前に起きるため、大小文字が違う予約名を確定時の配置で検出しても、完成済みの出力を保護できないためである。
+それ以外の名前の大小文字や Unicode 正規化だけが違う別表記は、登録時に扱わず、確定時の配置で検出する。
+Unicode の大文字小文字の対応は予約名の判定に含めない。
+`ſ`（U+017F）を `s` と同一視するなど、ASCII 以外の文字を予約名の文字と同一視する filesystem では、同じ削除問題が残り得る。
 この規約は、外部 process がこの名前の file を作成・削除・rename しないことを前提とする。
 前提が崩れると、再起動時に配置済みかどうかを誤判定し、配置済みの購読を Failed にするか、外部の file を一時出力として扱う。
 
@@ -264,7 +274,8 @@ block の移動前に commit の対象を記録し、失敗分を永続的に記
 NodeFinder、publisher、subscriber の repository と block storage がある。
 publisher と subscriber は Store の open の中で、次に示す block の回収を終えてから、Task と入口の操作を受け付ける。
 publisher はすべての uncommitted key を消し、Processing を Pending に戻した後、sweep で参照のない key を回収する。
-subscriber は購読から参照されない root hash の key を消す。
+subscriber は Finalizing の出力を §4.5 の規則で回復し、購読から参照されない root hash の key と、Canceled と Failed の一時出力を消す。
+出力先に届かず判定できない購読は Finalizing のまま残し、ほかの購読の回復と open を進める。
 
 RocksDB の全書き込みは WAL を有効にした `sync=true` で行う。
 NodeFinder、publisher、subscriber の各 SQLite connection に WAL と `synchronous=FULL` を明示し、macOS では `fullfsync=ON` を指定している。
@@ -276,10 +287,19 @@ publisher の稼働中の sweep は、mutex 内で削除する時点の SQLite �
 commit と実体の削除の失敗後に sweep を行い、再び失敗した間は TaskEncoder が間隔を延ばして再試行する。
 再試行の必要性は memory にだけ保持する。
 
-§4.2 の出力 file と directory entry の同期、§4.5 の一時出力、出力先の一意制約、置換しない rename による確定と回復は未実装である。
-subscriber の稼働中の block と一時出力の sweep も未実装であり、起動時回復は block の orphan 回収までである。
+出力先は解決した親 directory の絶対 path と最終 entry 名で保存し、進行中の購読に対する部分一意 index と、symlink を辿らない既存 entry の確認で登録時の衝突を拒否する。
+一時出力の予約名は、ASCII の大小文字を区別せず登録時に拒否する。
+rank 0 は一時出力へ復号し、writer の `flush` と file の `sync_all` の後、Finalizing を条件付き更新で記録する。
+配置は OS 別の置換しない rename で行い、Linux と macOS では親 directory の `sync_all`、Windows では `MOVEFILE_WRITE_THROUGH` の成功後に Completed を記録する。
+Finalizing の回復と、確定前の cancel/remove による一時出力の回収を実装している。
+subscriber の稼働中の sweep は参照のない root と、Canceled と Failed の一時出力を回収する。
+Finalizing の配置と sweep の I/O 障害は、TaskDecoder が間隔を延ばしながら再試行する。
+再試行の待機は CancellationToken の cancel と shutdown に応答する。
 公開 commit の各 storage の commit 前後で処理を中断して Store を開き直す test と、rename、metadata commit、sweep の失敗の注入 test で回収と再公開を確認している。
-購読の出力確定の境界での回復と、OS クラッシュ後の回復は未確認である。
+購読の一時出力作成、file 同期、Finalizing の記録、rename、Completed の記録前の各境界で Store を開き直す test と、配置・同期・一時出力回収の失敗の注入 test で、回復と既存出力の保護を確認している。
+OS クラッシュ後の回復は未確認である。
 macOS の RocksDB には target 別の `CXXFLAGS` で `HAVE_FULLFSYNC` を与え、aarch64-apple-darwin の生成 object に `fcntl(F_FULLFSYNC)` の分岐が含まれることを確認した。
-x86_64-apple-darwin の build、Linux と Windows の同期条件、電源断の実機試験は未確認である。
+置換しない配置の module は aarch64-apple-darwin、x86_64-unknown-linux-gnu、x86_64-pc-windows-msvc で型検査を通している。
+macOS では engine の test で既存 entry の保護と、file・親 directory の同期呼び出しが成功することを確認している。
+x86_64-apple-darwin の build、Linux と Windows の engine 全体の build と同期の実行、電源断の実機試験は未確認である。
 確認済みの不具合は [issues.md](../issues.md) を参照する。

@@ -2,13 +2,13 @@ use std::{
     collections::{HashMap, hash_map::Entry},
     io::Cursor,
     sync::Arc,
+    time::Duration,
 };
 
 use async_trait::async_trait;
 use chrono::Utc;
 use parking_lot::Mutex;
 use tokio::{
-    fs::File,
     io::{AsyncWrite, AsyncWriteExt},
     sync::{Mutex as TokioMutex, Notify},
     task::JoinHandle,
@@ -27,6 +27,7 @@ pub struct TaskDecoder {
     sleeper: Arc<dyn Sleeper + Send + Sync>,
     enqueue_notify: Notify,
     active_jobs: Mutex<HashMap<String, CancellationToken>>,
+    jobs_finished: Notify,
     join_handle: TokioMutex<Option<JoinHandle<()>>>,
     token: CancellationToken,
 }
@@ -49,30 +50,108 @@ impl TaskDecoder {
             sleeper,
             enqueue_notify: Notify::new(),
             active_jobs: Mutex::new(HashMap::new()),
+            jobs_finished: Notify::new(),
             join_handle: TokioMutex::new(None),
             token: CancellationToken::new(),
         });
         let this = task.clone();
         *task.join_handle.lock().await = Some(tokio::spawn(async move {
-            while !this.token.is_cancelled() {
-                if this.decode().await {
-                    continue;
-                }
-                tokio::select! {
-                    _ = this.enqueue_notify.notified() => {},
-                    _ = this.token.cancelled() => break,
-                }
-            }
+            tokio::join!(this.run_decoding(), this.run_finalizations(), this.run_sweeps());
         }));
         Ok(task)
+    }
+
+    async fn run_decoding(&self) {
+        while !self.token.is_cancelled() {
+            if self.decode().await {
+                continue;
+            }
+            tokio::select! {
+                _ = self.enqueue_notify.notified() => {},
+                _ = self.token.cancelled() => break,
+            }
+        }
+    }
+
+    async fn run_finalizations(&self) {
+        let mut delay = Duration::from_secs(1);
+        while !self.token.is_cancelled() {
+            let mut retry = false;
+            match self.store.finalizing_files().await {
+                Ok(files) if files.is_empty() => {
+                    delay = Duration::from_secs(1);
+                    tokio::select! {
+                        _ = self.store.finalization_requested() => {},
+                        _ = self.token.cancelled() => break,
+                    }
+                    continue;
+                }
+                Ok(files) => {
+                    for file in files {
+                        if self.token.is_cancelled() {
+                            break;
+                        }
+                        if let Err(error) = self.store.finalize(&file.id).await {
+                            warn!(?error, id = %file.id, "subscriber output finalization retry failed");
+                            retry = true;
+                        }
+                    }
+                }
+                Err(error) => {
+                    warn!(?error, "subscriber finalizing queue fetch failed");
+                    retry = true;
+                }
+            }
+            if retry {
+                tokio::select! {
+                    _ = self.sleeper.sleep(delay) => {},
+                    _ = self.token.cancelled() => break,
+                }
+                delay = (delay * 2).min(Duration::from_secs(60));
+            } else {
+                delay = Duration::from_secs(1);
+            }
+        }
+    }
+
+    async fn run_sweeps(&self) {
+        let mut delay = Duration::from_secs(1);
+        while !self.token.is_cancelled() {
+            if !self.store.needs_sweep() {
+                tokio::select! {
+                    _ = self.store.sweep_requested() => {},
+                    _ = self.token.cancelled() => break,
+                }
+                continue;
+            }
+            match self.store.sweep().await {
+                Ok(()) => delay = Duration::from_secs(1),
+                Err(error) => {
+                    warn!(?error, "subscriber sweep retry failed");
+                    tokio::select! {
+                        _ = self.sleeper.sleep(delay) => {},
+                        _ = self.token.cancelled() => break,
+                    }
+                    delay = (delay * 2).min(Duration::from_secs(60));
+                }
+            }
+        }
     }
 
     pub fn wake(&self) {
         self.enqueue_notify.notify_one();
     }
-    pub fn cancel(&self, id: &str) {
-        if let Some(token) = self.active_jobs.lock().get(id) {
+    pub async fn cancel(&self, id: &str) {
+        loop {
+            let finished = self.jobs_finished.notified();
+            tokio::pin!(finished);
+            finished.as_mut().enable();
+            let token = self.active_jobs.lock().get(id).cloned();
+            let Some(token) = token else {
+                return;
+            };
             token.cancel();
+            finished.await;
         }
     }
 
@@ -104,6 +183,7 @@ impl TaskDecoder {
             }
         }
         self.active_jobs.lock().remove(&file.id);
+        self.jobs_finished.notify_waiters();
         true
     }
 
@@ -123,25 +203,36 @@ impl TaskDecoder {
             return Ok(None);
         }
         if file.rank == 0 {
-            let mut output = File::create(&file.file_path).await?;
+            let Some(mut output) = self.store.create_output(&file).await? else {
+                return Ok(None);
+            };
             let result = async {
-                if self.decode_bytes(&mut output, &file.root_hash, &hashes, token).await?.is_none() {
+                if self.decode_bytes(&mut output.file, &file.root_hash, &hashes, token).await?.is_none() {
                     return Ok(None);
                 }
-                if token.is_cancelled() || !self.store.complete(id).await? {
+                if token.is_cancelled() {
+                    return Ok(None);
+                }
+                if let Err(error) = self.store.sync_output(&mut output).await {
+                    warn!(?error, "subscriber temporary output sync failed");
+                    tokio::select! { _ = self.sleeper.sleep(Duration::from_secs(1)) => {}, _ = token.cancelled() => {} }
+                    return Ok(None);
+                }
+                if token.is_cancelled() || !self.store.begin_finalizing(id).await? {
                     return Ok(None);
                 }
                 Result::Ok(Some(()))
             }
             .await;
-            drop(output);
-            if !matches!(result, Ok(Some(()))) {
-                match tokio::fs::remove_file(&file.file_path).await {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error.into()),
+            let closing = self.store.close_output(output).await;
+            if matches!(result, Ok(Some(()))) {
+                if let Err(error) = self.store.finalize(id).await {
+                    warn!(?error, "subscriber output finalization deferred");
                 }
+            } else {
+                self.store.discard_output(id).await?;
             }
+            closing?;
             result
         } else {
             let mut output = Cursor::new(Vec::new());
@@ -178,10 +269,6 @@ impl TaskDecoder {
                 _ = token.cancelled() => return Ok(None),
                 result = writer.write_all(&block) => result?,
             }
-        }
-        tokio::select! {
-            _ = token.cancelled() => return Ok(None),
-            result = writer.flush() => result?,
         }
         Ok(Some(()))
     }

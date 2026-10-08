@@ -8,6 +8,7 @@ pub use connector::*;
 
 #[cfg(test)]
 mod tests {
+    use crate::protocol::session::*;
     use std::{
         net::{IpAddr, SocketAddr},
         sync::Arc,
@@ -224,7 +225,7 @@ mod tests {
         .await?;
         assert_eq!(result.err().expect("handshake did not time out").kind(), &ErrorKind::NetworkError);
         let (peer, _) = peer?;
-        let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
+        let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
         assert!(
             tokio::time::timeout(Duration::from_millis(300), peer.receiver.lock().await.recv())
                 .await
@@ -242,10 +243,14 @@ mod tests {
         };
         let (accepter, _connector, tcp_connector) = create_sessions(option, &[SessionType::NodeFinder]).await?;
         let peer = tcp_connector.connect(&test_addr()).await?;
-        let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
+        let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
         tokio::time::sleep(Duration::from_millis(250)).await;
-        peer.sender.lock().await.send_message(&HelloMessage { version: SessionVersion::V1 }).await?;
-        let _: V1ChallengeMessage = peer.receiver.lock().await.recv_message().await?;
+        peer.sender
+            .lock()
+            .await
+            .send_message_with::<HelloMessageCodec>(&HelloMessage { version: SessionVersion::V1 })
+            .await?;
+        let _: V1ChallengeMessage = peer.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>().await?;
         // Hello で使った時間を差し引いた期限で、challenge の待機も終わる
         assert!(
             tokio::time::timeout(Duration::from_millis(300), peer.receiver.lock().await.recv())
@@ -271,10 +276,14 @@ mod tests {
         let connect = connector.connect(&addr, &SessionType::NodeFinder);
         let peer = async {
             let (peer, _) = tcp_accepter.accept().await?;
-            let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
+            let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
             tokio::time::sleep(Duration::from_millis(250)).await;
-            peer.sender.lock().await.send_message(&HelloMessage { version: SessionVersion::V1 }).await?;
-            let _: V1ChallengeMessage = peer.receiver.lock().await.recv_message().await?;
+            peer.sender
+                .lock()
+                .await
+                .send_message_with::<HelloMessageCodec>(&HelloMessage { version: SessionVersion::V1 })
+                .await?;
+            let _: V1ChallengeMessage = peer.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>().await?;
             assert!(
                 tokio::time::timeout(Duration::from_millis(300), peer.receiver.lock().await.recv())
                     .await
@@ -313,13 +322,13 @@ mod tests {
     async fn accepter_accepts_the_handshake_frame_boundary_and_closes_an_oversized_frame() -> TestResult {
         let (accepter, _connector, tcp_connector) = create_sessions(SessionOption::default(), &[SessionType::NodeFinder]).await?;
         let peer = tcp_connector.connect(&test_addr()).await?;
-        let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
+        let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
         peer.sender.lock().await.send(padded_hello_frame(SessionOption::HANDSHAKE_MAX_FRAME_LENGTH)?).await?;
-        let _: V1ChallengeMessage = tokio::time::timeout(TEST_TIMEOUT, peer.receiver.lock().await.recv_message()).await??;
+        let _: V1ChallengeMessage = tokio::time::timeout(TEST_TIMEOUT, peer.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>()).await??;
         drop(peer);
 
         let peer = tcp_connector.connect(&test_addr()).await?;
-        let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
+        let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
         peer.sender.lock().await.send(padded_hello_frame(SessionOption::HANDSHAKE_MAX_FRAME_LENGTH + 1)?).await?;
         assert!(
             tokio::time::timeout(Duration::from_millis(300), peer.receiver.lock().await.recv())
@@ -345,10 +354,10 @@ mod tests {
             let addr = test_addr();
             let peer = async {
                 let (peer, _) = tcp_accepter.accept().await?;
-                let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
+                let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
                 peer.sender.lock().await.send(padded_hello_frame(length)?).await?;
                 if length == SessionOption::HANDSHAKE_MAX_FRAME_LENGTH {
-                    let _: V1ChallengeMessage = peer.receiver.lock().await.recv_message().await?;
+                    let _: V1ChallengeMessage = peer.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>().await?;
                 }
                 assert!(
                     tokio::time::timeout(Duration::from_millis(300), peer.receiver.lock().await.recv())
@@ -436,7 +445,7 @@ mod tests {
         let mut streams = Vec::new();
         for _ in 0..count {
             let stream = tcp_connector.connect(&test_addr()).await?;
-            let _: HelloMessage = tokio::time::timeout(TEST_TIMEOUT, stream.receiver.lock().await.recv_message())
+            let _: HelloMessage = tokio::time::timeout(TEST_TIMEOUT, stream.receiver.lock().await.recv_message_with::<HelloMessageCodec>())
                 .await
                 .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))??;
             streams.push(stream);
@@ -494,21 +503,31 @@ mod tests {
     async fn request_session(tcp_connector: &InMemoryTcpConnector, signer: &OmniSigner, addr: &OmniAddr, request_type: V1RequestType) -> Result<V1ResultType> {
         let stream = tcp_connector.connect(addr).await?;
 
-        stream.sender.lock().await.send_message(&HelloMessage { version: SessionVersion::V1 }).await?;
-        let _: HelloMessage = stream.receiver.lock().await.recv_message().await?;
+        stream
+            .sender
+            .lock()
+            .await
+            .send_message_with::<HelloMessageCodec>(&HelloMessage { version: SessionVersion::V1 })
+            .await?;
+        let _: HelloMessage = stream.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
 
         let send_challenge_message = V1ChallengeMessage { nonce: [1; 32] };
-        stream.sender.lock().await.send_message(&send_challenge_message).await?;
-        let received_challenge_message: V1ChallengeMessage = stream.receiver.lock().await.recv_message().await?;
+        stream.sender.lock().await.send_message_with::<V1ChallengeMessageCodec>(&send_challenge_message).await?;
+        let received_challenge_message: V1ChallengeMessage = stream.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>().await?;
 
         let send_signature_message = V1SignatureMessage {
             cert: signer.sign(&received_challenge_message.nonce)?,
         };
-        stream.sender.lock().await.send_message(&send_signature_message).await?;
-        let _: V1SignatureMessage = stream.receiver.lock().await.recv_message().await?;
+        stream.sender.lock().await.send_message_with::<V1SignatureMessageCodec>(&send_signature_message).await?;
+        let _: V1SignatureMessage = stream.receiver.lock().await.recv_message_with::<V1SignatureMessageCodec>().await?;
 
-        stream.sender.lock().await.send_message(&V1RequestMessage { request_type }).await?;
-        let result: V1ResultMessage = stream.receiver.lock().await.recv_message().await?;
+        stream
+            .sender
+            .lock()
+            .await
+            .send_message_with::<V1RequestMessageCodec>(&V1RequestMessage { request_type })
+            .await?;
+        let result: V1ResultMessage = stream.receiver.lock().await.recv_message_with::<V1ResultMessageCodec>().await?;
 
         Ok(result.result_type)
     }

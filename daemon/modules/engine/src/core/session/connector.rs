@@ -1,3 +1,4 @@
+use crate::protocol::session::*;
 use std::sync::Arc;
 
 use omnius_core_omnikit::generated::omni_sign::OmniSigner;
@@ -46,21 +47,21 @@ impl SessionConnector {
         stream.set_max_frame_length(self.option.handshake_max_frame_length).await;
 
         let send_hello_message = HelloMessage { version: SessionVersion::V1 };
-        stream.sender.lock().await.send_message(&send_hello_message).await?;
-        let received_hello_message: HelloMessage = stream.receiver.lock().await.recv_message().await?;
+        stream.sender.lock().await.send_message_with::<HelloMessageCodec>(&send_hello_message).await?;
+        let received_hello_message: HelloMessage = stream.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
 
         let version = send_hello_message.version & received_hello_message.version;
 
         if version.contains(SessionVersion::V1) {
             let send_nonce: [u8; 32] = self.rng.lock().random();
             let send_challenge_message = V1ChallengeMessage { nonce: send_nonce };
-            stream.sender.lock().await.send_message(&send_challenge_message).await?;
-            let receive_challenge_message: V1ChallengeMessage = stream.receiver.lock().await.recv_message().await?;
+            stream.sender.lock().await.send_message_with::<V1ChallengeMessageCodec>(&send_challenge_message).await?;
+            let receive_challenge_message: V1ChallengeMessage = stream.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>().await?;
 
             let send_signature = self.signer.sign(&receive_challenge_message.nonce)?;
             let send_signature_message = V1SignatureMessage { cert: send_signature };
-            stream.sender.lock().await.send_message(&send_signature_message).await?;
-            let received_signature_message: V1SignatureMessage = stream.receiver.lock().await.recv_message().await?;
+            stream.sender.lock().await.send_message_with::<V1SignatureMessageCodec>(&send_signature_message).await?;
+            let received_signature_message: V1SignatureMessage = stream.receiver.lock().await.recv_message_with::<V1SignatureMessageCodec>().await?;
 
             if received_signature_message.cert.verify(send_nonce.as_slice()).is_err() {
                 return Err(Error::new(ErrorKind::InvalidFormat).with_message("Invalid signature"));
@@ -72,8 +73,8 @@ impl SessionConnector {
                     SessionType::FileExchanger => V1RequestType::FileExchanger,
                 },
             };
-            stream.sender.lock().await.send_message(&send_session_request_message).await?;
-            let received_session_result_message: V1ResultMessage = stream.receiver.lock().await.recv_message().await?;
+            stream.sender.lock().await.send_message_with::<V1RequestMessageCodec>(&send_session_request_message).await?;
+            let received_session_result_message: V1ResultMessage = stream.receiver.lock().await.recv_message_with::<V1ResultMessageCodec>().await?;
 
             if received_session_result_message.result_type == V1ResultType::Reject {
                 return Err(Error::new(ErrorKind::Reject).with_message("Session rejected"));

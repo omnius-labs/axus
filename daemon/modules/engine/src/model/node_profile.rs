@@ -5,8 +5,6 @@ use omnius_core_omnikit::{
     model::omni_addr::OmniAddr,
 };
 
-use crate::{model::converter::UriConverter, prelude::*};
-
 /// node の公開鍵と到達先の組。node ID は公開鍵から導出するため保持しない
 #[derive(Debug, Clone)]
 pub struct NodeProfile {
@@ -16,8 +14,6 @@ pub struct NodeProfile {
 }
 
 impl NodeProfile {
-    pub const MAX_WIRE_ADDRS: usize = 8;
-
     pub fn new(public_key: Vec<u8>, addrs: Vec<OmniAddr>) -> Self {
         Self {
             public_key,
@@ -34,33 +30,6 @@ impl NodeProfile {
     /// 公開鍵の SHA3-256 hash。初回の呼び出しで計算し、以降は保持した値を返す
     pub fn id(&self) -> &[u8] {
         self.id.get_or_init(|| OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, &self.public_key).value)
-    }
-
-    fn unpack_with_max_addrs(decoder: &mut impl RocketPackDecoder, max_addrs: usize) -> std::result::Result<Self, RocketPackDecoderError> {
-        let mut public_key: Option<Vec<u8>> = None;
-        let mut addrs: Option<Vec<OmniAddr>> = None;
-
-        let count = decoder.read_map()?;
-
-        for _ in 0..count {
-            match decoder.read_u64()? {
-                0 => public_key = Some(decoder.read_bytes_vec()?),
-                1 => {
-                    let count = decoder.read_array_bounded("NodeProfile.addrs", 0, max_addrs as u64)?;
-                    let mut items: Vec<OmniAddr> = Vec::with_capacity(count as usize);
-                    for _ in 0..count {
-                        items.push(OmniAddr::from(decoder.read_string()?));
-                    }
-                    addrs = Some(items);
-                }
-                _ => decoder.skip_field()?,
-            }
-        }
-
-        Ok(Self::new(
-            public_key.ok_or(RocketPackDecoderError::Other("missing field: public_key"))?,
-            addrs.ok_or(RocketPackDecoderError::Other("missing field: addrs"))?,
-        ))
     }
 }
 
@@ -80,63 +49,12 @@ impl std::hash::Hash for NodeProfile {
     }
 }
 
-impl std::fmt::Display for NodeProfile {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let s = UriConverter::encode("node", self).map_err(|_| std::fmt::Error)?;
-        write!(f, "{s}")
-    }
-}
-
-impl std::str::FromStr for NodeProfile {
-    type Err = Error;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        UriConverter::decode::<NodeProfileUri>("node", s).map(|value| value.0)
-    }
-}
-
-impl RocketPackStruct for NodeProfile {
-    fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
-        encoder.write_map(2)?;
-
-        encoder.write_u64(0)?;
-        encoder.write_bytes(value.public_key.as_slice())?;
-
-        encoder.write_u64(1)?;
-        encoder.write_array(value.addrs.len())?;
-        for addr in value.addrs.iter() {
-            encoder.write_string(addr.as_str())?;
-        }
-
-        Ok(())
-    }
-
-    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
-    where
-        Self: Sized,
-    {
-        Self::unpack_with_max_addrs(decoder, Self::MAX_WIRE_ADDRS)
-    }
-}
-
-// URI は保存と設定にも使うため、wire の件数制約を適用しない
-struct NodeProfileUri(NodeProfile);
-
-impl RocketPackStruct for NodeProfileUri {
-    fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
-        NodeProfile::pack(encoder, &value.0)
-    }
-
-    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError> {
-        NodeProfile::unpack_with_max_addrs(decoder, usize::MAX).map(Self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use omnius_core_omnikit::generated::omni_hash::{OmniHash, OmniHashAlgorithmType};
 
     use super::NodeProfile;
+    use crate::protocol::{MessageCodec, NodeProfileCodec};
 
     #[test]
     fn id_is_the_hash_of_the_public_key() {
@@ -162,7 +80,8 @@ mod tests {
         use omnius_core_omnikit::model::omni_addr::OmniAddr;
         for count in [NodeProfile::MAX_WIRE_ADDRS, NodeProfile::MAX_WIRE_ADDRS + 1] {
             let profile = NodeProfile::new(vec![1, 2, 3], (0..count).map(|i| OmniAddr::new(format!("addr-{i}"))).collect());
-            let decoded = NodeProfile::import(&profile.export()?);
+            let legacy = crate::protocol::tests::legacy::NodeProfile::new(profile.public_key().to_vec(), profile.addrs.clone());
+            let decoded = NodeProfileCodec::decode(&legacy.export()?);
             if count == NodeProfile::MAX_WIRE_ADDRS {
                 assert_eq!(decoded?, profile);
             } else {
@@ -192,7 +111,7 @@ mod tests {
         bytes.resize(addresses_start + NodeProfile::MAX_WIRE_ADDRS + 1, 0xf6);
         let mut decoder = RocketPackBytesDecoder::new(&bytes);
         assert!(matches!(
-            NodeProfile::unpack(&mut decoder),
+            NodeProfileCodec::unpack(&mut decoder),
             Err(RocketPackDecoderError::LengthOutOfRange { context: "NodeProfile.addrs", .. })
         ));
         assert_eq!(decoder.position(), addresses_start);
@@ -200,10 +119,27 @@ mod tests {
     }
 
     #[test]
-    fn uri_roundtrip_preserves_more_than_eight_addresses() -> testresult::TestResult {
+    fn uri_accepts_eight_addresses_and_rejects_legacy_nine() -> testresult::TestResult {
+        use crate::{
+            prelude::*,
+            protocol::{tests::legacy, uri::UriConverter},
+        };
         use omnius_core_omnikit::model::omni_addr::OmniAddr;
-        let profile = NodeProfile::new(vec![1, 2, 3], (0..12).map(|i| OmniAddr::new(format!("addr-{i}"))).collect());
-        assert_eq!(profile.to_string().parse::<NodeProfile>()?, profile);
+        for count in [8, 9, 12] {
+            let addrs = (0..count).map(|i| OmniAddr::new(format!("addr-{i}"))).collect();
+            let old = legacy::NodeProfile::new(vec![1, 2, 3], addrs);
+            let uri = UriConverter::encode("node", &old)?;
+            let decoded = uri.parse::<NodeProfile>();
+            if count == 8 {
+                let profile = decoded?;
+                assert_eq!(profile.to_uri()?, uri);
+            } else {
+                assert!(decoded.is_err());
+                let profile = NodeProfile::new(old.public_key.clone(), old.addrs.clone());
+                assert!(profile.to_uri().is_err());
+                assert!(matches!(NodeProfileCodec::encode(&profile), Err(RocketPackEncoderError::LengthOutOfRange { actual, max: 8, .. }) if actual == count));
+            }
+        }
         Ok(())
     }
 }

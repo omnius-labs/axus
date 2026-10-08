@@ -1,3 +1,4 @@
+use crate::protocol::session::*;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
@@ -209,27 +210,27 @@ impl Inner {
         stream.set_max_frame_length(self.option.handshake_max_frame_length).await;
 
         let send_hello_message = HelloMessage { version: SessionVersion::V1 };
-        stream.sender.lock().await.send_message(&send_hello_message).await?;
-        let received_hello_message: HelloMessage = stream.receiver.lock().await.recv_message().await?;
+        stream.sender.lock().await.send_message_with::<HelloMessageCodec>(&send_hello_message).await?;
+        let received_hello_message: HelloMessage = stream.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
 
         let version = send_hello_message.version & received_hello_message.version;
 
         if version.contains(SessionVersion::V1) {
             let send_nonce: [u8; 32] = self.rng.lock().random();
             let send_challenge_message = V1ChallengeMessage { nonce: send_nonce };
-            stream.sender.lock().await.send_message(&send_challenge_message).await?;
-            let receive_challenge_message: V1ChallengeMessage = stream.receiver.lock().await.recv_message().await?;
+            stream.sender.lock().await.send_message_with::<V1ChallengeMessageCodec>(&send_challenge_message).await?;
+            let receive_challenge_message: V1ChallengeMessage = stream.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>().await?;
 
             let send_signature = self.signer.sign(&receive_challenge_message.nonce)?;
             let send_signature_message = V1SignatureMessage { cert: send_signature };
-            stream.sender.lock().await.send_message(&send_signature_message).await?;
-            let received_signature_message: V1SignatureMessage = stream.receiver.lock().await.recv_message().await?;
+            stream.sender.lock().await.send_message_with::<V1SignatureMessageCodec>(&send_signature_message).await?;
+            let received_signature_message: V1SignatureMessage = stream.receiver.lock().await.recv_message_with::<V1SignatureMessageCodec>().await?;
 
             if received_signature_message.cert.verify(send_nonce.as_slice()).is_err() {
                 return Err(Error::new(ErrorKind::InvalidFormat).with_message("Invalid signature"));
             }
 
-            let received_session_request_message: V1RequestMessage = stream.receiver.lock().await.recv_message().await?;
+            let received_session_request_message: V1RequestMessage = stream.receiver.lock().await.recv_message_with::<V1RequestMessageCodec>().await?;
             let typ = match received_session_request_message.request_type {
                 V1RequestType::Unknown => None,
                 V1RequestType::NodeFinder => Some(SessionType::NodeFinder),
@@ -245,7 +246,7 @@ impl Inner {
                 let send_session_result_message = V1ResultMessage {
                     result_type: V1ResultType::Accept,
                 };
-                stream.sender.lock().await.send_message(&send_session_result_message).await?;
+                stream.sender.lock().await.send_message_with::<V1ResultMessageCodec>(&send_session_result_message).await?;
 
                 stream.set_max_frame_length(typ.max_frame_length()).await;
 
@@ -261,7 +262,7 @@ impl Inner {
                 let send_session_result_message = V1ResultMessage {
                     result_type: V1ResultType::Reject,
                 };
-                stream.sender.lock().await.send_message(&send_session_result_message).await?;
+                stream.sender.lock().await.send_message_with::<V1ResultMessageCodec>(&send_session_result_message).await?;
             }
 
             Ok(())

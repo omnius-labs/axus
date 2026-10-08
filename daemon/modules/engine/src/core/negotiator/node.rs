@@ -1,5 +1,6 @@
 mod data_message;
 mod kadx;
+mod message;
 mod node_finder;
 mod node_finder_repo;
 mod node_profile_fetcher;
@@ -10,8 +11,9 @@ mod task_communicator;
 mod task_computer;
 mod task_connector;
 
-use data_message::*;
+pub(crate) use data_message::*;
 use kadx::*;
+pub(crate) use message::*;
 pub use node_finder::*;
 pub use node_finder_repo::*;
 pub use node_profile_fetcher::*;

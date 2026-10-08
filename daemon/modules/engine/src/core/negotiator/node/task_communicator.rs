@@ -1,7 +1,11 @@
+use crate::protocol::{
+    MessageCodec,
+    node::{DataMessageCodec, HelloMessageCodec, ProfileMessageCodec},
+};
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use enumflags2::{BitFlags, make_bitflags};
+use enumflags2::make_bitflags;
 use parking_lot::Mutex;
 use tokio::{
     select,
@@ -116,23 +120,24 @@ impl TaskCommunicator {
             _ = self.cancellation_token.cancelled() => return Ok(()),
         };
 
+        let other_node_profile_uri = other_node_profile.to_uri()?;
         *status.node_profile.lock() = Some(other_node_profile.clone());
 
         let status = Arc::new(status);
 
         match self.sessions.register(my_node_profile.id(), other_node_profile.id(), &status).await {
             Registration::Added => {}
-            Registration::Replaced => info!(node_profile = other_node_profile.to_string(), "Session replaced"),
+            Registration::Replaced => info!(node_profile = other_node_profile_uri, "Session replaced"),
             Registration::Rejected => return Err(Error::new(ErrorKind::AlreadyExists).with_message("Session already exists")),
         }
 
-        info!(node_profile = other_node_profile.to_string(), "Session established");
+        info!(node_profile = other_node_profile_uri, "Session established");
 
         let s = self.clone().send(status.clone()).await;
         let r = self.clone().receive(status.clone(), received_at).await;
         let _ = tokio::join!(s, r);
 
-        info!(node_profile = other_node_profile.to_string(), "Session closed");
+        info!(node_profile = other_node_profile_uri, "Session closed");
 
         self.sessions.unregister(other_node_profile.id(), &status).await;
 
@@ -144,7 +149,7 @@ impl TaskCommunicator {
         let send_hello_message = HelloMessage {
             version: make_bitflags!(NodeFinderVersion::V1),
         };
-        let (received_hello_message, received_at) = Self::exchange_message(session, &send_hello_message, deadline).await?;
+        let (received_hello_message, received_at) = Self::exchange_message::<HelloMessageCodec>(session, &send_hello_message, deadline).await?;
 
         let version = send_hello_message.version & received_hello_message.version;
 
@@ -152,7 +157,7 @@ impl TaskCommunicator {
             let send_profile_message = ProfileMessage {
                 node_profile: node_profile.clone(),
             };
-            let (received_profile_message, received_at) = Self::exchange_message(session, &send_profile_message, received_at + receive_timeout).await?;
+            let (received_profile_message, received_at) = Self::exchange_message::<ProfileMessageCodec>(session, &send_profile_message, received_at + receive_timeout).await?;
 
             if received_profile_message.node_profile.id() == node_profile.id() {
                 return Err(Error::new(ErrorKind::Reject).with_message("connected to self"));
@@ -169,10 +174,13 @@ impl TaskCommunicator {
         }
     }
 
-    async fn exchange_message<T: RocketPackStruct + Send + Sync>(session: &Session, message: &T, deadline: Instant) -> Result<(T, Instant)> {
+    async fn exchange_message<C: MessageCodec>(session: &Session, message: &C::Message, deadline: Instant) -> Result<(C::Message, Instant)>
+    where
+        C::Message: Send + Sync,
+    {
         let received = timeout_at(deadline, async {
-            session.stream.sender.lock().await.send_message(message).await?;
-            session.stream.receiver.lock().await.recv_message::<T>().await
+            session.stream.sender.lock().await.send_message_with::<C>(message).await?;
+            session.stream.receiver.lock().await.recv_message_with::<C>().await
         })
         .await
         .map_err(|e| Error::from_error(e, ErrorKind::NetworkError).with_message("NodeFinder receive timed out"))??;
@@ -261,7 +269,7 @@ impl TaskSender {
             }
         };
 
-        self.status.session.stream.sender.lock().await.send_message(&data_message).await?;
+        self.status.session.stream.sender.lock().await.send_message_with::<DataMessageCodec>(&data_message).await?;
 
         Ok(())
     }
@@ -274,7 +282,7 @@ struct TaskReceiver {
 
 impl TaskReceiver {
     async fn receive(&self) -> Result<DataMessage> {
-        self.status.session.stream.receiver.lock().await.recv_message().await
+        self.status.session.stream.receiver.lock().await.recv_message_with::<DataMessageCodec>().await
     }
 
     async fn apply(&self, data_message: DataMessage) -> Result<()> {
@@ -294,85 +302,6 @@ impl TaskReceiver {
         }
 
         Ok(())
-    }
-}
-
-#[repr(u32)]
-#[enumflags2::bitflags]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::AsRefStr, strum::Display, strum::FromRepr)]
-enum NodeFinderVersion {
-    V1 = 1,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct HelloMessage {
-    pub version: BitFlags<NodeFinderVersion>,
-}
-
-impl RocketPackStruct for HelloMessage {
-    fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
-        encoder.write_map(1)?;
-
-        encoder.write_u64(0)?;
-        encoder.write_u32(value.version.bits())?;
-
-        Ok(())
-    }
-
-    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
-    where
-        Self: Sized,
-    {
-        let mut version: Option<BitFlags<NodeFinderVersion>> = None;
-
-        let count = decoder.read_map()?;
-
-        for _ in 0..count {
-            match decoder.read_u64()? {
-                0 => version = Some(BitFlags::<NodeFinderVersion>::from_bits_truncate(decoder.read_u32()?)),
-                _ => decoder.skip_field()?,
-            }
-        }
-
-        Ok(Self {
-            version: version.ok_or(RocketPackDecoderError::Other("missing field: version"))?,
-        })
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct ProfileMessage {
-    pub node_profile: NodeProfile,
-}
-
-impl RocketPackStruct for ProfileMessage {
-    fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
-        encoder.write_map(1)?;
-
-        encoder.write_u64(0)?;
-        encoder.write_struct(&value.node_profile)?;
-
-        Ok(())
-    }
-
-    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
-    where
-        Self: Sized,
-    {
-        let mut node_profile: Option<NodeProfile> = None;
-
-        let count = decoder.read_map()?;
-
-        for _ in 0..count {
-            match decoder.read_u64()? {
-                0 => node_profile = Some(decoder.read_struct::<NodeProfile>()?),
-                _ => decoder.skip_field()?,
-            }
-        }
-
-        Ok(Self {
-            node_profile: node_profile.ok_or(RocketPackDecoderError::Other("missing field: node_profile"))?,
-        })
     }
 }
 
@@ -406,6 +335,10 @@ mod tests {
         core::session::model::{Session, SessionHandshakeType, SessionType},
         model::{AssetKey, NodeProfile},
         prelude::*,
+        protocol::{
+            MessageCodec,
+            node::{DataMessageCodec, HelloMessageCodec, ProfileMessageCodec},
+        },
     };
 
     use super::{
@@ -529,8 +462,8 @@ mod tests {
 
         // 3 周期より長く交換し、受信のたびに期限が更新されることを確かめる
         for _ in 0..6 {
-            fixture.peer.sender.lock().await.send_message(&DataMessage::default()).await?;
-            let received: DataMessage = tokio::time::timeout(interval * 2, fixture.peer.receiver.lock().await.recv_message()).await??;
+            fixture.peer.sender.lock().await.send_message_with::<DataMessageCodec>(&DataMessage::default()).await?;
+            let received: DataMessage = tokio::time::timeout(interval * 2, fixture.peer.receiver.lock().await.recv_message_with::<DataMessageCodec>()).await??;
             assert_eq!(received, DataMessage::default());
             assert_eq!(fixture.sessions.len().await, 1);
         }
@@ -560,7 +493,7 @@ mod tests {
             .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))?;
         answer_handshake(peer.clone(), node_profile).await?;
 
-        peer.sender.lock().await.send_message(&DataMessage::default()).await?;
+        peer.sender.lock().await.send_message_with::<DataMessageCodec>(&DataMessage::default()).await?;
         tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
             // 送信側は周期ちょうどを、受信側は周期から処理にかかった分を引いた時間を要求する
             while !sleeper.requested.lock().iter().any(|d| *d > interval / 2 && *d < interval) {
@@ -578,7 +511,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let interval = Duration::from_millis(50);
         let fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), interval).await?;
-        let _: HelloMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message()).await??;
+        let _: HelloMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>()).await??;
         fixture.wait_closed(interval * 4).await?;
         fixture.task.shutdown().await;
         Ok(())
@@ -589,10 +522,10 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let interval = Duration::from_millis(100);
         let fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), interval).await?;
-        let _: HelloMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message()).await??;
+        let _: HelloMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>()).await??;
         tokio::time::sleep(interval * 2).await;
         fixture.send_hello().await?;
-        let _: ProfileMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message()).await??;
+        let _: ProfileMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<ProfileMessageCodec>()).await??;
 
         // Hello の受信で更新されるので、handshake 開始から 3 周期を過ぎても閉じない
         assert!(tokio::time::timeout(interval * 3 / 2, fixture.peer.receiver.lock().await.recv()).await.is_err());
@@ -607,15 +540,15 @@ mod tests {
         let interval = Duration::from_millis(100);
         let fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), interval).await?;
         fixture.send_hello().await?;
-        let _: HelloMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message()).await??;
-        let _: ProfileMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message()).await??;
+        let _: HelloMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>()).await??;
+        let _: ProfileMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<ProfileMessageCodec>()).await??;
         tokio::time::sleep(interval * 2).await;
         fixture
             .peer
             .sender
             .lock()
             .await
-            .send_message(&ProfileMessage {
+            .send_message_with::<ProfileMessageCodec>(&ProfileMessage {
                 node_profile: fixture.node_profile.clone(),
             })
             .await?;
@@ -623,7 +556,7 @@ mod tests {
 
         // Profile の受信前の期限を引き継ぐと、2 周期目の DataMessage を受け取れない
         for _ in 0..2 {
-            let received: DataMessage = tokio::time::timeout(interval * 2, fixture.peer.receiver.lock().await.recv_message()).await??;
+            let received: DataMessage = tokio::time::timeout(interval * 2, fixture.peer.receiver.lock().await.recv_message_with::<DataMessageCodec>()).await??;
             assert_eq!(received, DataMessage::default());
         }
         fixture.wait_closed(interval * 2).await?;
@@ -636,10 +569,10 @@ mod tests {
         for phase in 0..3 {
             let dir = tempfile::tempdir()?;
             let fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), Duration::from_secs(3600)).await?;
-            let _: HelloMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message()).await??;
+            let _: HelloMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>()).await??;
             if phase >= 1 {
                 fixture.send_hello().await?;
-                let _: ProfileMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message()).await??;
+                let _: ProfileMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<ProfileMessageCodec>()).await??;
             }
             if phase == 2 {
                 fixture
@@ -647,7 +580,7 @@ mod tests {
                     .sender
                     .lock()
                     .await
-                    .send_message(&ProfileMessage {
+                    .send_message_with::<ProfileMessageCodec>(&ProfileMessage {
                         node_profile: fixture.node_profile.clone(),
                     })
                     .await?;
@@ -698,13 +631,17 @@ mod tests {
         fixture.answer_handshake().await?;
         fixture.wait_registered().await?;
         let message = boundary_message(field, max);
-        assert_eq!(DataMessage::import(&message.export()?)?, message);
-        fixture.peer.sender.lock().await.send_message(&message).await?;
+        assert_eq!(DataMessageCodec::decode(&DataMessageCodec::encode(&message)?)?, message);
+        fixture.peer.sender.lock().await.send_message_with::<DataMessageCodec>(&message).await?;
         // 上限ちょうどの message を受けても、次の周期の送信が続く
-        let received: DataMessage = tokio::time::timeout(Duration::from_secs(1), fixture.peer.receiver.lock().await.recv_message()).await??;
+        let received: DataMessage = tokio::time::timeout(Duration::from_secs(1), fixture.peer.receiver.lock().await.recv_message_with::<DataMessageCodec>()).await??;
         assert_eq!(received, DataMessage::default());
         assert_eq!(fixture.sessions.len().await, 1);
-        fixture.peer.sender.lock().await.send_message(&boundary_message(field, max + 1)).await?;
+        let oversized = boundary_message(field, max + 1);
+        assert!(DataMessageCodec::encode(&oversized).is_err());
+        // 旧 pack は送信上限を検査しないため、不正な peer の受信テストに使う。
+        let bytes = crate::protocol::tests::legacy_data(&oversized).export()?;
+        fixture.peer.sender.lock().await.send(bytes.into()).await?;
         // 受信期限の 1.5 秒より前に、decode error によって閉じる
         fixture.wait_closed(Duration::from_millis(300)).await?;
         fixture.task.shutdown().await;
@@ -802,12 +739,12 @@ mod tests {
         let a_status = a_sessions.statuses().await[0].1.clone();
         let b_status = b_sessions.statuses().await[0].1.clone();
 
-        // URI 由来の既知 node と、複数 message 分の受信状態を wire の上限より多く用意する
+        // URI 上限内の既知 node を、1 message の件数上限より多く用意する
         let known: Vec<_> = (0..96)
             .map(|i| {
                 Arc::new(NodeProfile::new(
                     format!("known-{i}").into_bytes(),
-                    (0..12).map(|j| OmniAddr::new(format!("addr-{j}"))).collect(),
+                    (0..NodeProfile::MAX_WIRE_ADDRS).map(|j| OmniAddr::new(format!("addr-{j}"))).collect(),
                 ))
             })
             .collect();
@@ -817,6 +754,7 @@ mod tests {
             .await?;
         let keys: Vec<_> = (0..2048).map(|i| asset_key(i, b_profile.id())).collect();
         {
+            // 複数 message 分を集約した候補は、送信時に schema の件数上限へ収める
             let mut received = a_status.received_data_message.lock();
             received.want_asset_keys.extend(keys.iter().cloned().map(Arc::new));
             for key in &keys {
@@ -985,7 +923,7 @@ mod tests {
                 .sender
                 .lock()
                 .await
-                .send_message(&HelloMessage {
+                .send_message_with::<HelloMessageCodec>(&HelloMessage {
                     version: make_bitflags!(NodeFinderVersion::V1),
                 })
                 .await
@@ -1008,7 +946,7 @@ mod tests {
                 loop {
                     match self.peer.receiver.lock().await.recv().await {
                         Ok(frame) => {
-                            assert_eq!(DataMessage::import(&frame)?, DataMessage::default());
+                            assert_eq!(DataMessageCodec::decode(&frame)?, DataMessage::default());
                             count += 1;
                         }
                         Err(e) => {
@@ -1044,8 +982,12 @@ mod tests {
         let (session, peer, _) = session_pair()?;
 
         let peer_task = tokio::spawn(async move {
-            peer.sender.lock().await.send_message(&HelloMessage { version: BitFlags::empty() }).await?;
-            let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
+            peer.sender
+                .lock()
+                .await
+                .send_message_with::<HelloMessageCodec>(&HelloMessage { version: BitFlags::empty() })
+                .await?;
+            let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
             Result::Ok(())
         });
 
@@ -1154,13 +1096,16 @@ mod tests {
         peer.sender
             .lock()
             .await
-            .send_message(&HelloMessage {
+            .send_message_with::<HelloMessageCodec>(&HelloMessage {
                 version: make_bitflags!(NodeFinderVersion::V1),
             })
             .await?;
-        let _: HelloMessage = peer.receiver.lock().await.recv_message().await?;
-        peer.sender.lock().await.send_message(&ProfileMessage { node_profile }).await?;
-        let _: ProfileMessage = peer.receiver.lock().await.recv_message().await?;
+        let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
+        let message = crate::protocol::tests::legacy::node::ProfileMessage {
+            node_profile: crate::protocol::tests::legacy_profile(&node_profile),
+        };
+        peer.sender.lock().await.send(message.export()?.into()).await?;
+        let _: ProfileMessage = peer.receiver.lock().await.recv_message_with::<ProfileMessageCodec>().await?;
         Ok(())
     }
 

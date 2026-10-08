@@ -1,46 +1,25 @@
-use omnius_core_omnikit::generated::omni_hash::OmniHash;
-
-use crate::prelude::*;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AssetKey {
-    pub typ: String,
-    pub hash: OmniHash,
-}
-
-impl RocketPackStruct for AssetKey {
-    fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
-        encoder.write_map(2)?;
-
-        encoder.write_u64(0)?;
-        encoder.write_string(value.typ.as_str())?;
-
-        encoder.write_u64(1)?;
-        encoder.write_struct(&value.hash)?;
-
-        Ok(())
+pub use crate::generated::axus::model::AssetKey;
+use omnius_core_omnikit::generated::omni_hash::OmniHashAlgorithmType;
+use std::cmp::Ordering;
+impl Ord for AssetKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.typ
+            .cmp(&other.typ)
+            .then_with(|| Self::algorithm_order(&self.hash.typ).cmp(&Self::algorithm_order(&other.hash.typ)))
+            .then_with(|| self.hash.value.cmp(&other.hash.value))
     }
-
-    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
-    where
-        Self: Sized,
-    {
-        let mut typ: Option<String> = None;
-        let mut hash: Option<OmniHash> = None;
-
-        let count = decoder.read_map()?;
-
-        for _ in 0..count {
-            match decoder.read_u64()? {
-                0 => typ = Some(decoder.read_string()?),
-                1 => hash = Some(decoder.read_struct::<OmniHash>()?),
-                _ => decoder.skip_field()?,
-            }
+}
+impl PartialOrd for AssetKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl AssetKey {
+    fn algorithm_order(value: &OmniHashAlgorithmType) -> u8 {
+        match value {
+            OmniHashAlgorithmType::None => 0,
+            OmniHashAlgorithmType::Sha3_256 => 1,
+            OmniHashAlgorithmType::Blake3_256 => 2,
         }
-
-        Ok(Self {
-            typ: typ.ok_or(RocketPackDecoderError::Other("missing field: typ"))?,
-            hash: hash.ok_or(RocketPackDecoderError::Other("missing field: hash"))?,
-        })
     }
 }

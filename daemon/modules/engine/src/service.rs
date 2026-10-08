@@ -120,7 +120,7 @@ impl AxusService {
         .await?;
 
         // 他の node の設定 p2p.bootstrap_nodes に書けるよう、起動時の制約を適用した NodeProfile を記録する
-        info!(node_profile = result.my_node_profile().to_string(), "node profile");
+        info!(node_profile = result.my_node_profile().to_uri()?, "node profile");
 
         Ok(result)
     }
@@ -132,6 +132,7 @@ impl AxusService {
 
 #[cfg(test)]
 mod tests {
+    use crate::protocol::MessageCodec;
     use std::{net::TcpListener, time::Duration};
 
     use testresult::TestResult;
@@ -352,7 +353,7 @@ mod tests {
         let service = AxusService::new(dir.path().join("state"), format!("127.0.0.1:{}", free_port()?), dir.path(), option).await?;
         let profile = service.node_finder.my_node_profile();
         assert_eq!(profile.addrs, addrs[..NodeProfile::MAX_WIRE_ADDRS]);
-        assert_eq!(NodeProfile::import(&profile.export()?)?, profile);
+        assert_eq!(crate::protocol::NodeProfileCodec::decode(&crate::protocol::NodeProfileCodec::encode(&profile)?)?, profile);
         service.shutdown().await;
         Ok(())
     }

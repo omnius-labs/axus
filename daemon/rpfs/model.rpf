@@ -1,0 +1,24 @@
+version 1;
+package axus::model;
+
+use omni_hash::OmniHash;
+
+#[rust::derive(Eq, Hash)]
+struct AssetKey {
+  @0 typ: string;
+  @1 hash: OmniHash;
+}
+
+#[rust::derive(Eq, Hash)]
+struct FileRef {
+  @0 name: string;
+  @1 hash: OmniHash;
+}
+
+#[rust::derive(Eq, Hash)]
+struct NodeProfile {
+  @0 public_key: bytes;
+  @1 addrs: Vec<string>[..=MAX_WIRE_ADDRS];
+}
+
+const MAX_WIRE_ADDRS: u32 = 8;

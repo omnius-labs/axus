@@ -1,6 +1,6 @@
 mod file;
 mod memo;
-mod node;
+pub(crate) mod node;
 
 #[allow(unused)]
 pub use file::*;

@@ -5,7 +5,7 @@ use omni_hash::OmniHash;
 
 #[rust::derive(Eq, Hash)]
 struct AssetKey {
-  @0 typ: string;
+  @0 typ: string[..=MAX_ASSET_TYPE_LENGTH];
   @1 hash: OmniHash;
 }
 
@@ -17,8 +17,11 @@ struct FileRef {
 
 #[rust::derive(Eq, Hash)]
 struct NodeProfile {
-  @0 public_key: bytes;
-  @1 addrs: Vec<string>[..=MAX_WIRE_ADDRS];
+  @0 public_key: bytes[..=MAX_PUBLIC_KEY_LENGTH];
+  @1 addrs: Vec<string[..=MAX_ADDR_LENGTH]>[..=MAX_WIRE_ADDRS];
 }
 
 const MAX_WIRE_ADDRS: u32 = 8;
+const MAX_PUBLIC_KEY_LENGTH: u32 = 256;
+const MAX_ADDR_LENGTH: u32 = 512;
+const MAX_ASSET_TYPE_LENGTH: u32 = 64;

@@ -13,7 +13,7 @@ pub struct FramedStream {
 }
 
 impl FramedStream {
-    pub const NODE_FINDER_MAX_FRAME_LENGTH: usize = 4 * 1024 * 1024;
+    pub const NODE_FINDER_MAX_FRAME_LENGTH: usize = crate::generated::axus::node::MAX_MESSAGE_LENGTH as usize;
     pub const FILE_EXCHANGER_MAX_FRAME_LENGTH: usize = 64 * 1024 * 1024;
 
     pub fn new<R, W>(reader: R, writer: W) -> Self

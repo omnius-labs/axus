@@ -52,6 +52,11 @@ impl AxusService {
     }
 
     async fn create_node_finder(state_dir: &Path, listen_addr: &str, option: AxusServiceOption) -> Result<NodeFinder> {
+        // 明示設定の違反は、接続 worker の開始前に返す。
+        for profile in &option.bootstrap_node_profiles {
+            profile.to_uri()?;
+        }
+        NodeProfile::new(vec![], option.advertise_addrs.clone()).validate_byte_lengths()?;
         let tcp_accepter = ConnectionTcpAccepterImpl::new(&OmniAddr::from_host_and_port_str(listen_addr)?, option.use_upnp).await?;
         let my_addrs = if option.advertise_addrs.is_empty() {
             tcp_accepter.get_advertised_addrs().await?
@@ -74,6 +79,8 @@ impl AxusService {
         let sleeper: Arc<dyn Sleeper + Send + Sync> = Arc::new(SleeperImpl);
         let identity = NodeIdentity::load_or_create(&state_dir.join("identity")).await?;
         let signer = identity.signer();
+        let my_node_profile = NodeProfile::new(identity.public_key().to_vec(), my_addrs);
+        my_node_profile.validate_byte_lengths()?;
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
 
         let session_accepter = Arc::new(
@@ -100,7 +107,6 @@ impl AxusService {
         let node_finder_dir = state_dir.join("finder");
         tokio::fs::create_dir_all(&node_finder_dir).await?;
 
-        let my_node_profile = NodeProfile::new(identity.public_key().to_vec(), my_addrs);
         let result = NodeFinder::new(
             my_node_profile,
             session_connector,
@@ -149,6 +155,25 @@ mod tests {
     use super::{AxusService, AxusServiceOption};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+    #[tokio::test]
+    async fn oversized_configuration_fails_before_starting_workers() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        for option in [
+            AxusServiceOption {
+                advertise_addrs: vec![OmniAddr::new("a".repeat(513))],
+                ..Default::default()
+            },
+            AxusServiceOption {
+                bootstrap_node_profiles: vec![NodeProfile::new(vec![0; 257], vec![])],
+                ..Default::default()
+            },
+        ] {
+            assert!(AxusService::new(dir.path(), "127.0.0.1:0", dir.path(), option).await.is_err());
+        }
+        assert!(!dir.path().join("identity").exists());
+        Ok(())
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn node_finds_asset_key_owner_through_bootstrap_node() -> TestResult {

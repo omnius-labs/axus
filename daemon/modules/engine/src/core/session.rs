@@ -380,7 +380,7 @@ mod tests {
         for typ in [SessionType::NodeFinder, SessionType::FileExchanger] {
             let client = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&test_addr(), &typ)).await??;
             let server = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&typ)).await??;
-            let length = if typ == SessionType::NodeFinder { 4 * 1024 * 1024 } else { 4 * 1024 * 1024 + 1 };
+            let length = if typ == SessionType::NodeFinder { typ.max_frame_length() } else { 4 * 1024 * 1024 + 1 };
             let frame = Bytes::from(vec![0; length]);
             let (sent, received) = tokio::time::timeout(TEST_TIMEOUT, async {
                 tokio::join!(async { client.stream.sender.lock().await.send(frame.clone()).await }, async {

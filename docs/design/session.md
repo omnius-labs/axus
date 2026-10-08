@@ -108,13 +108,13 @@ shutdown は handshake の task も cancellation token で終了させ、その�
 
 **決定**
 handshake 中の frame は送受信とも 16 KiB 以下とする。
-用途選択後は NodeFinder の上限を 4 MiB、FileExchanger の上限を 64 MiB に切り替える。
+用途選択後は NodeFinder の上限を 256 KiB、FileExchanger の上限を 64 MiB に切り替える。
 受信 frame が上限を超えた Session は閉じる。
 FileExchanger の確立後の受信期限は、block 交換 protocol を定義するときに決める。
 
 **理由**
 認証前の message に必要な範囲へ上限を下げ、受信側が frame のために確保する memory を抑えるためである。
-NodeFinder も伝播情報の受信で資源を消費するため、確立後に 4 MiB の上限を持つ。
+NodeFinder も伝播情報の受信で資源を消費するため、確立後に 256 KiB の上限を持つ。
 FileExchanger は block 交換 protocol が未定義なので、既存の 64 MiB を維持する。
 
 #### NodeFinder の message の要素数
@@ -133,7 +133,7 @@ NodeFinder は frame の上限に加え、次の要素数を送受信の上限�
 
 上限を超える message は decode で要素数を読んだ直後、collection を確保する前に拒否し、Session を閉じる。
 NodeProfile の `addrs` は wire の decode で検査し、NodeFinder の ProfileMessage にも適用する。
-URI の解釈はこの制約から分け、自 node のアドレスは起動時に 8 件へ切り詰めて警告を記録する。
+URI も同じ生成 NodeProfile の制約に従い、自 node のアドレスは起動時に 8 件へ切り詰めて警告を記録する。
 送信候補の絞り込みと集積情報の扱いは [node-finder.md](./node-finder.md#61-決定済み) が正とする。
 
 **理由**
@@ -191,6 +191,7 @@ SessionOption の期限、同時数、frame 上限を SessionAccepter と Sessio
 NodeFinder の Hello/Profile 交換時と確立後の受信期限は、通信周期の 3 倍として実装している。
 DataMessage と NodeProfile の wire decode で、確保前に要素数の上限を検査する。
 上限を超えた Session の切断と、送信側が上限以下へ絞った情報の往復を test で確認している。
+NodeFinder の frame 上限は 256 KiB とし、上限ちょうどの送受信と上限超過の拒否を test で確認している。
 secure channel と複数 version の選択規則を定めるまで、信頼できない network での FileExchanger と Profile 交換は有効にしない。
 
 確認済みの不具合は [issues.md](../issues.md) を参照する。

@@ -28,7 +28,7 @@ NodeFinder は asset の内容を解釈せず、AssetKey と NodeProfile の対�
 FileExchanger はこの境界を使うため、探索の message と file 交換の message を混在させない。
 
 [NodeProfileFetcher](../../daemon/modules/engine/src/core/negotiator/node/node_profile_fetcher.rs) は bootstrap 用の NodeProfile 群を外部から取得する。
-URI 変換の詳細と checksum は [converter/uri.rs](../../daemon/modules/engine/src/model/converter/uri.rs) が正である。
+URI 変換の詳細と checksum は [protocol/uri.rs](../../daemon/modules/engine/src/protocol/uri.rs) が正である。
 
 ## 3. 情報の配布
 
@@ -144,9 +144,9 @@ Hello/Profile 交換にも適用し、Session の認証と用途選択を終え�
 
 受信側は要素数を読んだ直後、Vec や HashMap を確保する前に上限を検査し、超過した message の Session を閉じる。
 NodeProfile のアドレス数は wire の decode で検査するため、Hello の後の ProfileMessage にも適用する。
-設定と保存に使う `axus:node/...` の URI の解釈には、この wire の制約を適用しない。
+設定と保存に使う `axus:node/...` の URI も同じ生成 NodeProfile の制約に従う。
 送信側は既存の rng で候補を無作為に選び、各件数を上限以下にする。
-URI から得た既知 node のアドレスが上限を超える場合も、送信する profile だけを無作為に 8 件へ絞る。
+件数で絞った後は、[rocketpack.md](./rocketpack.md#サイズ予算内で各種類の送信候補を交互に選ぶ) の byte 予算に収まる候補を選ぶ。
 複数 message 分を保持する受信状態は、TTL と集積件数の上限を別に持つ。
 
 **理由**
@@ -182,7 +182,9 @@ Hello/Profile 交換と確立後の受信期限を通信周期から導き、無
 空の DataMessage の定期送信、受信による期限の更新、受信待機中の shutdown を test で確認している。
 DataMessage と NodeProfile の要素数を確保前の decode で検査し、超過した Session を閉じる。
 TaskComputer は同じ上限で無作為に候補を絞り、自 node のアドレスは起動時に 8 件以下にする。
-上限ちょうどの受理、各上限の超過による切断、大量情報を持つ node 間の往復、URI の解釈の維持を test で確認している。
+上限ちょうどの受理、各上限の超過による切断、大量情報を持つ node 間の往復、上限以内の URI の互換性を test で確認している。
+DataMessage の符号化結果を 256 KiB 以下に制限し、各種類の候補を交互に選別する。
+明示設定の byte 長違反を worker 開始前に拒否し、保存済みの不適合 URI は警告して読み飛ばす。DB の行を残すことも test で確認している。
 
 重複した Session の解消は、互いを bootstrap に指定した 2 node の結合試験で確認している。
 lookup で得た NodeProfile には、相手が広告したアドレスが含まれることを結合試験で確認している。

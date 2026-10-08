@@ -17,6 +17,7 @@ use crate::{
     core::session::{SessionAccepter, SessionConnector},
     model::{AssetKey, NodeProfile},
     prelude::*,
+    protocol::{MessageCodec, NodeProfileCodec},
 };
 
 use super::*;
@@ -92,6 +93,8 @@ impl NodeFinder {
         rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         option: NodeFinderOption,
     ) -> Result<Self> {
+        // 件数を絞る前に全アドレスの byte 長を確認し、設定の違反を隠さない。
+        my_node_profile.validate_byte_lengths()?;
         if my_node_profile.addrs.len() > NodeProfile::MAX_WIRE_ADDRS {
             warn!(
                 address_count = my_node_profile.addrs.len(),
@@ -100,6 +103,7 @@ impl NodeFinder {
             );
             my_node_profile.addrs.truncate(NodeProfile::MAX_WIRE_ADDRS);
         }
+        NodeProfileCodec::encode(&my_node_profile)?;
         let (tx, rx) = mpsc::channel(20);
 
         let v = Self {

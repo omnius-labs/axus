@@ -452,10 +452,10 @@ fn unknown_missing_null_and_trailing_fields_keep_acceptance() -> TestResult {
 }
 
 #[test]
-fn unconstrained_fields_and_hash_variants_remain_compatible() -> TestResult {
+fn bounded_fields_and_hash_variants_remain_compatible() -> TestResult {
     for typ in [OmniHashAlgorithmType::None, OmniHashAlgorithmType::Sha3_256, OmniHashAlgorithmType::Blake3_256] {
         let hash = OmniHash { typ, value: vec![3; 64] };
-        for text in [String::new(), "日本語".repeat(1024)] {
+        for text in [String::new(), format!("{}a", "日".repeat(21))] {
             let old = legacy::AssetKey {
                 typ: text.clone(),
                 hash: hash.clone(),
@@ -474,7 +474,7 @@ fn unconstrained_fields_and_hash_variants_remain_compatible() -> TestResult {
             assert_eq!(old.export()?, new.export()?);
         }
     }
-    let new = NodeProfile::new(vec![4; 65536], vec![OmniAddr::new(" opaque address ".repeat(1024))]);
+    let new = NodeProfile::new(vec![4; 256], vec![OmniAddr::new(format!("{}aa", "日".repeat(170)))]);
     compatible::<NodeProfileCodec, _>(&legacy_profile(&new), &new, true)
 }
 
@@ -508,5 +508,63 @@ fn duplicate_map_keys_keep_the_last_value() -> TestResult {
         let map = if field == 2 { new.give_asset_key_locations } else { new.push_asset_key_locations };
         assert_eq!(map[&key].as_slice()[0].public_key(), &[9]);
     }
+    Ok(())
+}
+
+#[test]
+fn byte_length_limits_reject_old_oversized_fields() -> TestResult {
+    for (public_key, addr, accepted) in [
+        (vec![0; 256], "a".repeat(512), true),
+        (vec![0; 257], "a".to_string(), false),
+        (vec![0], "a".repeat(513), false),
+        (vec![0], format!("{}aa", "日".repeat(170)), true),
+        (vec![0], "日".repeat(171), false),
+    ] {
+        let profile = NodeProfile::new(public_key, vec![OmniAddr::new(addr)]);
+        let old = legacy_profile(&profile).export()?;
+        assert_eq!(NodeProfileCodec::encode(&profile).is_ok(), accepted);
+        assert_eq!(NodeProfileCodec::decode(&old).is_ok(), accepted);
+        assert_eq!(axus::model::NodeProfile::import(&old).is_ok(), accepted);
+        if accepted {
+            assert_eq!(NodeProfileCodec::decode(&old)?, profile);
+        }
+    }
+    for text in ["a".repeat(64), "a".repeat(65), format!("{}a", "日".repeat(21)), "日".repeat(22)] {
+        let accepted = text.len() <= 64;
+        let old = legacy::AssetKey { typ: text.clone(), hash: hash() };
+        let key = AssetKey { typ: text, hash: hash() };
+        assert_eq!(key.export().is_ok(), accepted);
+        assert_eq!(AssetKey::import(&old.export()?).is_ok(), accepted);
+    }
+    Ok(())
+}
+
+#[test]
+fn message_byte_boundary_is_checked_before_decoding() -> TestResult {
+    let limit = axus::node::MAX_MESSAGE_LENGTH as usize;
+    for size in [limit, limit + 1] {
+        // 上限ちょうどまで未知 field で埋めた、構造上は有効な V1 message。
+        let mut bytes = DataMessageCodec::encode(&domain_node::DataMessage::default())?;
+        bytes[0] = 0xa5;
+        let padding = size - bytes.len() - 6;
+        let mut encoder = RocketPackBytesEncoder::new(&mut bytes);
+        encoder.write_u64(4)?;
+        encoder.write_bytes(&vec![0; padding])?;
+        assert_eq!(bytes.len(), size);
+        if size == limit {
+            assert_eq!(DataMessageCodec::decode(&bytes)?, domain_node::DataMessage::default());
+        } else {
+            assert!(matches!(
+                DataMessageCodec::decode(&bytes),
+                Err(RocketPackDecoderError::LengthOutOfRange { context: "DataMessage", .. })
+            ));
+        }
+    }
+    // 不正な構造でも、巨大入力は field を読む前にサイズ違反となる。
+    let bytes = vec![0xff; limit + 1];
+    assert!(matches!(
+        DataMessageCodec::decode(&bytes),
+        Err(RocketPackDecoderError::LengthOutOfRange { context: "DataMessage", .. })
+    ));
     Ok(())
 }

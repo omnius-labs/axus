@@ -46,7 +46,7 @@ Web of Trust はこの信頼選別を担うが、transport の盗聴と改竄に
 NodeFinder の中継は情報を増幅し得るため、TTL、件数、接続数、message size の上限と、handshake と受信の期限を protocol の入力境界で強制する。
 Session の認証と用途選択までの handshake は、TCP 接続後から全体で 10 秒、受理側の同時数は 64 本以下とする。
 上限を超えた接続は読み書きせずに閉じ、期限を超えた接続も閉じる。
-frame の上限は handshake 中が 16 KiB、用途選択後は NodeFinder が 4 MiB、FileExchanger が 64 MiB であり、受信時に上限を超えた Session は閉じる。
+frame の上限は handshake 中が 16 KiB、用途選択後は NodeFinder が 256 KiB、FileExchanger が 64 MiB であり、受信時に上限を超えた Session は閉じる。
 これらは認証前後の相手による受信側の資源消費を抑えるための制約であり、詳細と採用理由は [session.md](./session.md#51-決定済み) が正とする。
 NodeFinder は Hello/Profile 交換中も、確立後も、通信周期の 3 倍の間受信がなければ Session を閉じる。
 既定の通信周期は 20 秒なので受信期限は 60 秒であり、内容が空でも相手は毎周期 DataMessage を送る。
@@ -63,10 +63,10 @@ DataMessage と NodeProfile の wire decode では、次の要素数を collecti
 | 各 AssetKey に付ける NodeProfile | 8 件 |
 | NodeProfile の `addrs` | 8 件 |
 
-NodeProfile のアドレス数の検査は ProfileMessage にも適用するが、`axus:node/...` の URI の解釈には適用しない。
+NodeProfile のアドレス数と byte 長の検査は ProfileMessage と `axus:node/...` の URI にも適用する。
 自 node のアドレスが多い場合は起動時に 8 件へ切り詰めて警告を記録し、送信側も各件数を同じ上限以下へ無作為に絞る。
 frame の byte 数と要素数の両方を制限することで、受信側の確保量と処理量、所在情報の中継に伴う資源消費を抑える。
-伝播の手順と上限の採用理由は [node-finder.md](./node-finder.md#61-決定済み) が正とする。
+伝播の手順と件数上限の採用理由は [node-finder.md](./node-finder.md#61-決定済み)、byte 長と送信予算の判断は [rocketpack.md](./rocketpack.md#5-設計判断) が正とする。
 
 FileExchanger は受信 block を hash 検証し、Profile 交換は署名と version 検証を通す。
 
@@ -135,5 +135,6 @@ Session は challenge signature を交換するが、通信を暗号化してい
 Session の handshake の期限と同時数、handshake 中と用途選択後の frame 上限を実装している。
 NodeFinder の Hello/Profile 交換時と確立後の受信期限を、通信周期の 3 倍として実装している。
 DataMessage と NodeProfile の wire decode で要素数の上限を検査し、送信側も同じ上限へ収める。
+NodeFinder の frame と DataMessage を 256 KiB 以下に制限し、可変長 field の制約と送信候補の予算選別を実装している。
 各上限の超過による切断、上限ちょうどの受理、大量情報の往復を test で確認している。
 NodeProfile の到達先の真正性と Web of Trust の policy を決め、信頼できない network へ適用する前に secure channel を選ぶ。

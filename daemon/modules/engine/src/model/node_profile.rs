@@ -1,3 +1,4 @@
+use omnius_core_base::error::OmniError as _;
 use std::sync::OnceLock;
 
 use omnius_core_omnikit::{
@@ -25,6 +26,20 @@ impl NodeProfile {
     /// Session の cert と同じ DER 表現の公開鍵
     pub fn public_key(&self) -> &[u8] {
         &self.public_key
+    }
+
+    pub(crate) fn validate_byte_lengths(&self) -> crate::result::Result<()> {
+        use crate::{
+            error::{Error, ErrorKind},
+            generated::axus::model,
+        };
+        if self.public_key.len() > model::MAX_PUBLIC_KEY_LENGTH as usize {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("node profile public key exceeds byte length limit"));
+        }
+        if self.addrs.iter().any(|addr| addr.as_str().len() > model::MAX_ADDR_LENGTH as usize) {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("advertised node address exceeds byte length limit"));
+        }
+        Ok(())
     }
 
     /// 公開鍵の SHA3-256 hash。初回の呼び出しで計算し、以降は保持した値を返す

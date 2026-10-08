@@ -65,7 +65,16 @@ SELECT value
         .fetch_all(self.db.as_ref())
         .await?;
 
-        let res: Vec<NodeProfile> = res.into_iter().filter_map(|(v,)| NodeProfile::from_str(v.as_str()).ok()).collect();
+        let res: Vec<NodeProfile> = res
+            .into_iter()
+            .filter_map(|(v,)| match NodeProfile::from_str(v.as_str()) {
+                Ok(profile) => Some(profile),
+                Err(error) => {
+                    warn!(error_message = error.to_string(), "skipping invalid stored node profile; keeping database row");
+                    None
+                }
+            })
+            .collect();
         Ok(res)
     }
 
@@ -161,6 +170,26 @@ mod tests {
                 assert_eq!(fullfsync, 1);
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_stored_profiles_are_skipped_without_deleting_rows() -> TestResult {
+        use crate::protocol::{tests::legacy, uri::UriConverter};
+        let dir = tempfile::tempdir()?;
+        let clock = Arc::new(FakeClockUtc::new(DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")?.into()));
+        let repo = NodeFinderRepo::new(dir.path().to_str().unwrap(), clock).await?;
+        let valid = NodeProfile::new(vec![1], vec![OmniAddr::new("addr")]);
+        repo.insert_or_ignore_node_profiles(&[&valid], 0).await?;
+        let old = legacy::NodeProfile::new(vec![2; 257], vec![]);
+        let uri = UriConverter::encode("node", &old)?;
+        sqlx::query("INSERT INTO node_profiles (value, weight, created_time, updated_time) VALUES (?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+            .bind(uri)
+            .execute(repo.db.as_ref())
+            .await?;
+        assert_eq!(repo.fetch_node_profiles().await?, vec![valid]);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM node_profiles").fetch_one(repo.db.as_ref()).await?;
+        assert_eq!(count, 2);
         Ok(())
     }
 

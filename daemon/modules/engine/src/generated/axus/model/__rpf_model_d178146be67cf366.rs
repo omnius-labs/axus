@@ -10,6 +10,7 @@ pub struct AssetKey {
 
 impl omnius_core_rocketpack::RocketPackStruct for AssetKey {
     fn validate(value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        omnius_core_rocketpack::validate_length("AssetKey.typ", 0, 64, (&value.typ).len())?;
         <omnius_core_omnikit::generated::omni_hash::OmniHash as omnius_core_rocketpack::RocketPackStruct>::validate(&value.hash)?;
         Ok(())
     }
@@ -17,6 +18,7 @@ impl omnius_core_rocketpack::RocketPackStruct for AssetKey {
     fn pack(encoder: &mut impl omnius_core_rocketpack::RocketPackEncoder, value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
         encoder.write_map(2)?;
         encoder.write_u64(0)?;
+        omnius_core_rocketpack::validate_length("AssetKey.typ", 0, 64, (&value.typ).len())?;
         encoder.write_string((&value.typ).as_str())?;
         encoder.write_u64(1)?;
         encoder.write_struct(&value.hash)?;
@@ -34,7 +36,7 @@ impl omnius_core_rocketpack::RocketPackStruct for AssetKey {
         for _ in 0..count {
             match decoder.read_u64()? {
                 0 => {
-                    __rpf_storage_typ = Some(decoder.read_string()?);
+                    __rpf_storage_typ = Some(decoder.read_string_bounded("AssetKey.typ", 0, 64)?);
                 }
                 1 => {
                     __rpf_storage_hash = Some(decoder.read_struct::<omnius_core_omnikit::generated::omni_hash::OmniHash>()?);
@@ -106,18 +108,24 @@ pub struct NodeProfile {
 
 impl omnius_core_rocketpack::RocketPackStruct for NodeProfile {
     fn validate(value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        omnius_core_rocketpack::validate_length("NodeProfile.public_key", 0, 256, (&value.public_key).len())?;
         omnius_core_rocketpack::validate_length("NodeProfile.addrs", 0, 8, (&value.addrs).len())?;
+        for item in (&value.addrs).iter() {
+            omnius_core_rocketpack::validate_length("NodeProfile.addrs[]", 0, 512, (item).len())?;
+        }
         Ok(())
     }
 
     fn pack(encoder: &mut impl omnius_core_rocketpack::RocketPackEncoder, value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
         encoder.write_map(2)?;
         encoder.write_u64(0)?;
+        omnius_core_rocketpack::validate_length("NodeProfile.public_key", 0, 256, (&value.public_key).len())?;
         encoder.write_bytes((&value.public_key).as_slice())?;
         encoder.write_u64(1)?;
         omnius_core_rocketpack::validate_length("NodeProfile.addrs", 0, 8, (&value.addrs).len())?;
         encoder.write_array((&value.addrs).len())?;
         for item in (&value.addrs).iter() {
+            omnius_core_rocketpack::validate_length("NodeProfile.addrs[]", 0, 512, (item).len())?;
             encoder.write_string((item).as_str())?;
         }
         Ok(())
@@ -134,13 +142,13 @@ impl omnius_core_rocketpack::RocketPackStruct for NodeProfile {
         for _ in 0..count {
             match decoder.read_u64()? {
                 0 => {
-                    __rpf_storage_public_key = Some(decoder.read_bytes_vec()?);
+                    __rpf_storage_public_key = Some(decoder.read_bytes_bounded("NodeProfile.public_key", 0, 256)?);
                 }
                 1 => {
                     let __count_0 = decoder.read_array_bounded("NodeProfile.addrs", 0, 8)?;
                     let mut __values_1: Vec<String> = Vec::new();
                     for _ in 0..__count_0 {
-                        __values_1.push(decoder.read_string()?);
+                        __values_1.push(decoder.read_string_bounded("NodeProfile.addrs[]", 0, 512)?);
                     }
                     __rpf_storage_addrs = Some(__values_1);
                 }
@@ -156,3 +164,9 @@ impl omnius_core_rocketpack::RocketPackStruct for NodeProfile {
 }
 
 pub const MAX_WIRE_ADDRS: u32 = 8;
+
+pub const MAX_PUBLIC_KEY_LENGTH: u32 = 256;
+
+pub const MAX_ADDR_LENGTH: u32 = 512;
+
+pub const MAX_ASSET_TYPE_LENGTH: u32 = 64;

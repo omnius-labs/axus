@@ -13,7 +13,7 @@ use crate::{
     prelude::*,
 };
 
-use super::{MessageCodec, NodeProfileCodec};
+use super::{EncodedSize, MessageCodec, NodeProfileCodec};
 
 type WireLocations = BTreeMap<AssetKey, Vec<WireNodeProfile>>;
 type DomainLocations = HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>>;
@@ -59,6 +59,20 @@ pub(crate) struct DataMessageCodec;
 impl MessageCodec for DataMessageCodec {
     type Message = DataMessage;
     type Wire = wire::DataMessage;
+
+    fn encode(value: &DataMessage) -> std::result::Result<Vec<u8>, RocketPackEncoderError> {
+        let wire = Self::to_wire(value);
+        let size = EncodedSize::of(&wire)?;
+        omnius_core_rocketpack::validate_length("DataMessage", 0, wire::MAX_MESSAGE_LENGTH as u64, size)?;
+        let bytes = wire.export()?;
+        omnius_core_rocketpack::validate_length("DataMessage", 0, wire::MAX_MESSAGE_LENGTH as u64, bytes.len())?;
+        Ok(bytes)
+    }
+
+    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<DataMessage, RocketPackDecoderError> {
+        decoder.validate_length("DataMessage", 0, wire::MAX_MESSAGE_LENGTH as u64, decoder.remaining() as u64, decoder.position())?;
+        Self::from_wire(Self::Wire::unpack(decoder)?)
+    }
 
     fn to_wire(value: &DataMessage) -> Self::Wire {
         Self::Wire {

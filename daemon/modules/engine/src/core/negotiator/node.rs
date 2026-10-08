@@ -1,4 +1,5 @@
 mod data_message;
+mod data_message_budget;
 mod kadx;
 mod message;
 mod node_finder;
@@ -12,6 +13,7 @@ mod task_computer;
 mod task_connector;
 
 pub(crate) use data_message::*;
+use data_message_budget::DataMessageBudget;
 use kadx::*;
 pub(crate) use message::*;
 pub use node_finder::*;

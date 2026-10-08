@@ -790,12 +790,24 @@ mod tests {
         )
         .await?;
         a_computer.compute().await?;
+        let sent_counts;
         {
             let sending = a_status.sending_data_message.lock();
-            assert_eq!(sending.push_node_profiles.len(), DataMessage::MAX_PUSH_NODE_PROFILES);
-            assert_eq!(sending.want_asset_keys.len(), DataMessage::MAX_WANT_ASSET_KEYS);
-            assert_eq!(sending.give_asset_key_locations.len(), DataMessage::MAX_GIVE_ASSET_KEY_LOCATIONS);
-            assert_eq!(sending.push_asset_key_locations.len(), DataMessage::MAX_PUSH_ASSET_KEY_LOCATIONS);
+            sent_counts = (
+                sending.want_asset_keys.len(),
+                sending.give_asset_key_locations.len(),
+                sending.push_asset_key_locations.len(),
+            );
+            assert!(!sending.push_node_profiles.is_empty());
+            assert!(sent_counts.0 > 0 && sent_counts.1 > 0 && sent_counts.2 > 0);
+            assert!(sent_counts.1 < DataMessage::MAX_GIVE_ASSET_KEY_LOCATIONS);
+            let message = DataMessage {
+                push_node_profiles: sending.push_node_profiles.clone(),
+                want_asset_keys: sending.want_asset_keys.clone(),
+                give_asset_key_locations: sending.give_asset_key_locations.clone(),
+                push_asset_key_locations: sending.push_asset_key_locations.clone(),
+            };
+            assert!(DataMessageCodec::encode(&message)?.len() <= FramedStream::NODE_FINDER_MAX_FRAME_LENGTH);
             assert!(sending.push_node_profiles.iter().all(|p| p.addrs.len() <= NodeProfile::MAX_WIRE_ADDRS));
             for profiles in sending.give_asset_key_locations.values().chain(sending.push_asset_key_locations.values()) {
                 assert_eq!(profiles.len(), DataMessage::MAX_LOCATION_NODE_PROFILES);
@@ -806,9 +818,7 @@ mod tests {
             loop {
                 let ready = {
                     let data = b_status.received_data_message.lock();
-                    data.want_asset_keys.len() == DataMessage::MAX_WANT_ASSET_KEYS
-                        && data.give_asset_key_locations.len() == DataMessage::MAX_GIVE_ASSET_KEY_LOCATIONS
-                        && data.push_asset_key_locations.len() == DataMessage::MAX_PUSH_ASSET_KEY_LOCATIONS
+                    data.want_asset_keys.len() == sent_counts.0 && data.give_asset_key_locations.len() == sent_counts.1 && data.push_asset_key_locations.len() == sent_counts.2
                 };
                 if ready {
                     break;
@@ -842,7 +852,7 @@ mod tests {
         .await?;
         b_computer.compute().await?;
         tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
-            while a_status.received_data_message.lock().give_asset_key_locations.len() != DataMessage::MAX_GIVE_ASSET_KEY_LOCATIONS {
+            while a_status.received_data_message.lock().give_asset_key_locations.is_empty() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })

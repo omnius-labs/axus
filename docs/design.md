@@ -14,7 +14,7 @@
 | [terms.md](./terms.md#2-用語一覧) | プロジェクト固有の語の定義、表記、隣接語との境界 |
 | [issues.md](./issues.md) | コードで確認した明確な不具合と修正までの追跡 |
 | [knowledges.md](./knowledges.md) | 依存ライブラリと OS の挙動について確認した、出所付きの外部知識 |
-| `plans.md`（未作成） | 進行中の実装作業が発生した時点で、その子文書と同時に作る計画の一覧 |
+| [plans.md](./plans.md) | 進行中の実装計画の一覧と依存関係 |
 | [reviews.md](./reviews.md) | review の履歴と指摘の転記状態 |
 | [daemon-api.md](./design/daemon-api.md#1-このドキュメントについて) | daemon のライフサイクル、設定境界、REST API と OpenAPI 生成 |
 | [rocketpack.md](./design/rocketpack.md#1-このドキュメントについて) | RocketPack 型の生成、wire format の移行規約 |

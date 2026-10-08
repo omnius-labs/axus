@@ -238,6 +238,7 @@ impl TaskComputer {
                 give_asset_key_locations,
                 push_asset_key_locations,
             };
+            let data_message = DataMessageBudget::select(data_message, &mut *self.rng.lock());
             sending_data_map.insert(id.clone(), data_message);
         }
 

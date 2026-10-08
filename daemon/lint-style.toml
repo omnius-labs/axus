@@ -2,4 +2,6 @@
 exclude = [
   "refs",
   "entrypoints/interface",
+  "modules/engine/src/generated.rs",
+  "modules/engine/src/generated",
 ]

@@ -1,0 +1,22 @@
+version: 1
+name: omnius-axus-engine
+
+dependencies:
+  omnius-core-omnikit:
+    path: refs/core-rs/modules/omnikit/rocketpack.yaml
+
+sources:
+  - base_dir: rpfs
+    includes:
+      - "**/*.rpf"
+
+generators:
+  - id: rust
+    plugin: rocketpack-rust
+    options:
+      output_dir: modules/engine/src
+      module_name: generated
+      dependencies:
+        omnius-core-omnikit:
+          crate: omnius_core_omnikit
+          module_name: generated

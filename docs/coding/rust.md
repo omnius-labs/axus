@@ -36,6 +36,7 @@ Axus では、次の手書き crate を対象とする。
 | 対象外                          | 理由                                    |
 | ------------------------------- | --------------------------------------- |
 | `daemon/entrypoints/interface`  | OpenAPI Generator の生成物である        |
+| `daemon/modules/engine/src/generated.rs` と `generated/` | RocketPack compiler の生成物である |
 | `daemon/refs`                   | 別リポジトリの参照である                |
 | `target` と `.git`              | build 生成物と version 管理の内部である |
 | `#[cfg(test)]` 配下と test 関数 | テストの構造は本書で制約しない          |

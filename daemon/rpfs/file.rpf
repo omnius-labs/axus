@@ -1,0 +1,9 @@
+version 1;
+package axus::file;
+
+use omni_hash::OmniHash;
+
+struct MerkleLayer {
+  @0 rank: u32;
+  @1 hashes: Vec<OmniHash>;
+}

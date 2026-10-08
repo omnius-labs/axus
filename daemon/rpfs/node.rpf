@@ -1,0 +1,29 @@
+version 1;
+package axus::node;
+
+use axus::model::AssetKey;
+use axus::model::NodeProfile;
+
+#[rust::derive(Eq)]
+struct HelloMessage {
+  @0 version: u32;
+}
+
+#[rust::derive(Eq)]
+struct ProfileMessage {
+  @0 node_profile: NodeProfile;
+}
+
+#[rust::derive(Eq)]
+struct DataMessage {
+  @0 push_node_profiles: Vec<NodeProfile>[..=MAX_PUSH_NODE_PROFILES];
+  @1 want_asset_keys: Vec<AssetKey>[..=MAX_WANT_ASSET_KEYS];
+  @2 give_asset_key_locations: Map<AssetKey, Vec<NodeProfile>[..=MAX_LOCATION_NODE_PROFILES]>[..=MAX_GIVE_ASSET_KEY_LOCATIONS];
+  @3 push_asset_key_locations: Map<AssetKey, Vec<NodeProfile>[..=MAX_LOCATION_NODE_PROFILES]>[..=MAX_PUSH_ASSET_KEY_LOCATIONS];
+}
+
+const MAX_PUSH_NODE_PROFILES: u32 = 32;
+const MAX_WANT_ASSET_KEYS: u32 = 1024;
+const MAX_GIVE_ASSET_KEY_LOCATIONS: u32 = 1024;
+const MAX_PUSH_ASSET_KEY_LOCATIONS: u32 = 1024;
+const MAX_LOCATION_NODE_PROFILES: u32 = 8;

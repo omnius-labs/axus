@@ -80,7 +80,7 @@ INSERT OR IGNORE INTO node_profiles (value, weight, created_time, updated_time)
             );
 
             let now = self.clock.now().naive_utc();
-            let rows: Vec<String> = chunk.iter().map(|v| v.to_string()).collect();
+            let rows: Vec<String> = chunk.iter().map(|v| v.to_uri()).collect::<Result<_>>()?;
 
             query_builder.push_values(rows, |mut b, row| {
                 b.push_bind(row);
@@ -161,6 +161,20 @@ mod tests {
                 assert_eq!(fullfsync, 1);
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn oversized_profile_returns_an_error_without_changing_stored_profiles() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let clock = Arc::new(FakeClockUtc::new(DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")?.into()));
+        let repo = NodeFinderRepo::new(dir.path().to_str().unwrap(), clock).await?;
+        let valid = NodeProfile::new(vec![1], vec![OmniAddr::new("addr"); NodeProfile::MAX_WIRE_ADDRS]);
+        repo.insert_or_ignore_node_profiles(&[&valid], 1).await?;
+
+        let oversized = NodeProfile::new(vec![2], vec![OmniAddr::new("addr"); NodeProfile::MAX_WIRE_ADDRS + 1]);
+        assert!(repo.insert_or_ignore_node_profiles(&[&oversized], 1).await.is_err());
+        assert_eq!(repo.fetch_node_profiles().await?, vec![valid]);
         Ok(())
     }
 

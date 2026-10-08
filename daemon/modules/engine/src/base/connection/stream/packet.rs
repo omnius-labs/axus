@@ -8,6 +8,7 @@ use crate::protocol::MessageCodec;
 
 #[async_trait]
 pub trait FramedRecvExt: FramedRecv {
+    #[cfg(test)]
     async fn recv_message<T: RocketPackStruct>(&mut self) -> Result<T>;
     async fn recv_message_with<C: MessageCodec>(&mut self) -> Result<C::Message>;
 }
@@ -17,6 +18,7 @@ impl<T: FramedRecv> FramedRecvExt for T
 where
     T: ?Sized + Send + Unpin,
 {
+    #[cfg(test)]
     async fn recv_message<TItem: RocketPackStruct>(&mut self) -> Result<TItem> {
         let b = self.recv().await?;
         let item = TItem::import(&b)?;
@@ -30,6 +32,7 @@ where
 
 #[async_trait]
 pub trait FramedSendExt: FramedSend {
+    #[cfg(test)]
     async fn send_message<T: RocketPackStruct + Send + Sync>(&mut self, item: &T) -> Result<()>;
     async fn send_message_with<C: MessageCodec>(&mut self, item: &C::Message) -> Result<()>
     where
@@ -41,6 +44,7 @@ impl<T: FramedSend> FramedSendExt for T
 where
     T: ?Sized + Send + Unpin,
 {
+    #[cfg(test)]
     async fn send_message<TItem: RocketPackStruct + Send + Sync>(&mut self, item: &TItem) -> Result<()> {
         let b = Bytes::from(item.export()?);
         self.send(b).await?;

@@ -46,7 +46,11 @@
 | memo | profile-memo | `MemoExchanger` | - | Profile を探索、交換、配布する下位機構 | 投稿本文 |
 | Profile | profile-memo | `Profile` | - | 主体の公開情報と公開データへの FileRef 群を表す上位データ | - |
 | rpf | rocketpack | `.rpf` | `.rpf` file | RocketPack 型と field 番号を定義する schema file | Rust 型定義 |
+| RawStream | session | `RawStream`、`ConnectionStream` | - | Session が frame 化前に受け取る、生の双方向 transport の所有者 | 認証済み Session |
 | Session | session | `Session` | - | 相手の証明、接続方向、用途を伴う通信路 | TCP 接続 |
+| Session version | session | `SessionVersion` | 暗号化した HelloMessage | Session の用途選択に使う protocol の版。V2 だけを受理する | NodeFinderVersion |
+| 用途要求 | session | `V2RequestMessage`、`V2RequestType` | 暗号化した Session message | NodeFinder または FileExchanger への割り当てを求める入力 | 認証方式の要求 |
+| 用途結果 | session | `V2ResultMessage`、`V2ResultType` | 暗号化した Session message | 要求した用途への Accept または Reject を返す結果 | 任意の認証成功 |
 | sweep | storage | - | - | RocksDB の key と一時出力を SQLite の行と照合し、参照のないものを消す回収処理 | - |
 
 ## 3. 隣接語の境界
@@ -77,7 +81,8 @@ root hash を予約の単位にすると、同じ内容を別の出力先へ購�
 
 **境界**
 NodeProfile は探索に使う node の公開鍵と到達先である。
-Session は challenge への署名を確認した後に用途へ渡す通信路であり、署名者がその公開鍵の秘密鍵を持つことだけを保証する。
+Session は相手の認証と用途選択を経て上位層へ渡す通信路である。
+version ごとの保証と実装状況は [session.md](./design/session.md#6-現状と残作業) が扱う。
 両者の公開鍵の照合は [trust-security.md](./design/trust-security.md#node-id-は公開鍵から導出する) が扱う。
 
 **取り違えると何が起きるか**

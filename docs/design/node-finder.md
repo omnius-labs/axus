@@ -189,7 +189,9 @@ DataMessage の符号化結果を 256 KiB 以下に制限し、各種類の候�
 重複した Session の解消は、互いを bootstrap に指定した 2 node の結合試験で確認している。
 lookup で得た NodeProfile には、相手が広告したアドレスが含まれることを結合試験で確認している。
 daemon は設定 `p2p.bootstrap_nodes` の NodeProfile を既知 node に加えて起動する。
+発信 task は選んだ NodeProfile の公開鍵を SessionConnector へ渡し、異なる identity の到達先へ接続した場合は登録しない。
 3 node の結合試験で、bootstrap に指定していない node を中継の node 経由で見つけ、広告されたアドレスで直接つながることを確認している。
+これらの結合試験は Session V2 と低い rekey しきい値を使う。
 
 実運用規模での複数 hop の到達率と遅延を測定し、能動探索と冗長度を決める。
 

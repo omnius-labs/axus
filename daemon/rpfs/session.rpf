@@ -1,29 +1,17 @@
 version 1;
 package axus::session;
 
-use omni_sign::OmniCert;
-
 #[rust::derive(Eq)]
 struct HelloMessage {
   @0 version: u32;
 }
 
 #[rust::derive(Eq)]
-struct V1ChallengeMessage {
-  @0 nonce: bytes[32..=32];
-}
-
-#[rust::derive(Eq)]
-struct V1SignatureMessage {
-  @0 cert: OmniCert;
-}
-
-#[rust::derive(Eq)]
-struct V1RequestMessage {
+struct V2RequestMessage {
   @0 request_type: u32;
 }
 
 #[rust::derive(Eq)]
-struct V1ResultMessage {
+struct V2ResultMessage {
   @0 result_type: u32;
 }

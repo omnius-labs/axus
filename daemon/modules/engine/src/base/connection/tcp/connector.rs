@@ -3,7 +3,7 @@ use fast_socks5::client::Socks5Stream;
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 use tokio::net::TcpStream;
 
-use crate::{base::connection::FramedStream, prelude::*};
+use crate::{base::connection::RawStream, prelude::*};
 
 pub struct TcpProxyOption {
     pub typ: TcpProxyType,
@@ -18,7 +18,7 @@ pub enum TcpProxyType {
 
 #[async_trait]
 pub trait ConnectionTcpConnector {
-    async fn connect(&self, addr: &OmniAddr) -> Result<FramedStream>;
+    async fn connect(&self, addr: &OmniAddr) -> Result<RawStream>;
 }
 
 pub struct ConnectionTcpConnectorImpl {
@@ -33,14 +33,12 @@ impl ConnectionTcpConnectorImpl {
 
 #[async_trait]
 impl ConnectionTcpConnector for ConnectionTcpConnectorImpl {
-    async fn connect(&self, addr: &OmniAddr) -> Result<FramedStream> {
+    async fn connect(&self, addr: &OmniAddr) -> Result<RawStream> {
         match self.proxy_option.typ {
             TcpProxyType::None => {
                 let socket_addr = addr.parse_tcp_ip()?;
                 let stream = TcpStream::connect(socket_addr).await?;
-                let (reader, writer) = tokio::io::split(stream);
-                let stream = FramedStream::new(reader, writer);
-                Ok(stream)
+                Ok(Box::new(stream))
             }
             TcpProxyType::Socks5 => {
                 let (host, port) = addr.parse_tcp_host()?;
@@ -48,9 +46,7 @@ impl ConnectionTcpConnector for ConnectionTcpConnectorImpl {
                     let config = fast_socks5::client::Config::default();
                     let stream = Socks5Stream::connect(proxy_addr.as_str(), host, port, config).await?;
                     let stream = stream.get_socket();
-                    let (reader, writer) = tokio::io::split(stream);
-                    let stream = FramedStream::new(reader, writer);
-                    return Ok(stream);
+                    return Ok(Box::new(stream));
                 }
                 return Err(Error::new(ErrorKind::NetworkError).with_message(format!("failed to connect by socks5: {addr:?}")));
             }

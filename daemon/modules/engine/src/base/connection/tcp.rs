@@ -13,8 +13,8 @@ mod tests {
 
     use crate::{
         base::connection::{
-            ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, FramedRecvExt as _, FramedSendExt as _, TcpProxyOption,
-            TcpProxyType,
+            ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, FramedRecvExt as _, FramedSendExt as _, FramedStream,
+            TcpProxyOption, TcpProxyType,
         },
         prelude::*,
     };
@@ -31,6 +31,8 @@ mod tests {
 
         let connected_stream = connector.connect(&OmniAddr::new("tcp(ip4(127.0.0.1),50000)")).await?;
         let (accepted_stream, _) = accepter.accept().await?;
+        let connected_stream = FramedStream::from_stream(connected_stream, 1024);
+        let accepted_stream = FramedStream::from_stream(accepted_stream, 1024);
 
         connected_stream
             .sender

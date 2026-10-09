@@ -2,8 +2,9 @@ use crate::protocol::session::*;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
+use omnius_core_omnikit::service::connection::secure::{OmniSecureAuth, OmniSecureStream, OmniSecureStreamType};
 use parking_lot::Mutex;
-use rand::RngExt;
+use rand_core::CryptoRng;
 use tokio::{
     select,
     sync::{Mutex as TokioMutex, Semaphore, mpsc},
@@ -19,15 +20,15 @@ use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
 use crate::{
     base::{
-        connection::{ConnectionTcpAccepter, FramedRecvExt as _, FramedSendExt as _, FramedStream},
+        connection::{ConnectionTcpAccepter, FramedRecvExt as _, FramedSendExt as _, FramedStream, RawStream},
         runtime::Shutdown,
     },
-    core::session::message::{HelloMessage, SessionVersion, V1ChallengeMessage, V1RequestMessage, V1SignatureMessage},
+    core::session::message::{HelloMessage, SessionVersion, V2RequestMessage},
     prelude::*,
 };
 
 use super::{
-    message::{V1RequestType, V1ResultMessage, V1ResultType},
+    message::{V2RequestType, V2ResultMessage, V2ResultType},
     model::{Session, SessionHandshakeType, SessionOption, SessionType},
 };
 
@@ -42,7 +43,7 @@ impl SessionAccepter {
         tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
         signer: Arc<OmniSigner>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
-        rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
+        rng: Arc<Mutex<dyn CryptoRng + Send + Sync>>,
         supported_types: &[SessionType],
         option: SessionOption,
     ) -> Self {
@@ -101,7 +102,7 @@ impl TaskAccepter {
         senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<Session>>>>,
         tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
         signer: Arc<OmniSigner>,
-        rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
+        rng: Arc<Mutex<dyn CryptoRng + Send + Sync>>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
         option: SessionOption,
     ) -> Self {
@@ -201,40 +202,35 @@ impl Shutdown for TaskAccepter {
 struct Inner {
     senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<Session>>>>,
     signer: Arc<OmniSigner>,
-    rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
+    rng: Arc<Mutex<dyn CryptoRng + Send + Sync>>,
     option: SessionOption,
 }
 
 impl Inner {
-    async fn handshake(&self, stream: FramedStream, addr: SocketAddr) -> Result<()> {
-        stream.set_max_frame_length(self.option.handshake_max_frame_length).await;
-
-        let send_hello_message = HelloMessage { version: SessionVersion::V1 };
+    async fn handshake(&self, raw: RawStream, addr: SocketAddr) -> Result<()> {
+        let secure = OmniSecureStream::new(
+            raw,
+            OmniSecureStreamType::Accepted,
+            self.option.secure_option()?,
+            OmniSecureAuth::Mutual { signer: self.signer.clone() },
+            self.rng.clone(),
+        )
+        .await?;
+        let cert = secure
+            .peer_cert()
+            .cloned()
+            .ok_or_else(|| Error::new(ErrorKind::Reject).with_message("missing peer identity"))?;
+        let stream = FramedStream::from_stream(secure, self.option.handshake_max_frame_length);
+        let send_hello_message = HelloMessage { version: SessionVersion::V2 };
         stream.sender.lock().await.send_message_with::<HelloMessageCodec>(&send_hello_message).await?;
         let received_hello_message: HelloMessage = stream.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
 
-        let version = send_hello_message.version & received_hello_message.version;
-
-        if version.contains(SessionVersion::V1) {
-            let send_nonce: [u8; 32] = self.rng.lock().random();
-            let send_challenge_message = V1ChallengeMessage { nonce: send_nonce };
-            stream.sender.lock().await.send_message_with::<V1ChallengeMessageCodec>(&send_challenge_message).await?;
-            let receive_challenge_message: V1ChallengeMessage = stream.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>().await?;
-
-            let send_signature = self.signer.sign(&receive_challenge_message.nonce)?;
-            let send_signature_message = V1SignatureMessage { cert: send_signature };
-            stream.sender.lock().await.send_message_with::<V1SignatureMessageCodec>(&send_signature_message).await?;
-            let received_signature_message: V1SignatureMessage = stream.receiver.lock().await.recv_message_with::<V1SignatureMessageCodec>().await?;
-
-            if received_signature_message.cert.verify(send_nonce.as_slice()).is_err() {
-                return Err(Error::new(ErrorKind::InvalidFormat).with_message("Invalid signature"));
-            }
-
-            let received_session_request_message: V1RequestMessage = stream.receiver.lock().await.recv_message_with::<V1RequestMessageCodec>().await?;
+        if received_hello_message.version == SessionVersion::V2 {
+            let received_session_request_message: V2RequestMessage = stream.receiver.lock().await.recv_message_with::<V2RequestMessageCodec>().await?;
             let typ = match received_session_request_message.request_type {
-                V1RequestType::Unknown => None,
-                V1RequestType::NodeFinder => Some(SessionType::NodeFinder),
-                V1RequestType::FileExchanger => Some(SessionType::FileExchanger),
+                V2RequestType::Unknown => None,
+                V2RequestType::NodeFinder => Some(SessionType::NodeFinder),
+                V2RequestType::FileExchanger => Some(SessionType::FileExchanger),
             };
 
             let permit = match typ.as_ref() {
@@ -243,10 +239,10 @@ impl Inner {
             };
 
             if let (Some(typ), Some(permit)) = (typ, permit) {
-                let send_session_result_message = V1ResultMessage {
-                    result_type: V1ResultType::Accept,
+                let send_session_result_message = V2ResultMessage {
+                    result_type: V2ResultType::Accept,
                 };
-                stream.sender.lock().await.send_message_with::<V1ResultMessageCodec>(&send_session_result_message).await?;
+                stream.sender.lock().await.send_message_with::<V2ResultMessageCodec>(&send_session_result_message).await?;
 
                 stream.set_max_frame_length(typ.max_frame_length()).await;
 
@@ -254,20 +250,20 @@ impl Inner {
                     typ,
                     address: OmniAddr::new(format!("tcp({addr})").as_str()),
                     handshake_type: SessionHandshakeType::Accepted,
-                    cert: received_signature_message.cert,
+                    cert,
                     stream,
                 };
                 permit.send(session);
             } else {
-                let send_session_result_message = V1ResultMessage {
-                    result_type: V1ResultType::Reject,
+                let send_session_result_message = V2ResultMessage {
+                    result_type: V2ResultType::Reject,
                 };
-                stream.sender.lock().await.send_message_with::<V1ResultMessageCodec>(&send_session_result_message).await?;
+                stream.sender.lock().await.send_message_with::<V2ResultMessageCodec>(&send_session_result_message).await?;
             }
 
             Ok(())
         } else {
-            Err(Error::new(ErrorKind::UnsupportedType).with_message(format!("Unsupported session version: {}", version.bits())))
+            Err(Error::new(ErrorKind::UnsupportedType).with_message("unsupported session version"))
         }
     }
 }
@@ -290,7 +286,7 @@ mod tests {
 
     use crate::{
         base::{
-            connection::{ConnectionTcpAccepter, FramedStream},
+            connection::{ConnectionTcpAccepter, RawStream},
             runtime::Shutdown,
         },
         prelude::*,
@@ -330,7 +326,7 @@ mod tests {
 
     #[async_trait]
     impl ConnectionTcpAccepter for PendingTcpAccepter {
-        async fn accept(&self) -> Result<(FramedStream, SocketAddr)> {
+        async fn accept(&self) -> Result<(RawStream, SocketAddr)> {
             std::future::pending().await
         }
 

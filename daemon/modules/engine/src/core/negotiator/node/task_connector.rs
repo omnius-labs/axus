@@ -154,7 +154,7 @@ impl TaskConnector {
 
     async fn connect_node(&self, node_profile: &NodeProfile) -> Result<()> {
         for addr in node_profile.addrs.iter() {
-            if let Ok(session) = self.session_connector.connect(addr, &SessionType::NodeFinder).await {
+            if let Ok(session) = self.session_connector.connect(addr, &SessionType::NodeFinder, node_profile.public_key()).await {
                 let status = SessionStatus::new(session, self.clock.clone());
                 self.session_sender
                     .lock()
@@ -198,7 +198,7 @@ mod tests {
     use crate::{
         base::{
             collections::VolatileHashSet,
-            connection::{ConnectionTcpConnector, FramedStream},
+            connection::{ConnectionTcpConnector, RawStream},
             runtime::Shutdown as _,
         },
         core::session::{SessionConnector, model::SessionOption},
@@ -321,7 +321,7 @@ mod tests {
 
     #[async_trait]
     impl ConnectionTcpConnector for CountingTcpConnector {
-        async fn connect(&self, _addr: &OmniAddr) -> Result<FramedStream> {
+        async fn connect(&self, _addr: &OmniAddr) -> Result<RawStream> {
             *self.count.lock() += 1;
             tokio::time::sleep(Duration::from_millis(100)).await;
             Err(Error::new(ErrorKind::NotConnected).with_message("counting connector does not connect"))

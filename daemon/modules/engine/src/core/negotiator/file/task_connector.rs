@@ -211,7 +211,7 @@ impl TaskConnector {
 
             for node_profile in node_profiles {
                 for addr in node_profile.addrs.iter() {
-                    if let Ok(session) = self.session_connector.connect(addr, &SessionType::FileExchanger).await {
+                    if let Ok(session) = self.session_connector.connect(addr, &SessionType::FileExchanger, node_profile.public_key()).await {
                         let status = SessionStatus::new(exchange_type, session, Some(asset_key.hash.clone()), self.clock.clone());
                         self.session_sender
                             .lock()

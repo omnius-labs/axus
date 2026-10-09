@@ -13,9 +13,20 @@ pub struct FramedStream {
 }
 
 impl FramedStream {
+    pub fn from_stream<T>(stream: T, max_frame_length: usize) -> Self
+    where
+        T: AsyncRead + AsyncWrite + Send + 'static,
+    {
+        let (reader, writer) = tokio::io::split(stream);
+        Self {
+            receiver: Arc::new(TokioMutex::new(FramedReceiver::new(reader, max_frame_length))),
+            sender: Arc::new(TokioMutex::new(FramedSender::new(writer, max_frame_length))),
+        }
+    }
     pub const NODE_FINDER_MAX_FRAME_LENGTH: usize = crate::generated::axus::node::MAX_MESSAGE_LENGTH as usize;
     pub const FILE_EXCHANGER_MAX_FRAME_LENGTH: usize = 64 * 1024 * 1024;
 
+    #[cfg(test)]
     pub fn new<R, W>(reader: R, writer: W) -> Self
     where
         R: AsyncRead + Send + Unpin + 'static,

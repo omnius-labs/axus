@@ -42,6 +42,7 @@ pub struct AxusServiceOption {
     /// 空なら、待ち受けアドレスから広告するアドレスを決める
     pub advertise_addrs: Vec<OmniAddr>,
     pub use_upnp: bool,
+    pub session_option: SessionOption,
 }
 
 impl AxusService {
@@ -90,11 +91,11 @@ impl AxusService {
                 sleeper.clone(),
                 rng.clone(),
                 &[SessionType::NodeFinder],
-                SessionOption::default(),
+                option.session_option.clone(),
             )
             .await,
         );
-        let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, rng.clone(), SessionOption::default()));
+        let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, rng.clone(), option.session_option));
 
         let node_ref_repo_dir = state_dir.join("repo");
         tokio::fs::create_dir_all(&node_ref_repo_dir).await?;
@@ -155,6 +156,60 @@ mod tests {
     use super::{AxusService, AxusServiceOption};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn restarted_node_keeps_its_identity_and_bootstrap_uri_on_v2() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let state = dir.path().join("owner");
+        let port = free_port()?;
+        let first = AxusService::new(&state, format!("127.0.0.1:{port}"), dir.path(), fast_option(vec![])).await?;
+        let profile = first.node_finder.my_node_profile();
+        let uri = profile.to_uri()?;
+        first.shutdown().await;
+        drop(first);
+        let owner = AxusService::new(&state, format!("127.0.0.1:{port}"), dir.path(), fast_option(vec![])).await?;
+        assert_eq!(owner.node_finder.my_node_profile(), profile);
+        assert_eq!(owner.node_finder.my_node_profile().to_uri()?, uri);
+        let seeker = AxusService::new(
+            dir.path().join("seeker"),
+            format!("127.0.0.1:{}", free_port()?),
+            dir.path(),
+            fast_option(vec![uri.parse::<NodeProfile>()?]),
+        )
+        .await?;
+        tokio::time::timeout(TEST_TIMEOUT, async {
+            while owner.node_finder.get_session_count().await != 1 || seeker.node_finder.get_session_count().await != 1 {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await?;
+        seeker.shutdown().await;
+        owner.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn bootstrap_address_with_another_identity_does_not_register_a_session() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let owner = AxusService::new(dir.path().join("owner"), format!("127.0.0.1:{}", free_port()?), dir.path(), fast_option(vec![])).await?;
+        let unrelated = NodeIdentity::load_or_create(&dir.path().join("unrelated")).await?;
+        let false_profile = NodeProfile::new(unrelated.public_key().to_vec(), owner.node_finder.my_node_profile().addrs.clone());
+        let seeker = AxusService::new(
+            dir.path().join("seeker"),
+            format!("127.0.0.1:{}", free_port()?),
+            dir.path(),
+            fast_option(vec![false_profile]),
+        )
+        .await?;
+        for _ in 0..5 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert_eq!(seeker.node_finder.get_session_count().await, 0);
+            assert_eq!(owner.node_finder.get_session_count().await, 0);
+        }
+        seeker.shutdown().await;
+        owner.shutdown().await;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn oversized_configuration_fails_before_starting_workers() -> TestResult {
@@ -386,6 +441,11 @@ mod tests {
     fn fast_option(bootstrap_node_profiles: Vec<NodeProfile>) -> AxusServiceOption {
         AxusServiceOption {
             bootstrap_node_profiles,
+            session_option: crate::core::session::model::SessionOption {
+                rekey_after_bytes: 128,
+                rekey_after_records: 2,
+                ..Default::default()
+            },
             node_finder_intervals: NodeFinderIntervals {
                 connect: Duration::from_millis(100),
                 compute: Duration::from_millis(100),

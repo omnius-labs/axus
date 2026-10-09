@@ -30,7 +30,8 @@
 
 | 機構 | 保証するもの | 保証しないもの |
 | --- | --- | --- |
-| Session の challenge signature | 署名者が秘密鍵を所持すること | 相手への信頼、TCP の相手が署名者本人であること |
+| Session V2 の相互署名と鍵確認 | 署名鍵の所持と、認証した identity の暗号化通信路への束縛 | 相手への信頼、到達先情報の配布経路の真正性 |
+| secure stream の record 認証と rekey | 通信内容の機密性と改竄検出、鍵世代ごとの使用量制限 | 長さ・時刻などの通信量の秘匿、鍵導出用の秘密の漏えい後の自動回復 |
 | NodeFinder の handshake での公開鍵の照合 | 相手の NodeProfile と node ID が Session の署名者のものであること | NodeProfile の到達先の真正性 |
 | FramedStream | message 境界と frame の大きさの上限 | 通信内容の機密性と改竄検出 |
 | Merkle hash | 期待する hash に対する block 内容の一致 | 提供者の信頼性、検索結果の正当性 |
@@ -92,14 +93,29 @@ ID を保持せずに導出するため、ID と鍵が食い違う NodeProfile �
 安定した ID と鍵の対応を署名で示す案は、鍵の rotation を表現できるが、証明 chain と失効処理が必要になるため採らない。
 ID と鍵を分離して trust graph で対応を表す案は、Web of Trust の設計が先に必要になり、すべての照合が複雑になるため採らない。
 
+#### 発信先の期待公開鍵を照合する
+
+**決定**
+Session V2 の発信では、接続に使う NodeProfile の公開鍵を SessionConnector へ渡し、secure channel で認証した公開鍵と一致しなければ拒否する。
+受理側は相手の鍵を事前には固定せず、相互署名と鍵確認から identity を確定する。
+NodeFinder の ProfileMessage も、認証した公開鍵との一致を要求する。
+既存の署名鍵と公開鍵の DER 表現を維持し、node ID の導出を変えない。
+
+**理由**
+指定アドレスで任意の鍵が認証できても、探索で選んだ node へ接続したとは限らないためである。
+到達先と期待する identity を入力として渡すことで、認証した別の node を接続先として受け入れることを防ぐ。
+
+**却下案**
+認証した任意の鍵を受け入れる案は、選んだ NodeProfile と異なる node へ接続できるため採らない。
+
 ### 4.2 保留
 
 #### NodeProfile の到達先の真正性
 
 **現状**
 NodeProfile の到達先には署名がなく、第三者はある node の公開鍵に偽の到達先を付けて配布できる。
-偽の到達先へ接続しても handshake で公開鍵を照合するが、Session の署名は接続に束縛されていないため、偽の到達先の node は本物の node へ handshake を中継して通信の間に入れる（[session.md](./session.md#session-の-secure-channel)）。
-中継しない場合でも、接続の失敗を誘って特定の node を探索から外せる。
+Session V2 の接続への束縛と期待公開鍵照合を満たしても、第三者は接続の失敗を誘って特定の node を探索から外せる。
+また、暗号文をそのまま中継する第三者の存在まで否定することは、secure channel の保証に含めない。
 
 候補は次の 2 つである。
 
@@ -107,10 +123,10 @@ NodeProfile の到達先には署名がなく、第三者はある node の公�
 2. 接続に成功した到達先だけを保存して配布すると wire format は変わらないが、未検証の到達先を最初に試す段階は残る。
 
 **なぜ今決めないか**
-偽の到達先が与える影響は Session の認証を接続に束縛するかどうかで大きく変わるため、secure channel の判断を先に行う。
+Session V2 の統合が先行し、所在情報の署名と更新順序を別の変更単位として扱うためである。
 
 **決める条件**
-Session の secure channel を決めた後、既定の bootstrap node の一覧を配布する前に決める。
+Session V2 の受け入れ検証後、既定の bootstrap node の一覧を配布する前に決める。
 
 #### Web of Trust の単位と伝播
 
@@ -130,11 +146,14 @@ README は Web of Trust による検索と公開の保護を掲げるが、信�
 
 ## 5. 現状と残作業
 
-Session は challenge signature を交換するが、通信を暗号化していない。
+Session は OmniSecureStream V2 で相互署名・鍵確認を行い、通信を暗号化する。
 署名鍵は state directory に保存し、node ID は公開鍵から導出して NodeFinder の handshake で照合する。
 Session の handshake の期限と同時数、handshake 中と用途選択後の frame 上限を実装している。
 NodeFinder の Hello/Profile 交換時と確立後の受信期限を、通信周期の 3 倍として実装している。
 DataMessage と NodeProfile の wire decode で要素数の上限を検査し、送信側も同じ上限へ収める。
 NodeFinder の frame と DataMessage を 256 KiB 以下に制限し、可変長 field の制約と送信候補の予算選別を実装している。
 各上限の超過による切断、上限ちょうどの受理、大量情報の往復を test で確認している。
-NodeProfile の到達先の真正性と Web of Trust の policy を決め、信頼できない network へ適用する前に secure channel を選ぶ。
+Session V2 の発信先の期待公開鍵照合と、認証した鍵に対する ProfileMessage の照合を実装・検証した。
+旧 V1 の署名経路を除き、旧平文・匿名・不正 context と別 identity の bootstrap 接続を拒否する。
+実 TCP の node 間通信、rekey と ciphertext の改竄検出まで受け入れ検証した。
+NodeProfile の到達先の真正性と Web of Trust の policy は未決である。

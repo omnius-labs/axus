@@ -42,92 +42,11 @@ impl omnius_core_rocketpack::RocketPackStruct for HelloMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct V1ChallengeMessage {
-    pub nonce: Vec<u8>,
-}
-
-impl omnius_core_rocketpack::RocketPackStruct for V1ChallengeMessage {
-    fn validate(value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
-        omnius_core_rocketpack::validate_length("V1ChallengeMessage.nonce", 32, 32, (&value.nonce).len())?;
-        Ok(())
-    }
-
-    fn pack(encoder: &mut impl omnius_core_rocketpack::RocketPackEncoder, value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
-        encoder.write_map(1)?;
-        encoder.write_u64(0)?;
-        omnius_core_rocketpack::validate_length("V1ChallengeMessage.nonce", 32, 32, (&value.nonce).len())?;
-        encoder.write_bytes((&value.nonce).as_slice())?;
-        Ok(())
-    }
-
-    fn unpack(decoder: &mut impl omnius_core_rocketpack::RocketPackDecoder) -> std::result::Result<Self, omnius_core_rocketpack::RocketPackDecoderError>
-    where
-        Self: Sized,
-    {
-        let mut __rpf_storage_nonce: Option<Vec<u8>> = None;
-        let count = decoder.read_map()?;
-
-        for _ in 0..count {
-            match decoder.read_u64()? {
-                0 => {
-                    __rpf_storage_nonce = Some(decoder.read_bytes_bounded("V1ChallengeMessage.nonce", 32, 32)?);
-                }
-                _ => decoder.skip_field()?,
-            }
-        }
-
-        Ok(Self {
-            nonce: __rpf_storage_nonce.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: nonce"))?,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct V1SignatureMessage {
-    pub cert: omnius_core_omnikit::generated::omni_sign::OmniCert,
-}
-
-impl omnius_core_rocketpack::RocketPackStruct for V1SignatureMessage {
-    fn validate(value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
-        <omnius_core_omnikit::generated::omni_sign::OmniCert as omnius_core_rocketpack::RocketPackStruct>::validate(&value.cert)?;
-        Ok(())
-    }
-
-    fn pack(encoder: &mut impl omnius_core_rocketpack::RocketPackEncoder, value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
-        encoder.write_map(1)?;
-        encoder.write_u64(0)?;
-        encoder.write_struct(&value.cert)?;
-        Ok(())
-    }
-
-    fn unpack(decoder: &mut impl omnius_core_rocketpack::RocketPackDecoder) -> std::result::Result<Self, omnius_core_rocketpack::RocketPackDecoderError>
-    where
-        Self: Sized,
-    {
-        let mut __rpf_storage_cert: Option<omnius_core_omnikit::generated::omni_sign::OmniCert> = None;
-        let count = decoder.read_map()?;
-
-        for _ in 0..count {
-            match decoder.read_u64()? {
-                0 => {
-                    __rpf_storage_cert = Some(decoder.read_struct::<omnius_core_omnikit::generated::omni_sign::OmniCert>()?);
-                }
-                _ => decoder.skip_field()?,
-            }
-        }
-
-        Ok(Self {
-            cert: __rpf_storage_cert.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: cert"))?,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct V1RequestMessage {
+pub struct V2RequestMessage {
     pub request_type: u32,
 }
 
-impl omnius_core_rocketpack::RocketPackStruct for V1RequestMessage {
+impl omnius_core_rocketpack::RocketPackStruct for V2RequestMessage {
     fn validate(_value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
         Ok(())
     }
@@ -162,11 +81,11 @@ impl omnius_core_rocketpack::RocketPackStruct for V1RequestMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct V1ResultMessage {
+pub struct V2ResultMessage {
     pub result_type: u32,
 }
 
-impl omnius_core_rocketpack::RocketPackStruct for V1ResultMessage {
+impl omnius_core_rocketpack::RocketPackStruct for V2ResultMessage {
     fn validate(_value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
         Ok(())
     }

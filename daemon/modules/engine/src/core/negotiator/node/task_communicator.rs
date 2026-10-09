@@ -717,7 +717,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         tokio::fs::create_dir_all(dir.path().join("a")).await?;
         tokio::fs::create_dir_all(dir.path().join("b")).await?;
-        let (a_session, a_profile, b_session, b_profile) = authenticated_session_pair()?;
+        let (a_session, a_profile, b_session, b_profile) = authenticated_session_pair().await?;
         a_session.stream.set_max_frame_length(FramedStream::NODE_FINDER_MAX_FRAME_LENGTH).await;
         b_session.stream.set_max_frame_length(FramedStream::NODE_FINDER_MAX_FRAME_LENGTH).await;
         let intervals = NodeFinderIntervals {
@@ -866,31 +866,86 @@ mod tests {
         Ok(())
     }
 
-    fn authenticated_session_pair() -> Result<(Session, NodeProfile, Session, NodeProfile)> {
-        let a_signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "a")?;
-        let b_signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "b")?;
-        let a_cert = a_signer.sign(b"test")?;
-        let b_cert = b_signer.sign(b"test")?;
-        let a_profile = NodeProfile::new(a_cert.public_key.clone(), vec![]);
-        let b_profile = NodeProfile::new(b_cert.public_key.clone(), vec![]);
+    async fn authenticated_session_pair() -> Result<(Session, NodeProfile, Session, NodeProfile)> {
+        use crate::core::session::model::SessionOption;
+        use omnius_core_omnikit::service::connection::secure::{OmniSecureAuth, OmniSecureStream, OmniSecureStreamType};
+        use rand::{SeedableRng, rngs::ChaCha20Rng};
+        let a_signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "a")?);
+        let b_signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "b")?);
+        let a_profile = NodeProfile::new(a_signer.public_key()?, vec![]);
+        let b_profile = NodeProfile::new(b_signer.public_key()?, vec![]);
         let (a, b) = tokio::io::duplex(64 * 1024);
-        let (a_reader, a_writer) = tokio::io::split(a);
-        let (b_reader, b_writer) = tokio::io::split(b);
+        let option = SessionOption {
+            rekey_after_bytes: 8192,
+            rekey_after_records: 3,
+            ..Default::default()
+        }
+        .secure_option()?;
+        let (a, b) = tokio::try_join!(
+            OmniSecureStream::new(
+                a,
+                OmniSecureStreamType::Connected,
+                option.clone(),
+                OmniSecureAuth::Mutual { signer: a_signer },
+                Arc::new(Mutex::new(ChaCha20Rng::seed_from_u64(1)))
+            ),
+            OmniSecureStream::new(
+                b,
+                OmniSecureStreamType::Accepted,
+                option,
+                OmniSecureAuth::Mutual { signer: b_signer },
+                Arc::new(Mutex::new(ChaCha20Rng::seed_from_u64(2)))
+            ),
+        )?;
+        let b_cert = a.peer_cert().unwrap().clone();
+        let a_cert = b.peer_cert().unwrap().clone();
         let a_session = Session {
             typ: SessionType::NodeFinder,
             address: OmniAddr::new("a"),
             handshake_type: SessionHandshakeType::Connected,
             cert: b_cert,
-            stream: FramedStream::new(a_reader, a_writer),
+            stream: FramedStream::from_stream(a, FramedStream::NODE_FINDER_MAX_FRAME_LENGTH),
         };
         let b_session = Session {
             typ: SessionType::NodeFinder,
             address: OmniAddr::new("b"),
             handshake_type: SessionHandshakeType::Accepted,
             cert: a_cert,
-            stream: FramedStream::new(b_reader, b_writer),
+            stream: FramedStream::from_stream(b, FramedStream::NODE_FINDER_MAX_FRAME_LENGTH),
         };
         Ok((a_session, a_profile, b_session, b_profile))
+    }
+
+    #[tokio::test]
+    async fn authenticated_v2_session_rejects_a_different_profile_identity() -> TestResult {
+        let (a, a_profile, b, _b_profile) = authenticated_session_pair().await?;
+        let false_profile = NodeProfile::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "other")?.public_key()?, vec![]);
+        let remote = async {
+            b.stream
+                .sender
+                .lock()
+                .await
+                .send_message_with::<HelloMessageCodec>(&HelloMessage {
+                    version: make_bitflags!(NodeFinderVersion::V1),
+                })
+                .await?;
+            let _: HelloMessage = b.stream.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
+            b.stream
+                .sender
+                .lock()
+                .await
+                .send_message_with::<ProfileMessageCodec>(&ProfileMessage { node_profile: false_profile })
+                .await?;
+            let _: ProfileMessage = b.stream.receiver.lock().await.recv_message_with::<ProfileMessageCodec>().await?;
+            Result::Ok(())
+        };
+        let (result, remote) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(TaskCommunicator::handshake(&a, &a_profile, Duration::from_secs(1)), remote)
+        })
+        .await?;
+        assert_eq!(result.err().unwrap().kind(), &ErrorKind::Reject);
+        remote?;
+        Ok(())
     }
 
     struct CommunicatingSession {

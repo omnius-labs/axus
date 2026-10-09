@@ -31,8 +31,7 @@ impl NodeIdentity {
             Err(e) => return Err(e.into()),
         };
 
-        // cert と同じ表現の公開鍵を得るため、署名の結果から取り出す
-        let public_key = signer.sign(&[])?.public_key;
+        let public_key = signer.public_key()?;
 
         Ok(Self {
             signer: Arc::new(signer),

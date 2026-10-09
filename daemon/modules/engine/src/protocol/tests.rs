@@ -4,10 +4,7 @@ use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use enumflags2::BitFlags;
 use omnius_core_omnikit::{
-    generated::{
-        omni_hash::{OmniHash, OmniHashAlgorithmType},
-        omni_sign::{OmniCert, OmniSignType},
-    },
+    generated::omni_hash::{OmniHash, OmniHashAlgorithmType},
     model::omni_addr::OmniAddr,
 };
 use omnius_core_rocketpack::{RocketPackBytesDecoder, RocketPackBytesEncoder};
@@ -149,37 +146,11 @@ fn acceptance_matrix<L: RocketPackStruct>(old: &L, accepts_new: impl Fn(&[u8]) -
 }
 
 #[test]
-fn all_codecs_preserve_required_unknown_null_duplicate_and_trailing_field_acceptance() -> TestResult {
+fn model_and_node_codecs_preserve_field_acceptance() -> TestResult {
     acceptance_matrix(&legacy::AssetKey { typ: "t".into(), hash: hash() }, |b| AssetKey::import(b).is_ok())?;
     acceptance_matrix(&legacy::FileRef { name: "f".into(), hash: hash() }, |b| axus::model::FileRef::import(b).is_ok())?;
     acceptance_matrix(&legacy::MerkleLayer { rank: 0, hashes: vec![hash()] }, |b| axus::file::MerkleLayer::import(b).is_ok())?;
     acceptance_matrix(&legacy_profile(&profile()), |b| NodeProfileCodec::decode(b).is_ok())?;
-    acceptance_matrix(
-        &legacy::session::HelloMessage {
-            version: legacy::session::SessionVersion::V1,
-        },
-        |b| super::session::HelloMessageCodec::decode(b).is_ok(),
-    )?;
-    acceptance_matrix(&legacy::session::V1ChallengeMessage { nonce: [0; 32] }, |b| V1ChallengeMessageCodec::decode(b).is_ok())?;
-    let cert = OmniCert {
-        typ: OmniSignType::None,
-        name: "n".into(),
-        public_key: vec![1],
-        value: vec![2],
-    };
-    acceptance_matrix(&legacy::session::V1SignatureMessage { cert }, |b| V1SignatureMessageCodec::decode(b).is_ok())?;
-    acceptance_matrix(
-        &legacy::session::V1RequestMessage {
-            request_type: legacy::session::V1RequestType::Unknown,
-        },
-        |b| V1RequestMessageCodec::decode(b).is_ok(),
-    )?;
-    acceptance_matrix(
-        &legacy::session::V1ResultMessage {
-            result_type: legacy::session::V1ResultType::Unknown,
-        },
-        |b| V1ResultMessageCodec::decode(b).is_ok(),
-    )?;
     acceptance_matrix(
         &legacy::node::HelloMessage {
             version: BitFlags::from(legacy::node::NodeFinderVersion::V1),
@@ -237,48 +208,24 @@ fn session_hello_fixed_bytes() -> TestResult {
         version: legacy::session::SessionVersion::V1,
     };
     let new = domain_session::HelloMessage {
-        version: domain_session::SessionVersion::V1,
+        version: domain_session::SessionVersion::V2,
     };
-    compatible::<super::session::HelloMessageCodec, _>(&old, &new, true)?;
-    assert_eq!(super::session::HelloMessageCodec::encode(&new)?, hex::decode("a10001")?);
-    Ok(())
-}
-
-#[test]
-fn challenge_uses_bytes_and_preserves_nonce() -> TestResult {
-    let nonce = [7; 32];
-    let new = domain_session::V1ChallengeMessage { nonce };
-    compatible::<V1ChallengeMessageCodec, _>(&legacy::session::V1ChallengeMessage { nonce }, &new, true)?;
-    let mut expected = hex::decode("a1005820")?;
-    expected.extend(nonce);
-    assert_eq!(V1ChallengeMessageCodec::encode(&new)?, expected);
-    Ok(())
-}
-
-#[test]
-fn signature_fixed_bytes_and_dependency() -> TestResult {
-    let cert = OmniCert {
-        typ: OmniSignType::None,
-        name: "n".into(),
-        public_key: vec![1],
-        value: vec![2],
-    };
-    let new = domain_session::V1SignatureMessage { cert: cert.clone() };
-    compatible::<V1SignatureMessageCodec, _>(&legacy::session::V1SignatureMessage { cert }, &new, true)?;
-    assert_eq!(V1SignatureMessageCodec::encode(&new)?, hex::decode("a100a401a101a002616e034101044102")?);
+    assert!(super::session::HelloMessageCodec::decode(&old.export()?).is_err());
+    assert_eq!(super::session::HelloMessageCodec::encode(&new)?, hex::decode("a10002")?);
+    assert_eq!(super::session::HelloMessageCodec::decode(&hex::decode("a10002")?)?, new);
     Ok(())
 }
 
 #[test]
 fn all_request_values_have_fixed_bytes() -> TestResult {
     for (old, new) in [
-        (legacy::session::V1RequestType::Unknown, domain_session::V1RequestType::Unknown),
-        (legacy::session::V1RequestType::NodeFinder, domain_session::V1RequestType::NodeFinder),
-        (legacy::session::V1RequestType::FileExchanger, domain_session::V1RequestType::FileExchanger),
+        (legacy::session::V1RequestType::Unknown, domain_session::V2RequestType::Unknown),
+        (legacy::session::V1RequestType::NodeFinder, domain_session::V2RequestType::NodeFinder),
+        (legacy::session::V1RequestType::FileExchanger, domain_session::V2RequestType::FileExchanger),
     ] {
-        let value = domain_session::V1RequestMessage { request_type: new };
-        compatible::<V1RequestMessageCodec, _>(&legacy::session::V1RequestMessage { request_type: old }, &value, true)?;
-        assert_eq!(V1RequestMessageCodec::encode(&value)?, vec![0xa1, 0, new as u8]);
+        let value = domain_session::V2RequestMessage { request_type: new };
+        compatible::<V2RequestMessageCodec, _>(&legacy::session::V1RequestMessage { request_type: old }, &value, true)?;
+        assert_eq!(V2RequestMessageCodec::encode(&value)?, vec![0xa1, 0, new as u8]);
     }
     Ok(())
 }
@@ -286,13 +233,13 @@ fn all_request_values_have_fixed_bytes() -> TestResult {
 #[test]
 fn all_result_values_have_fixed_bytes() -> TestResult {
     for (old, new) in [
-        (legacy::session::V1ResultType::Unknown, domain_session::V1ResultType::Unknown),
-        (legacy::session::V1ResultType::Accept, domain_session::V1ResultType::Accept),
-        (legacy::session::V1ResultType::Reject, domain_session::V1ResultType::Reject),
+        (legacy::session::V1ResultType::Unknown, domain_session::V2ResultType::Unknown),
+        (legacy::session::V1ResultType::Accept, domain_session::V2ResultType::Accept),
+        (legacy::session::V1ResultType::Reject, domain_session::V2ResultType::Reject),
     ] {
-        let value = domain_session::V1ResultMessage { result_type: new };
-        compatible::<V1ResultMessageCodec, _>(&legacy::session::V1ResultMessage { result_type: old }, &value, true)?;
-        assert_eq!(V1ResultMessageCodec::encode(&value)?, vec![0xa1, 0, new as u8]);
+        let value = domain_session::V2ResultMessage { result_type: new };
+        compatible::<V2ResultMessageCodec, _>(&legacy::session::V1ResultMessage { result_type: old }, &value, true)?;
+        assert_eq!(V2ResultMessageCodec::encode(&value)?, vec![0xa1, 0, new as u8]);
     }
     Ok(())
 }
@@ -405,37 +352,15 @@ fn asset_key_order_is_consistent_with_equality() {
 fn scalar_duplicates_reject_every_invalid_occurrence() -> TestResult {
     for values in [[9, 1], [1, 9], [9, 9], [1, 1]] {
         let bytes = vec![0xa2, 0, values[0], 0, values[1]];
-        for (old, new) in [
-            (
-                legacy::session::HelloMessage::import(&bytes).is_ok(),
-                super::session::HelloMessageCodec::decode(&bytes).is_ok(),
-            ),
-            (legacy::session::V1RequestMessage::import(&bytes).is_ok(), V1RequestMessageCodec::decode(&bytes).is_ok()),
-            (legacy::session::V1ResultMessage::import(&bytes).is_ok(), V1ResultMessageCodec::decode(&bytes).is_ok()),
-        ] {
-            assert_eq!(old, new);
-        }
+        assert!(super::session::HelloMessageCodec::decode(&bytes).is_err());
+        assert!(V2RequestMessageCodec::decode(&bytes).is_err());
+        assert!(V2ResultMessageCodec::decode(&bytes).is_err());
     }
     Ok(())
 }
 
 #[test]
-fn nonce_acceptance_is_unchanged_including_duplicates() -> TestResult {
-    for lengths in [vec![31], vec![32], vec![33], vec![31, 32], vec![32, 31]] {
-        let mut bytes = Vec::new();
-        let mut encoder = RocketPackBytesEncoder::new(&mut bytes);
-        encoder.write_map(lengths.len())?;
-        for length in lengths {
-            encoder.write_u64(0)?;
-            encoder.write_bytes(&vec![7; length])?;
-        }
-        assert_eq!(legacy::session::V1ChallengeMessage::import(&bytes).is_ok(), V1ChallengeMessageCodec::decode(&bytes).is_ok());
-    }
-    Ok(())
-}
-
-#[test]
-fn unknown_missing_null_and_trailing_fields_keep_acceptance() -> TestResult {
+fn session_v2_unknown_missing_null_and_trailing_fields_are_rejected() -> TestResult {
     for bytes in [
         vec![0xa0],
         vec![0xa1, 0, 0xf6],
@@ -443,10 +368,7 @@ fn unknown_missing_null_and_trailing_fields_keep_acceptance() -> TestResult {
         vec![0xa1, 0, 1, 0xff],
         vec![0xa2, 0, 1, 0, 1],
     ] {
-        assert_eq!(
-            legacy::session::HelloMessage::import(&bytes).is_ok(),
-            super::session::HelloMessageCodec::decode(&bytes).is_ok()
-        );
+        assert!(super::session::HelloMessageCodec::decode(&bytes).is_err());
     }
     Ok(())
 }

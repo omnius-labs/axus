@@ -1,5 +1,5 @@
 use crate::{
-    core::session::message::{SessionVersion, V1RequestType, V1ResultType},
+    core::session::message::{SessionVersion, V2RequestType, V2ResultType},
     prelude::*,
 };
 type DecodeResult<T> = std::result::Result<T, RocketPackDecoderError>;
@@ -12,8 +12,8 @@ impl ScalarPolicy {
     fn validate(&self, value: u32) -> DecodeResult<()> {
         match self {
             Self::Version if SessionVersion::from_repr(value).is_some() => Ok(()),
-            Self::Request if V1RequestType::from_repr(value).is_some() => Ok(()),
-            Self::Result if V1ResultType::from_repr(value).is_some() => Ok(()),
+            Self::Request if V2RequestType::from_repr(value).is_some() => Ok(()),
+            Self::Result if V2ResultType::from_repr(value).is_some() => Ok(()),
             Self::Version => Err(RocketPackDecoderError::Other("invalid session version")),
             Self::Request => Err(RocketPackDecoderError::Other("invalid request type")),
             Self::Result => Err(RocketPackDecoderError::Other("invalid result type")),
@@ -88,13 +88,13 @@ impl<D: RocketPackDecoder> RocketPackDecoder for ScalarDecoder<'_, D> {
         self.inner.read_array()
     }
     fn read_map(&mut self) -> DecodeResult<u64> {
-        self.inner.read_map()
+        self.inner.read_map_bounded("Session V2 scalar message", 1, 1)
     }
     fn read_null(&mut self) -> DecodeResult<()> {
         self.inner.read_null()
     }
     fn skip_field(&mut self) -> DecodeResult<()> {
-        self.inner.skip_field()
+        Err(RocketPackDecoderError::Other("unknown session message field"))
     }
     fn read_bytes_bounded(&mut self, context: &'static str, min: u64, max: u64) -> DecodeResult<Vec<u8>> {
         self.inner.read_bytes_bounded(context, min, max)

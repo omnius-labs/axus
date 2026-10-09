@@ -154,7 +154,7 @@ file の公開から復号までは、P2P 転送を介さない engine 内の試
 
 | 番号 | 内容 | 前提とする依存 |
 | --- | --- | --- |
-| 1 | Session の認証を接続に束縛し、secure channel と NodeProfile の到達先の真正性を決める | [session.md](./design/session.md#session-の-secure-channel)、[trust-security.md](./design/trust-security.md#nodeprofile-の到達先の真正性) |
+| 1 | NodeProfile の到達先の真正性を決める | 検証済みの [Session V2](./design/session.md#session-の-secure-channel)、[trust-security.md](./design/trust-security.md#nodeprofile-の到達先の真正性) |
 | 2 | FileExchanger の block 交換 protocol と hash 検証を定義して実装する | 1、[file-transfer.md](./design/file-transfer.md#62-保留) の公開側の接続先と照合位置の判断 |
 | 3 | 公開、購読、進捗、cancel の REST API を定義する | 2、[daemon-api.md](./design/daemon-api.md#52-保留) の長時間操作と到達範囲の判断 |
 | 4 | Web of Trust、Profile、memo を順に定義する | [trust-security.md](./design/trust-security.md#4-設計判断)、FileRef を解決できる 2 |

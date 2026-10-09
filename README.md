@@ -56,6 +56,10 @@ The `[p2p]` section accepts the following keys.
 At startup the daemon logs its own URI as `node_profile` in the `node profile` message.
 Add that URI to `bootstrap_nodes` of another daemon to connect the two.
 
+P2P connections use Session V2 with mutual authentication and encrypted traffic.
+The connecting daemon checks the peer's public key against the key in its bootstrap or discovered NodeProfile.
+Persisted identity keys and NodeProfile URIs are retained; nodes using the old plaintext Session V1 must be updated to connect.
+
 ## Links
 
 - Official Documentation: https://docs.omnius-labs.com/

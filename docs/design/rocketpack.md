@@ -28,7 +28,8 @@ Axus は rpf を通信型の正として、Rust の型宣言と `RocketPackStruc
 生成型をそのまま扱える AssetKey、FileRef、MerkleLayer は生成型を使う。
 DataMessage の `Arc` と `HashMap`、NodeProfile の `OmniAddr` と ID キャッシュのように Rust 上の表現が異なる場合は、手書きの domain 型を別に保持する。
 domain 型は `RocketPackStruct` を実装せず、[protocol module](../../daemon/modules/engine/src/protocol) の専用 codec が生成型との相互変換と符号化・復号を担当する。
-Session の整数 enum と nonce 配列も、専用 codec が生成型との対応を持つ。
+Session V2 の整数 enum も、専用 codec が生成通信型との対応を持つ。
+secure handshake の nonce と鍵合意は [core-rs の secure stream 設計](../../daemon/refs/core-rs/docs/design/secure-stream.md#3-handshake) が扱う。
 compiler の内部設計は `core-rs` が持ち、本書は Axus から見た入出力と移行規約だけを扱う。
 
 ## 3. 生成の入力と出力
@@ -72,6 +73,9 @@ byte 完全一致の例外は DataMessage の複数要素 map である。
 `HashMap` から生成型の `BTreeMap` へ変換すると走査順が変わるが、受信側は map の順序に依存しないため wire 互換として許容する。
 この部分は旧から新、新から旧の相互復号と map の内容の同一性で検証し、単一要素 map とその他の通信型は byte 固定を維持する。
 NodeProfile の URI は §5.1 の決定に従って受容範囲を変更する。
+Session V2 への切り替えは生成 codec への移行とは別の protocol 変更であり、旧 V1 の通信互換性を破棄する。
+V2 の Hello と用途要求・結果は、専用 scalar codec が未知・重複 field と末尾 byte を拒否する。
+ほかの codec の未知 field の扱いは維持する。
 
 ## 5. 設計判断
 
@@ -186,6 +190,7 @@ version の追加は交渉と移行の経路を増やすため、上限超過デ
 ## 6. 現状と残作業
 
 生成型と専用 codec への移行を完了した。
+Session の nonce・signature message は除き、Hello(V2) と V2RequestMessage・V2ResultMessage を rpf から生成して暗号化した確立経路で使う。
 再生成の再現性、旧 codec との互換性、URI の境界と送受信の件数上限を検証した。
 
 NodeFinder の frame と DataMessage の符号化結果を 256 KiB 以下に制限している。

@@ -5,7 +5,10 @@ use omnius_core_omnikit::generated::omni_sign::OmniSigner;
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 use parking_lot::Mutex;
 use rand::RngExt;
-use tokio::time::{Instant, timeout_at};
+use tokio::{
+    net::TcpStream,
+    time::{Instant, timeout_at},
+};
 
 use crate::{
     base::connection::{ConnectionTcpConnector, FramedRecvExt as _, FramedSendExt as _, FramedStream},
@@ -43,7 +46,9 @@ impl SessionConnector {
             .map_err(|e| Error::from_error(e, ErrorKind::NetworkError).with_message("Session handshake timed out"))?
     }
 
-    async fn handshake(&self, stream: FramedStream, addr: &OmniAddr, typ: &SessionType) -> Result<Session> {
+    async fn handshake(&self, stream: TcpStream, addr: &OmniAddr, typ: &SessionType) -> Result<Session> {
+        let (reader, writer) = tokio::io::split(stream);
+        let stream = FramedStream::new(reader, writer);
         stream.set_max_frame_length(self.option.handshake_max_frame_length).await;
 
         let send_hello_message = HelloMessage { version: SessionVersion::V1 };

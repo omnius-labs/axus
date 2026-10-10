@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use rand::RngExt;
 use tokio::{
+    net::TcpStream,
     select,
     sync::{Mutex as TokioMutex, Semaphore, mpsc},
     task::{JoinHandle, JoinSet},
@@ -206,7 +207,9 @@ struct Inner {
 }
 
 impl Inner {
-    async fn handshake(&self, stream: FramedStream, addr: SocketAddr) -> Result<()> {
+    async fn handshake(&self, stream: TcpStream, addr: SocketAddr) -> Result<()> {
+        let (reader, writer) = tokio::io::split(stream);
+        let stream = FramedStream::new(reader, writer);
         stream.set_max_frame_length(self.option.handshake_max_frame_length).await;
 
         let send_hello_message = HelloMessage { version: SessionVersion::V1 };
@@ -284,15 +287,13 @@ mod tests {
     };
     use rand_core::UnwrapErr;
     use testresult::TestResult;
+    use tokio::net::TcpStream;
 
     use omnius_core_base::sleeper::FakeSleeper;
     use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
 
     use crate::{
-        base::{
-            connection::{ConnectionTcpAccepter, FramedStream},
-            runtime::Shutdown,
-        },
+        base::{connection::ConnectionTcpAccepter, runtime::Shutdown},
         prelude::*,
     };
 
@@ -330,7 +331,7 @@ mod tests {
 
     #[async_trait]
     impl ConnectionTcpAccepter for PendingTcpAccepter {
-        async fn accept(&self) -> Result<(FramedStream, SocketAddr)> {
+        async fn accept(&self) -> Result<(TcpStream, SocketAddr)> {
             std::future::pending().await
         }
 

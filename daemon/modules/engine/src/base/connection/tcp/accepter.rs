@@ -4,21 +4,18 @@ use std::{
 };
 
 use async_trait::async_trait;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 
 use omnius_core_base::net::Reachable;
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
-use crate::{
-    base::{connection::FramedStream, runtime::Shutdown},
-    prelude::*,
-};
+use crate::{base::runtime::Shutdown, prelude::*};
 
 use super::UpnpClient;
 
 #[async_trait]
 pub trait ConnectionTcpAccepter: Shutdown {
-    async fn accept(&self) -> Result<(FramedStream, SocketAddr)>;
+    async fn accept(&self) -> Result<(TcpStream, SocketAddr)>;
     #[allow(unused)]
     async fn get_global_ip_addresses(&self) -> Result<Vec<IpAddr>>;
 }
@@ -85,10 +82,8 @@ impl Shutdown for ConnectionTcpAccepterImpl {
 
 #[async_trait]
 impl ConnectionTcpAccepter for ConnectionTcpAccepterImpl {
-    async fn accept(&self) -> Result<(FramedStream, SocketAddr)> {
+    async fn accept(&self) -> Result<(TcpStream, SocketAddr)> {
         let (stream, addr) = self.listener.accept().await?;
-        let (reader, writer) = tokio::io::split(stream);
-        let stream = FramedStream::new(reader, writer);
         Ok((stream, addr))
     }
 

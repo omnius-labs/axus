@@ -13,8 +13,8 @@ mod tests {
 
     use crate::{
         base::connection::{
-            ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, FramedRecvExt as _, FramedSendExt as _, TcpProxyOption,
-            TcpProxyType,
+            ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, FramedRecvExt as _, FramedSendExt as _, FramedStream,
+            TcpProxyOption, TcpProxyType,
         },
         prelude::*,
     };
@@ -31,6 +31,10 @@ mod tests {
 
         let connected_stream = connector.connect(&OmniAddr::new("tcp(ip4(127.0.0.1),50000)")).await?;
         let (accepted_stream, _) = accepter.accept().await?;
+        let (reader, writer) = tokio::io::split(connected_stream);
+        let connected_stream = FramedStream::new(reader, writer);
+        let (reader, writer) = tokio::io::split(accepted_stream);
+        let accepted_stream = FramedStream::new(reader, writer);
 
         connected_stream
             .sender

@@ -120,10 +120,10 @@ Session の語の境界は [terms.md](../terms.md#t-node-profile-vs-session) に
 
 | 番号 | 内容 | 依存 | 状態 |
 | --- | --- | --- | --- |
-| [1](#s-1) | core-rs の設計文書に handshake を定める | | 未着手 |
-| [2](#s-2) | core-rs の handshake を書き換える | 1 | 未着手 |
+| [1](#s-1) | core-rs の設計文書に handshake を定める | | 完了 |
+| [2](#s-2) | core-rs の handshake を書き換える | 1 | 進行中 |
 | [3](#s-3) | core-cs と core-swift に非互換を起票する | 2 | 未着手 |
-| [4](#s-4) | Axus の connection が byte 列を返す | | 未着手 |
+| [4](#s-4) | Axus の connection が byte 列を返す | | 進行中 |
 | [5](#s-5) | Axus の Session を `OmniSecureStream` に載せ替える | 2、4 | 未着手 |
 | [6](#s-6) | Axus の設計文書を実装に合わせる | 5 | 未着手 |
 

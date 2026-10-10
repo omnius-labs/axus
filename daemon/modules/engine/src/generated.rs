@@ -2,4 +2,17 @@
 #![allow(dead_code)]
 #![allow(nonstandard_style)]
 #![allow(clippy::all)]
-include!("generated/.root.rs");
+pub mod axus {
+    pub mod file {
+        include!("generated/axus/file/file.rs");
+    }
+    pub mod model {
+        include!("generated/axus/model/model.rs");
+    }
+    pub mod node {
+        include!("generated/axus/node/node.rs");
+    }
+    pub mod session {
+        include!("generated/axus/session/session.rs");
+    }
+}

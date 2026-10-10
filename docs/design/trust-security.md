@@ -30,7 +30,7 @@
 
 | 機構 | 保証するもの | 保証しないもの |
 | --- | --- | --- |
-| Session の challenge signature | 署名者が秘密鍵を所持すること | 相手への信頼、TCP の相手が署名者本人であること |
+| Session の secure channel | 通信の相手が署名者本人であること、確立後の通信の機密性と改竄検出 | 相手への信頼、相手が公開する内容の正しさ |
 | NodeFinder の handshake での公開鍵の照合 | 相手の NodeProfile と node ID が Session の署名者のものであること | NodeProfile の到達先の真正性 |
 | FramedStream | message 境界と frame の大きさの上限 | 通信内容の機密性と改竄検出 |
 | Merkle hash | 期待する hash に対する block 内容の一致 | 提供者の信頼性、検索結果の正当性 |
@@ -41,7 +41,7 @@ Session 認証が成功しても、相手の NodeProfile と公開内容を信�
 
 node ID は公開鍵から導出するが、鍵は低コストで生成できるため、攻撃者は AssetKey に近い ID を集める Sybil 攻撃と Eclipse 攻撃を行える。
 既知 node と伝播情報の件数上限は資源消費を抑えるが、攻撃者の情報だけが残ることは防がない。
-Web of Trust はこの信頼選別を担うが、transport の盗聴と改竄には別の secure channel が必要である。
+Web of Trust はこの信頼選別を担い、transport の盗聴と改竄は Session の secure channel（[session.md](./session.md#session-の-secure-channel)）が防ぐ。
 
 NodeFinder の中継は情報を増幅し得るため、TTL、件数、接続数、message size の上限と、handshake と受信の期限を protocol の入力境界で強制する。
 Session の認証と用途選択までの handshake は、TCP 接続後から全体で 10 秒、受理側の同時数は 64 本以下とする。
@@ -107,10 +107,10 @@ NodeProfile の到達先には署名がなく、第三者はある node の公�
 2. 接続に成功した到達先だけを保存して配布すると wire format は変わらないが、未検証の到達先を最初に試す段階は残る。
 
 **なぜ今決めないか**
-偽の到達先が与える影響は Session の認証を接続に束縛するかどうかで大きく変わるため、secure channel の判断を先に行う。
+偽の到達先が与える影響は Session の secure channel の実装で変わるため、実装を先に行う。
 
 **決める条件**
-Session の secure channel を決めた後、既定の bootstrap node の一覧を配布する前に決める。
+Session の secure channel を実装した後、既定の bootstrap node の一覧を配布する前に決める。
 
 #### Web of Trust の単位と伝播
 
@@ -137,4 +137,4 @@ NodeFinder の Hello/Profile 交換時と確立後の受信期限を、通信周
 DataMessage と NodeProfile の wire decode で要素数の上限を検査し、送信側も同じ上限へ収める。
 NodeFinder の frame と DataMessage を 256 KiB 以下に制限し、可変長 field の制約と送信候補の予算選別を実装している。
 各上限の超過による切断、上限ちょうどの受理、大量情報の往復を test で確認している。
-NodeProfile の到達先の真正性と Web of Trust の policy を決め、信頼できない network へ適用する前に secure channel を選ぶ。
+NodeProfile の到達先の真正性と Web of Trust の policy を決め、信頼できない network へ適用する前に secure channel を実装する。

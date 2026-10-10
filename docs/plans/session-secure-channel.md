@@ -41,6 +41,7 @@
 10. [session.md](../design/session.md#6-現状と残作業) と [trust-security.md](../design/trust-security.md#5-現状と残作業) に、secure channel を実装していないという記述がない。
 11. [design.md](../design.md#62-ロードマップ) のロードマップに、secure channel の決定と RocketPack 型の移行を内容とする行がない。
 12. core-rs の `OmniSecureStream` は、一時公開鍵の作成時刻が受け取った側の時刻から許容幅を超えて離れた handshake を失敗させる。
+13. core-rs の `OmniSecureStream` は、相手が frame の境界で接続を閉じたときに EOF を返し、frame の途中で閉じたときにエラーを返す。
 
 ### 2.2 非目標
 
@@ -73,11 +74,16 @@ core-rs の handshake は [auth.rs:76](../../daemon/refs/core-rs/modules/omnikit
 一時公開鍵の `created_time` は [auth.rs:189](../../daemon/refs/core-rs/modules/omnikit/src/service/connection/secure/auth.rs#L189) で署名の対象に入るが、受け取った側は自分の時刻と比べない。
 [omni_agreement.rs:38](../../daemon/refs/core-rs/modules/omnikit/src/model/omni_agreement.rs#L38) の `gen_secret` は、X25519 の結果がすべて 0 になる公開鍵を拒否しない。
 
+暗号化した frame を読む [stream.rs:103](../../daemon/refs/core-rs/modules/omnikit/src/service/connection/secure/stream.rs#L103) の `poll_read` は、下位の stream が 0 byte を返しても受信の状態を終わらせず、同じ読み取りを繰り返す。
+loopback の TCP で handshake と一方向の frame の送受信を成功させた後に相手を閉じると、受信は EOF を返さず、1 秒待っても戻らない。
+Axus の [core/session.rs:239](../../daemon/modules/engine/src/core/session.rs#L239) 以降の test は相手の切断を受信のエラーとして検出しており、この挙動のままでは維持できない。
+
 現状の Session は [session.md](../design/session.md#session-の-secure-channel) が求める 4 つの性質をどれも満たさず、core-rs の `OmniSecureStream` をそのまま適用しても満たせない。
 
 ## 4. 変更方針
 
-core-rs では handshake の層だけを書き換え、暗号化した frame を読み書きする層は変えない。
+core-rs では handshake の層を書き換える。
+暗号化した frame を読み書きする層は、切断を EOF として返す修正を除いて変えない。
 Axus では connection が byte 列を返すように境界を移し、Session 層が `OmniSecureStream` と FramedStream を順に重ねる。
 Session の HelloMessage、用途の要求と結果は、重ねた FramedStream で交換する。
 
@@ -121,10 +127,11 @@ Session の語の境界は [terms.md](../terms.md#t-node-profile-vs-session) に
 | 番号 | 内容 | 依存 | 状態 |
 | --- | --- | --- | --- |
 | [1](#s-1) | core-rs の設計文書に handshake を定める | | 完了 |
-| [2](#s-2) | core-rs の handshake を書き換える | 1 | 進行中 |
-| [3](#s-3) | core-cs と core-swift に非互換を起票する | 2 | 未着手 |
+| [2](#s-2) | core-rs の handshake を書き換える | 1 | 完了 |
+| [3](#s-3) | core-cs と core-swift に非互換を起票する | 2 | 完了 |
 | [4](#s-4) | Axus の connection が byte 列を返す | | 進行中 |
-| [5](#s-5) | Axus の Session を `OmniSecureStream` に載せ替える | 2、4 | 未着手 |
+| [7](#s-7) | core-rs の `OmniSecureStream` が切断を EOF として返す | 2 | 進行中 |
+| [5](#s-5) | Axus の Session を `OmniSecureStream` に載せ替える | 2、4、7 | 未着手 |
 | [6](#s-6) | Axus の設計文書を実装に合わせる | 5 | 未着手 |
 
 <a id="s-1"></a>
@@ -143,10 +150,10 @@ Session の語の境界は [terms.md](../terms.md#t-node-profile-vs-session) に
 - 呼び出し側が作成時刻の許容幅を指定でき、受け取った側は自分の時刻との差が許容幅を超える一時公開鍵を拒否する。
 
 [decoder.rs](../../daemon/refs/core-rs/modules/omnikit/src/service/connection/secure/decoder.rs#L1) と [stream.rs:16](../../daemon/refs/core-rs/modules/omnikit/src/service/connection/secure/stream.rs#L16) 以降の読み書きを読み、frame の層を変更せずに新しい handshake の鍵で使えることを確かめる。
-frame の層の変更が必要だと分かった場合は、本書の手順に含めず、作業を止めて範囲を決め直す。
+新しい handshake の鍵を使うために frame の層の変更が必要だと分かった場合は、本書の手順に含めず、作業を止めて範囲を決め直す。
 
 **完了条件**
-core-rs の DESIGN.md の §6.2 に上の各項目と、frame の層を変更せずに使えることを確かめた結果があり、旧い署名 preimage の決定が新しい内容に置き換わっている。
+core-rs の DESIGN.md の §6.2 に上の各項目と、frame の層を変更せずに新しい handshake の鍵で使えることを確かめた結果があり、旧い署名 preimage の決定が新しい内容に置き換わっている。
 本体と異なる model family の verifier が、この設計に `pass` を返している。
 
 <a id="s-2"></a>
@@ -191,6 +198,22 @@ handshake の内容は変えない。
 **完了条件**
 2 つの trait の戻り値に `FramedStream` が現れず、engine の既存 test が全件通る。
 
+<a id="s-7"></a>
+### 手順 7. core-rs の `OmniSecureStream` が切断を EOF として返す
+
+**変更する箇所**
+[stream.rs:103](../../daemon/refs/core-rs/modules/omnikit/src/service/connection/secure/stream.rs#L103) の `poll_read` と、core-rs の [DESIGN.md:202](../../daemon/refs/core-rs/docs/DESIGN.md#L202) の「secure connection」。
+
+**やること**
+`poll_read` は、下位の stream が frame の境界で 0 byte を返したら EOF を返し、frame の途中で 0 byte を返したら `UnexpectedEof` のエラーを返す。
+frame の形式、暗号化の方式、書き込みの処理、handshake は変えない。
+test を追加し、frame の境界での切断が EOF になること、header の途中と body の途中での切断がエラーになることを守る。
+切断時の挙動を core-rs の DESIGN.md の §6.2 に書く。
+
+**完了条件**
+追加した test と omnikit の既存 test が全件通り、core-rs の `cargo make lint` が通る。
+変更が core-rs の main に merge されている。
+
 <a id="s-5"></a>
 ### 手順 5. Axus の Session を `OmniSecureStream` に載せ替える
 
@@ -198,7 +221,7 @@ handshake の内容は変えない。
 submodule の `daemon/refs/core-rs`、[connector.rs:29](../../daemon/modules/engine/src/core/session/connector.rs#L29) の `SessionConnector::new` と [accepter.rs:41](../../daemon/modules/engine/src/core/session/accepter.rs#L41) の `SessionAccepter::new`、[connector.rs:46](../../daemon/modules/engine/src/core/session/connector.rs#L46) と [accepter.rs:209](../../daemon/modules/engine/src/core/session/accepter.rs#L209) の `handshake`、[session.rpf:12](../../daemon/rpfs/session.rpf#L12) の `V1ChallengeMessage` と `V1SignatureMessage` とその生成物、[message.rs:16](../../daemon/modules/engine/src/core/session/message.rs#L16)、[protocol/session.rs:24](../../daemon/modules/engine/src/protocol/session.rs#L24) の codec、[protocol/tests.rs:163](../../daemon/modules/engine/src/protocol/tests.rs#L163) と [protocol/tests/legacy/session.rs](../../daemon/modules/engine/src/protocol/tests/legacy/session.rs#L1) の互換 test、[core/session.rs:239](../../daemon/modules/engine/src/core/session.rs#L239) 以降の handshake の test。
 
 **やること**
-submodule を手順 2 の merge commit へ進める。
+submodule を手順 7 の merge commit へ進める。
 `SessionConnector` と `SessionAccepter` は、`OmniSecureStream` に渡す clock を constructor で受け取る。
 `handshake` の先頭で、署名を必須にし、作成時刻の許容幅を 5 分にした `OmniSecureStream` を byte 列に重ね、その上に FramedStream を作る。
 challenge と signature の交換を削除し、HelloMessage、用途の要求と結果を FramedStream で交換する。
@@ -230,7 +253,7 @@ test を 1 件追加する。
 ## 6. 受け入れ検証
 
 core-rs のコマンドは core-rs の作業 tree の直下で、Axus のコマンドは Axus の `daemon` で実行する。
-条件 1 から 4、6、12 の test は、この作業で追加する。
+条件 1 から 4、6、12、13 の test は、この作業で追加する。
 
 | 条件 | コマンド | 期待する結果 |
 | --- | --- | --- |
@@ -246,3 +269,4 @@ core-rs のコマンドは core-rs の作業 tree の直下で、Axus のコマ�
 | 10 | `rg '実装していない\|暗号化していない' ../docs/design/session.md ../docs/design/trust-security.md` | 出力が空である |
 | 11 | `rg '^. [0-9] .*secure channel' ../docs/design.md; rg '^. [0-9] .*RocketPack' ../docs/design.md` | どちらの出力も空である |
 | 12 | `RUSTC_WRAPPER= cargo test -p omnius-core-omnikit handshake_rejects_agreement_key_outside_time_tolerance` | 1 件が通る |
+| 13 | `RUSTC_WRAPPER= cargo test -p omnius-core-omnikit secure::stream` | 切断の test を含めて失敗が 0 件である |

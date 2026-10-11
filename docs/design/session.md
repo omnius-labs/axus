@@ -13,6 +13,7 @@
 | 本書 | transport、Session の確立、用途分離、停止 |
 | [trust-security.md](./trust-security.md#2-責務と境界) | Session が保証する認証と保証しない security の境界 |
 | [core/session](../../daemon/modules/engine/src/core/session) | Session protocol の実装 |
+| [core-rs の DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#62-secure-connection) | `OmniSecureStream` の handshake の構成、鍵導出、frame の暗号化 |
 | [base/connection](../../daemon/modules/engine/src/base/connection.rs) | TCP 接続と framed stream の実装 |
 
 ### 1.2 本書の時制について
@@ -29,12 +30,13 @@ NodeFinder と FileExchanger の message は、それぞれの protocol 層が�
 
 [connection](../../daemon/modules/engine/src/base/connection.rs) は、TCP の受理と発信を trait の背後に置く。
 発信側は直接 TCP と SOCKS5 proxy を同じ境界で扱い、受理側は必要に応じて UPnP の port mapping を扱う。
+Session 層は connection から受け取った byte 列を core-rs の `OmniSecureStream` で保護し、その上に `FramedStream` を置く。
 上位層は接続方法ではなく、`FramedStream` が提供する長さ区切りの message 列だけを利用する。
 
 RocketPack の encode と decode は [framed.rs](../../daemon/modules/engine/src/base/connection/stream/framed.rs) の拡張を通す。
 これにより session と negotiator は、TCP の partial read や message 境界を扱わずに済む。
 
-発信側と受理側は、version、challenge、signature、用途の順に合意する。
+発信側と受理側は、secure channel、version、用途の順に合意する。
 
 ```mermaid
 sequenceDiagram
@@ -42,27 +44,21 @@ sequenceDiagram
     participant A as Accepter
 
     C->>A: TCP connect
+    Note over C,A: OmniSecureStream の handshake で鍵を合意し、互いの署名を検証する
+    Note over C,A: 以後の message は暗号化された stream で送る
     par version の交換
         C->>A: HelloMessage
         A->>C: HelloMessage
     end
-    par challenge の交換
-        C->>A: V1ChallengeMessage
-        A->>C: V1ChallengeMessage
-    end
-    par signature の交換
-        C->>A: V1SignatureMessage
-        A->>C: V1SignatureMessage
-    end
-    Note over C,A: 各自が送った challenge への署名を検証する
     C->>A: V1RequestMessage
     A->>C: V1ResultMessage
     Note over C,A: Accept の場合だけ Session を上位へ渡す
 ```
 
+version と用途の交換を暗号化の後に置くため、第三者は交渉の内容を読むことも書き換えることもできない。
 用途の確定を認証の後に置くことで、未認証の接続を NodeFinder や FileExchanger の queue に入れない。
 version 交渉は、双方が共通して対応する手順だけを選ばなければならない。
-Session の handshake は TCP 接続後から認証と用途選択の完了までとし、期限、同時数、frame 上限を §5.1 のとおり制限する。
+Session の handshake は TCP 接続後から secure channel の確立と用途選択の完了までとし、期限、同時数、frame 上限を §5.1 のとおり制限する。
 NodeFinder の Hello/Profile 交換は、その後に上位 protocol で行う。
 この交換と確立後の受信には通信周期の 3 倍の期限を適用し、詳細は [node-finder.md](./node-finder.md#61-決定済み) が正とする。
 
@@ -91,7 +87,7 @@ message protocol と接続資源を用途ごとに隔離し、一方の負荷が
 
 **決定**
 受理側と発信側は、TCP 接続後の handshake 全体に 1 つの 10 秒の期限を設け、期限を超えた接続を閉じる。
-version、challenge、signature、用途の各交換で期限を延長しない。
+secure channel の確立、version、用途の各交換で期限を延長しない。
 受理側は接続ごとの handshake を並行して進め、同時数を 64 本以下に制限する。
 上限を超えた接続は読み書きせずに閉じ、log に記録する。
 shutdown は handshake の task も cancellation token で終了させ、その終了を待つ。
@@ -140,28 +136,52 @@ URI も同じ生成 NodeProfile の制約に従い、自 node のアドレスは
 frame の上限だけでは 1 message 内の collection と所在情報の数が多くなり得るため、受信側の確保量と処理量を要素数でも制限する。
 送信側も同じ上限へ収めることで、件数を理由に相手が Session を閉じることを防ぐ。
 
-### 5.2 保留
-
 #### Session の secure channel
 
-**現状**
-相互 challenge signature の後も Session は FramedStream を使い、暗号化と message authentication の方式は定めていない。
-V1 の challenge で署名するのは相手が選んだ 32 byte の nonce だけであり、署名は TCP 接続にも handshake の内容にも束縛されていない。
-そのため、ある node を自分へ接続させた第三者は、同じ handshake を本物の相手へ中継して両者に互いを認証させ、その後の平文の message を読み書きできる。
-また、認証前の相手はどの node にも任意の 32 byte への署名を作らせられる。
+**決定**
+Session は core-rs の `OmniSecureStream` で TCP の byte 列を暗号化し、双方が相手の署名を必須とする。
+相手が署名を送らない接続と、署名の検証に失敗した接続は閉じる。
+Session が `OmniSecureStream` の handshake に求める性質は次の 4 つである。
 
-候補は次の 2 つである。
+- 署名は、用途を示す接頭辞、接続の向き、双方の profile と一時公開鍵を含む handshake の transcript を対象にする。
+- 鍵導出は同じ transcript に依存する。
+- 双方は、導出した鍵で鍵確認を交換してから handshake を完了する。鍵確認は、transcript に加えて双方の署名の公開鍵を対象にする。
+- 一時公開鍵の作成時刻は transcript に含め、受け取った側は自分の時刻との差が許容幅を超える handshake を拒否する。Session は許容幅を 5 分とする。
 
-1. `core-rs` の `OmniSecureStream` を適用すると既存部品を再利用できるが、handshake 順序と鍵導出の適合を確認する必要がある。`OmniSecureStream` は署名者側の値だけから作る 32 byte の SHA3-256 hash に接頭辞なしで署名するため、同じ鍵で V1 の challenge に応じ続けると、第三者は challenge として渡した hash への署名を得て、その node になりすませる。
-2. Session protocol 専用の鍵合意を定義すると用途に合わせられるが、新しい暗号 protocol の設計と監査が必要になる。
+Session の HelloMessage、用途の要求と結果は、暗号化された stream で交換する。
+challenge と signature を交換する旧い V1 の手順は廃止し、SessionVersion を増やさずに V1 の内容を置き換える。
+handshake の message と鍵導出の構成は [core-rs の DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#62-secure-connection) が正とする。
 
-中継は、Session の署名に鍵合意の公開鍵か handshake の transcript を含めることで防げる。署名の流用は、同じ鍵で署名する対象が複数残るなら用途を区別する接頭辞で防ぎ、用途ごとに鍵を分けても防げる。候補 1 では、V1 の challenge を廃止するか、core-rs 側の署名対象に接頭辞を加える必要がある。
+**理由**
+相手が選んだ nonce だけに署名する方式では、署名が TCP 接続にも鍵にも結び付かない。
+ある node を自分へ接続させた第三者は、handshake を本物の相手へ中継して双方に互いを認証させ、その後の平文を読み書きできる。
+一時公開鍵を署名の対象に含めると、第三者は鍵を差し替えられず、合意した鍵を得られない。
 
-**なぜ今決めないか**
-local の構成確認と storage 処理は secure channel の wire format に依存しないためである。
+署名の対象を署名者自身の値に限ると、別の攻撃が残る。
+第三者は中継の途中で署名を自分の鍵によるものへ差し替え、他の node の通信を自分の名義にできる。
+記録した handshake を再送して、認証に成功した接続を作ることもできる。
+再送は、相手が接続ごとに選ぶ値を transcript に含めることで、署名の検証の失敗として検出する。
+署名の差し替えは、鍵確認の対象に双方の署名の公開鍵を含めることで検出する。
+差し替えを受けた側は第三者の公開鍵で、署名した本人は自分の公開鍵で鍵確認を計算するため、両者の値が一致しない。
 
-**決める条件**
-既定の bootstrap node の一覧を配布する前と、信頼できない network で FileExchanger または Profile 交換を有効にする前の、いずれか早い時点で決める。
+作成時刻の検査は、古い署名をそのまま使う相手を、相手の値に依存せずに拒否するために加える。
+transcript による再送の検出は、受け取る側が接続ごとに異なる値を選ぶことに依存するが、時刻の検査はこの前提が崩れた場合にも働く。
+代償として、時計が許容幅を超えてずれた node は Session を確立できない。
+
+接頭辞は、同じ署名鍵を Session 以外の署名にも使うときに、ある用途の署名を別の用途へ流用させないためである。
+V1 の内容を置き換えるのは、配布済みの network がなく、旧い手順との互換を保つ相手がいないためである。
+
+**却下案**
+`OmniSecureStream` の handshake を変更せず、用途の要求に双方の node ID を入れて暗号化後に照合する案は、Axus では名義の差し替えを防げる。
+しかし弱点が共有 library に残り、ほかの利用者が同じ照合を各自で実装することになるため採用しない。
+
+Session 専用の鍵合意を Axus に定義する案は、設計と監査の負担が最も大きく、core-rs の secure connection と役割が重複するため採用しない。
+
+handshake に加えて、frame の暗号化、認証付きの終了、鍵の更新まで置き換える案（core-rs の [PR #201](https://github.com/omnius-labs/core-rs/pull/201)）は、Session が求める性質に対して設計と実装が複雑になりすぎるため採用しない。
+
+旧い V1 を残して新しい version を追加する案は、互換を保つ相手がいないまま、中継を防げない手順と接頭辞のない署名対象を実装に残すため採用しない。
+
+### 5.2 保留
 
 #### Session の version 選択
 
@@ -184,7 +204,10 @@ V1 しか存在しないため、どちらの規則でも交渉結果が変わ�
 
 ## 6. 現状と残作業
 
-version、challenge、signature、用途選択の message があり、Session は暗号化されていない FramedStream を保持する。
+§5.1 の secure channel は実装していない。
+Session は平文の FramedStream で version、challenge、signature、用途選択の message を交換し、署名は TCP 接続にも鍵にも結び付いていない。
+core-rs の `OmniSecureStream` の handshake は、署名の対象が署名者自身の profile と一時公開鍵に限られ、接頭辞、transcript に依存する鍵導出、鍵確認、作成時刻の検査を持たない。
+connection は TCP stream を FramedStream に包んで返すため、Session 層は byte 列を受け取れない。
 SessionOption の期限、同時数、frame 上限を SessionAccepter と SessionConnector に渡し、handshake の入力境界で強制する。
 受理側は TCP の受理と接続ごとの handshake task を分け、shutdown は cancel 後にすべての task の終了を待つ。
 用途選択後の frame 上限の切り替えも実装している。
@@ -192,6 +215,6 @@ NodeFinder の Hello/Profile 交換時と確立後の受信期限は、通信周
 DataMessage と NodeProfile の wire decode で、確保前に要素数の上限を検査する。
 上限を超えた Session の切断と、送信側が上限以下へ絞った情報の往復を test で確認している。
 NodeFinder の frame 上限は 256 KiB とし、上限ちょうどの送受信と上限超過の拒否を test で確認している。
-secure channel と複数 version の選択規則を定めるまで、信頼できない network での FileExchanger と Profile 交換は有効にしない。
+secure channel を実装し、複数 version の選択規則を定めるまで、信頼できない network での FileExchanger と Profile 交換は有効にしない。
 
 確認済みの不具合は [issues.md](../issues.md) を参照する。

@@ -16,5 +16,4 @@
 
 | 計画 | 目的 | 状態 | 先行 |
 | --- | --- | --- | --- |
-
-進行中の計画はない。
+| [session-secure-channel](./plans/session-secure-channel.md) | 第三者が Session の通信を読み書きできず、相手が署名者本人である | 進行中 | - |

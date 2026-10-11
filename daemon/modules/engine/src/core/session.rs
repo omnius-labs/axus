@@ -23,7 +23,10 @@ mod tests {
     };
     use rand_core::UnwrapErr;
     use testresult::TestResult;
-    use tokio::sync::{Mutex as TokioMutex, mpsc};
+    use tokio::{
+        net::{TcpListener, TcpStream},
+        sync::{Mutex as TokioMutex, mpsc},
+    };
     use tokio_util::bytes::Bytes;
 
     use omnius_core_base::sleeper::FakeSleeper;
@@ -103,7 +106,7 @@ mod tests {
 
     #[tokio::test]
     async fn unsupported_requests_do_not_stop_accept_tasks() -> TestResult {
-        let (tcp_accepter, tcp_connector) = in_memory_tcp_pair();
+        let (tcp_accepter, tcp_connector) = loopback_tcp_pair();
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
         let sleeper = Arc::new(FakeSleeper);
@@ -134,7 +137,7 @@ mod tests {
 
     #[tokio::test]
     async fn enabled_file_exchanger_session_is_routed() -> TestResult {
-        let (tcp_accepter, tcp_connector) = in_memory_tcp_pair();
+        let (tcp_accepter, tcp_connector) = loopback_tcp_pair();
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
         let sleeper = Arc::new(FakeSleeper);
@@ -185,7 +188,7 @@ mod tests {
         let silent = open_silent_connections(&tcp_connector, 64).await?;
 
         // 上限を超えた接続には HelloMessage も送らない
-        let excess = tcp_connector.connect(&test_addr()).await?;
+        let excess = framed_stream(tcp_connector.connect(&test_addr()).await?);
         assert_eq!(
             tokio::time::timeout(Duration::from_millis(300), excess.receiver.lock().await.recv())
                 .await?
@@ -210,7 +213,7 @@ mod tests {
 
     #[tokio::test]
     async fn connector_times_out_and_closes_an_unresponsive_connection() -> TestResult {
-        let (tcp_accepter, tcp_connector) = in_memory_tcp_pair();
+        let (tcp_accepter, tcp_connector) = loopback_tcp_pair();
         let connector = create_connector(
             tcp_connector,
             SessionOption {
@@ -225,6 +228,7 @@ mod tests {
         .await?;
         assert_eq!(result.err().expect("handshake did not time out").kind(), &ErrorKind::NetworkError);
         let (peer, _) = peer?;
+        let peer = framed_stream(peer);
         let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
         assert!(
             tokio::time::timeout(Duration::from_millis(300), peer.receiver.lock().await.recv())
@@ -242,7 +246,7 @@ mod tests {
             ..SessionOption::default()
         };
         let (accepter, _connector, tcp_connector) = create_sessions(option, &[SessionType::NodeFinder]).await?;
-        let peer = tcp_connector.connect(&test_addr()).await?;
+        let peer = framed_stream(tcp_connector.connect(&test_addr()).await?);
         let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
         tokio::time::sleep(Duration::from_millis(250)).await;
         peer.sender
@@ -264,7 +268,7 @@ mod tests {
 
     #[tokio::test]
     async fn connector_uses_one_deadline_across_handshake_steps() -> TestResult {
-        let (tcp_accepter, tcp_connector) = in_memory_tcp_pair();
+        let (tcp_accepter, tcp_connector) = loopback_tcp_pair();
         let connector = create_connector(
             tcp_connector,
             SessionOption {
@@ -276,6 +280,7 @@ mod tests {
         let connect = connector.connect(&addr, &SessionType::NodeFinder);
         let peer = async {
             let (peer, _) = tcp_accepter.accept().await?;
+            let peer = framed_stream(peer);
             let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
             tokio::time::sleep(Duration::from_millis(250)).await;
             peer.sender
@@ -321,13 +326,13 @@ mod tests {
     #[tokio::test]
     async fn accepter_accepts_the_handshake_frame_boundary_and_closes_an_oversized_frame() -> TestResult {
         let (accepter, _connector, tcp_connector) = create_sessions(SessionOption::default(), &[SessionType::NodeFinder]).await?;
-        let peer = tcp_connector.connect(&test_addr()).await?;
+        let peer = framed_stream(tcp_connector.connect(&test_addr()).await?);
         let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
         peer.sender.lock().await.send(padded_hello_frame(SessionOption::HANDSHAKE_MAX_FRAME_LENGTH)?).await?;
         let _: V1ChallengeMessage = tokio::time::timeout(TEST_TIMEOUT, peer.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>()).await??;
         drop(peer);
 
-        let peer = tcp_connector.connect(&test_addr()).await?;
+        let peer = framed_stream(tcp_connector.connect(&test_addr()).await?);
         let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
         peer.sender.lock().await.send(padded_hello_frame(SessionOption::HANDSHAKE_MAX_FRAME_LENGTH + 1)?).await?;
         assert!(
@@ -343,7 +348,7 @@ mod tests {
     #[tokio::test]
     async fn connector_accepts_the_handshake_frame_boundary_and_closes_an_oversized_frame() -> TestResult {
         for length in [SessionOption::HANDSHAKE_MAX_FRAME_LENGTH, SessionOption::HANDSHAKE_MAX_FRAME_LENGTH + 1] {
-            let (tcp_accepter, tcp_connector) = in_memory_tcp_pair();
+            let (tcp_accepter, tcp_connector) = loopback_tcp_pair();
             let connector = create_connector(
                 tcp_connector,
                 SessionOption {
@@ -354,6 +359,7 @@ mod tests {
             let addr = test_addr();
             let peer = async {
                 let (peer, _) = tcp_accepter.accept().await?;
+                let peer = framed_stream(peer);
                 let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
                 peer.sender.lock().await.send(padded_hello_frame(length)?).await?;
                 if length == SessionOption::HANDSHAKE_MAX_FRAME_LENGTH {
@@ -426,8 +432,8 @@ mod tests {
         Ok(())
     }
 
-    async fn create_sessions(option: SessionOption, supported_types: &[SessionType]) -> Result<(SessionAccepter, SessionConnector, Arc<InMemoryTcpConnector>)> {
-        let (tcp_accepter, tcp_connector) = in_memory_tcp_pair();
+    async fn create_sessions(option: SessionOption, supported_types: &[SessionType]) -> Result<(SessionAccepter, SessionConnector, Arc<LoopbackTcpConnector>)> {
+        let (tcp_accepter, tcp_connector) = loopback_tcp_pair();
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
         let accepter = SessionAccepter::new(tcp_accepter, signer, Arc::new(FakeSleeper), rng, supported_types, option.clone()).await;
@@ -441,16 +447,21 @@ mod tests {
         Ok(SessionConnector::new(tcp_connector, signer, rng, option))
     }
 
-    async fn open_silent_connections(tcp_connector: &InMemoryTcpConnector, count: usize) -> Result<Vec<FramedStream>> {
+    async fn open_silent_connections(tcp_connector: &LoopbackTcpConnector, count: usize) -> Result<Vec<FramedStream>> {
         let mut streams = Vec::new();
         for _ in 0..count {
-            let stream = tcp_connector.connect(&test_addr()).await?;
+            let stream = framed_stream(tcp_connector.connect(&test_addr()).await?);
             let _: HelloMessage = tokio::time::timeout(TEST_TIMEOUT, stream.receiver.lock().await.recv_message_with::<HelloMessageCodec>())
                 .await
                 .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))??;
             streams.push(stream);
         }
         Ok(streams)
+    }
+
+    fn framed_stream(stream: TcpStream) -> FramedStream {
+        let (reader, writer) = tokio::io::split(stream);
+        FramedStream::new(reader, writer)
     }
 
     fn test_addr() -> OmniAddr {
@@ -488,20 +499,20 @@ mod tests {
     }
 
     struct DelayedTcpConnector {
-        inner: Arc<InMemoryTcpConnector>,
+        inner: Arc<LoopbackTcpConnector>,
         delay: Duration,
     }
 
     #[async_trait]
     impl ConnectionTcpConnector for DelayedTcpConnector {
-        async fn connect(&self, addr: &OmniAddr) -> Result<FramedStream> {
+        async fn connect(&self, addr: &OmniAddr) -> Result<TcpStream> {
             tokio::time::sleep(self.delay).await;
             self.inner.connect(addr).await
         }
     }
 
-    async fn request_session(tcp_connector: &InMemoryTcpConnector, signer: &OmniSigner, addr: &OmniAddr, request_type: V1RequestType) -> Result<V1ResultType> {
-        let stream = tcp_connector.connect(addr).await?;
+    async fn request_session(tcp_connector: &LoopbackTcpConnector, signer: &OmniSigner, addr: &OmniAddr, request_type: V1RequestType) -> Result<V1ResultType> {
+        let stream = framed_stream(tcp_connector.connect(addr).await?);
 
         stream
             .sender
@@ -532,29 +543,29 @@ mod tests {
         Ok(result.result_type)
     }
 
-    fn in_memory_tcp_pair() -> (Arc<InMemoryTcpAccepter>, Arc<InMemoryTcpConnector>) {
+    fn loopback_tcp_pair() -> (Arc<LoopbackTcpAccepter>, Arc<LoopbackTcpConnector>) {
         let (sender, receiver) = mpsc::unbounded_channel();
         (
-            Arc::new(InMemoryTcpAccepter {
+            Arc::new(LoopbackTcpAccepter {
                 receiver: TokioMutex::new(receiver),
             }),
-            Arc::new(InMemoryTcpConnector { sender }),
+            Arc::new(LoopbackTcpConnector { sender }),
         )
     }
 
-    struct InMemoryTcpAccepter {
-        receiver: TokioMutex<mpsc::UnboundedReceiver<(FramedStream, SocketAddr)>>,
+    struct LoopbackTcpAccepter {
+        receiver: TokioMutex<mpsc::UnboundedReceiver<(TcpStream, SocketAddr)>>,
     }
 
     #[async_trait]
-    impl ConnectionTcpAccepter for InMemoryTcpAccepter {
-        async fn accept(&self) -> Result<(FramedStream, SocketAddr)> {
+    impl ConnectionTcpAccepter for LoopbackTcpAccepter {
+        async fn accept(&self) -> Result<(TcpStream, SocketAddr)> {
             self.receiver
                 .lock()
                 .await
                 .recv()
                 .await
-                .ok_or_else(|| Error::new(ErrorKind::EndOfStream).with_message("in-memory accepter is closed"))
+                .ok_or_else(|| Error::new(ErrorKind::EndOfStream).with_message("loopback accepter is closed"))
         }
 
         async fn get_global_ip_addresses(&self) -> Result<Vec<IpAddr>> {
@@ -563,26 +574,29 @@ mod tests {
     }
 
     #[async_trait]
-    impl Shutdown for InMemoryTcpAccepter {
+    impl Shutdown for LoopbackTcpAccepter {
         async fn shutdown(&self) {}
     }
 
-    struct InMemoryTcpConnector {
-        sender: mpsc::UnboundedSender<(FramedStream, SocketAddr)>,
+    struct LoopbackTcpConnector {
+        sender: mpsc::UnboundedSender<(TcpStream, SocketAddr)>,
     }
 
     #[async_trait]
-    impl ConnectionTcpConnector for InMemoryTcpConnector {
-        async fn connect(&self, _addr: &OmniAddr) -> Result<FramedStream> {
-            let (client, server) = tokio::io::duplex(64 * 1024);
-            let (client_reader, client_writer) = tokio::io::split(client);
-            let (server_reader, server_writer) = tokio::io::split(server);
+    impl ConnectionTcpConnector for LoopbackTcpConnector {
+        async fn connect(&self, _addr: &OmniAddr) -> Result<TcpStream> {
+            let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+            let (client, server) = tokio::join!(TcpStream::connect(listener.local_addr()?), listener.accept());
+            let client = client?;
+            let (server, addr) = server?;
+            client.set_nodelay(true)?;
+            server.set_nodelay(true)?;
 
             self.sender
-                .send((FramedStream::new(server_reader, server_writer), SocketAddr::from(([127, 0, 0, 1], 1))))
-                .map_err(|_| Error::new(ErrorKind::EndOfStream).with_message("in-memory accepter is closed"))?;
+                .send((server, addr))
+                .map_err(|_| Error::new(ErrorKind::EndOfStream).with_message("loopback accepter is closed"))?;
 
-            Ok(FramedStream::new(client_reader, client_writer))
+            Ok(client)
         }
     }
 

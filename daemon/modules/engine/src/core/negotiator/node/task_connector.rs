@@ -186,6 +186,7 @@ mod tests {
     };
     use rand_core::UnwrapErr;
     use testresult::TestResult;
+    use tokio::net::TcpStream;
     use tokio::sync::{Mutex as TokioMutex, mpsc};
 
     use omnius_core_base::{
@@ -196,11 +197,7 @@ mod tests {
     use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
     use crate::{
-        base::{
-            collections::VolatileHashSet,
-            connection::{ConnectionTcpConnector, FramedStream},
-            runtime::Shutdown as _,
-        },
+        base::{collections::VolatileHashSet, connection::ConnectionTcpConnector, runtime::Shutdown as _},
         core::session::{SessionConnector, model::SessionOption},
         model::NodeProfile,
         prelude::*,
@@ -321,7 +318,7 @@ mod tests {
 
     #[async_trait]
     impl ConnectionTcpConnector for CountingTcpConnector {
-        async fn connect(&self, _addr: &OmniAddr) -> Result<FramedStream> {
+        async fn connect(&self, _addr: &OmniAddr) -> Result<TcpStream> {
             *self.count.lock() += 1;
             tokio::time::sleep(Duration::from_millis(100)).await;
             Err(Error::new(ErrorKind::NotConnected).with_message("counting connector does not connect"))

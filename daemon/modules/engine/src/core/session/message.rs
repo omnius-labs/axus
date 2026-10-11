@@ -1,5 +1,3 @@
-use omnius_core_omnikit::generated::omni_sign::OmniCert;
-
 #[repr(u32)]
 #[enumflags2::bitflags]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::AsRefStr, strum::Display, strum::FromRepr)]
@@ -10,16 +8,6 @@ pub enum SessionVersion {
 #[derive(Debug, PartialEq, Eq)]
 pub struct HelloMessage {
     pub version: SessionVersion,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct V1ChallengeMessage {
-    pub nonce: [u8; 32],
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct V1SignatureMessage {
-    pub cert: OmniCert,
 }
 
 #[repr(u32)]

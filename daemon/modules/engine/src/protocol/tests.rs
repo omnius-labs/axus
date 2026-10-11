@@ -4,10 +4,7 @@ use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use enumflags2::BitFlags;
 use omnius_core_omnikit::{
-    generated::{
-        omni_hash::{OmniHash, OmniHashAlgorithmType},
-        omni_sign::{OmniCert, OmniSignType},
-    },
+    generated::omni_hash::{OmniHash, OmniHashAlgorithmType},
     model::omni_addr::OmniAddr,
 };
 use omnius_core_rocketpack::{RocketPackBytesDecoder, RocketPackBytesEncoder};
@@ -160,14 +157,6 @@ fn all_codecs_preserve_required_unknown_null_duplicate_and_trailing_field_accept
         },
         |b| super::session::HelloMessageCodec::decode(b).is_ok(),
     )?;
-    acceptance_matrix(&legacy::session::V1ChallengeMessage { nonce: [0; 32] }, |b| V1ChallengeMessageCodec::decode(b).is_ok())?;
-    let cert = OmniCert {
-        typ: OmniSignType::None,
-        name: "n".into(),
-        public_key: vec![1],
-        value: vec![2],
-    };
-    acceptance_matrix(&legacy::session::V1SignatureMessage { cert }, |b| V1SignatureMessageCodec::decode(b).is_ok())?;
     acceptance_matrix(
         &legacy::session::V1RequestMessage {
             request_type: legacy::session::V1RequestType::Unknown,
@@ -241,31 +230,6 @@ fn session_hello_fixed_bytes() -> TestResult {
     };
     compatible::<super::session::HelloMessageCodec, _>(&old, &new, true)?;
     assert_eq!(super::session::HelloMessageCodec::encode(&new)?, hex::decode("a10001")?);
-    Ok(())
-}
-
-#[test]
-fn challenge_uses_bytes_and_preserves_nonce() -> TestResult {
-    let nonce = [7; 32];
-    let new = domain_session::V1ChallengeMessage { nonce };
-    compatible::<V1ChallengeMessageCodec, _>(&legacy::session::V1ChallengeMessage { nonce }, &new, true)?;
-    let mut expected = hex::decode("a1005820")?;
-    expected.extend(nonce);
-    assert_eq!(V1ChallengeMessageCodec::encode(&new)?, expected);
-    Ok(())
-}
-
-#[test]
-fn signature_fixed_bytes_and_dependency() -> TestResult {
-    let cert = OmniCert {
-        typ: OmniSignType::None,
-        name: "n".into(),
-        public_key: vec![1],
-        value: vec![2],
-    };
-    let new = domain_session::V1SignatureMessage { cert: cert.clone() };
-    compatible::<V1SignatureMessageCodec, _>(&legacy::session::V1SignatureMessage { cert }, &new, true)?;
-    assert_eq!(V1SignatureMessageCodec::encode(&new)?, hex::decode("a100a401a101a002616e034101044102")?);
     Ok(())
 }
 
@@ -415,21 +379,6 @@ fn scalar_duplicates_reject_every_invalid_occurrence() -> TestResult {
         ] {
             assert_eq!(old, new);
         }
-    }
-    Ok(())
-}
-
-#[test]
-fn nonce_acceptance_is_unchanged_including_duplicates() -> TestResult {
-    for lengths in [vec![31], vec![32], vec![33], vec![31, 32], vec![32, 31]] {
-        let mut bytes = Vec::new();
-        let mut encoder = RocketPackBytesEncoder::new(&mut bytes);
-        encoder.write_map(lengths.len())?;
-        for length in lengths {
-            encoder.write_u64(0)?;
-            encoder.write_bytes(&vec![7; length])?;
-        }
-        assert_eq!(legacy::session::V1ChallengeMessage::import(&bytes).is_ok(), V1ChallengeMessageCodec::decode(&bytes).is_ok());
     }
     Ok(())
 }

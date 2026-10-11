@@ -21,32 +21,6 @@ impl MessageCodec for HelloMessageCodec {
     }
 }
 
-pub(crate) struct V1ChallengeMessageCodec;
-impl MessageCodec for V1ChallengeMessageCodec {
-    type Message = domain::V1ChallengeMessage;
-    type Wire = wire::V1ChallengeMessage;
-    fn to_wire(value: &Self::Message) -> Self::Wire {
-        Self::Wire { nonce: value.nonce.to_vec() }
-    }
-    fn from_wire(value: Self::Wire) -> std::result::Result<Self::Message, RocketPackDecoderError> {
-        Ok(Self::Message {
-            nonce: value.nonce.try_into().map_err(|_| RocketPackDecoderError::Other("invalid nonce length"))?,
-        })
-    }
-}
-
-pub(crate) struct V1SignatureMessageCodec;
-impl MessageCodec for V1SignatureMessageCodec {
-    type Message = domain::V1SignatureMessage;
-    type Wire = wire::V1SignatureMessage;
-    fn to_wire(value: &Self::Message) -> Self::Wire {
-        Self::Wire { cert: value.cert.clone() }
-    }
-    fn from_wire(value: Self::Wire) -> std::result::Result<Self::Message, RocketPackDecoderError> {
-        Ok(Self::Message { cert: value.cert })
-    }
-}
-
 pub(crate) struct V1RequestMessageCodec;
 impl MessageCodec for V1RequestMessageCodec {
     type Message = domain::V1RequestMessage;

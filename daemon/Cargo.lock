@@ -2623,6 +2623,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hkdf",
+ "hmac",
  "nom 8.0.0",
  "omnius-core-base",
  "omnius-core-rocketpack",

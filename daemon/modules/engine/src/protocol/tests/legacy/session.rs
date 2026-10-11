@@ -1,5 +1,3 @@
-use omnius_core_omnikit::generated::omni_sign::OmniCert;
-
 use crate::prelude::*;
 
 #[repr(u32)]
@@ -44,81 +42,6 @@ impl RocketPackStruct for HelloMessage {
 
         Ok(Self {
             version: version.ok_or(RocketPackDecoderError::Other("missing field: version"))?,
-        })
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct V1ChallengeMessage {
-    pub nonce: [u8; 32],
-}
-
-impl RocketPackStruct for V1ChallengeMessage {
-    fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
-        encoder.write_map(1)?;
-
-        encoder.write_u64(0)?;
-        encoder.write_bytes(&value.nonce)?;
-
-        Ok(())
-    }
-
-    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
-    where
-        Self: Sized,
-    {
-        let mut nonce: Option<[u8; 32]> = None;
-
-        let count = decoder.read_map()?;
-
-        for _ in 0..count {
-            match decoder.read_u64()? {
-                0 => {
-                    let bytes = decoder.read_bytes_vec()?;
-                    nonce = Some(bytes.try_into().map_err(|_| RocketPackDecoderError::Other("invalid nonce length"))?);
-                }
-                _ => decoder.skip_field()?,
-            }
-        }
-
-        Ok(Self {
-            nonce: nonce.ok_or(RocketPackDecoderError::Other("missing field: nonce"))?,
-        })
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct V1SignatureMessage {
-    pub cert: OmniCert,
-}
-
-impl RocketPackStruct for V1SignatureMessage {
-    fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
-        encoder.write_map(1)?;
-
-        encoder.write_u64(0)?;
-        encoder.write_struct(&value.cert)?;
-
-        Ok(())
-    }
-
-    fn unpack(decoder: &mut impl RocketPackDecoder) -> std::result::Result<Self, RocketPackDecoderError>
-    where
-        Self: Sized,
-    {
-        let mut cert: Option<OmniCert> = None;
-
-        let count = decoder.read_map()?;
-
-        for _ in 0..count {
-            match decoder.read_u64()? {
-                0 => cert = Some(decoder.read_struct::<OmniCert>()?),
-                _ => decoder.skip_field()?,
-            }
-        }
-
-        Ok(Self {
-            cert: cert.ok_or(RocketPackDecoderError::Other("missing field: cert"))?,
         })
     }
 }

@@ -98,8 +98,10 @@ ID と鍵を分離して trust graph で対応を表す案は、Web of Trust の
 
 **現状**
 NodeProfile の到達先には署名がなく、第三者はある node の公開鍵に偽の到達先を付けて配布できる。
-偽の到達先へ接続しても handshake で公開鍵を照合するが、Session の署名は接続に束縛されていないため、偽の到達先の node は本物の node へ handshake を中継して通信の間に入れる（[session.md](./session.md#session-の-secure-channel)）。
-中継しない場合でも、接続の失敗を誘って特定の node を探索から外せる。
+偽の到達先の node は本物の node の署名を作れないため、Session の secure channel（[session.md](./session.md#session-の-secure-channel)）の下では、本物の node として Session を確立することも、handshake を中継して通信を読み書きすることもできない。
+偽の到達先の node は、自分の鍵で Session を確立できる。
+接続側は接続候補の公開鍵と Session の cert を照合しておらず、偽の到達先の node との Session を、その候補への接続として扱う（[dialer-does-not-match-candidate-public-key](../issues/dialer-does-not-match-candidate-public-key.md)）。
+照合を加えても、第三者は接続の失敗を誘って特定の node を探索から外せる。
 
 候補は次の 2 つである。
 
@@ -107,10 +109,10 @@ NodeProfile の到達先には署名がなく、第三者はある node の公�
 2. 接続に成功した到達先だけを保存して配布すると wire format は変わらないが、未検証の到達先を最初に試す段階は残る。
 
 **なぜ今決めないか**
-偽の到達先が与える影響は Session の secure channel の実装で変わるため、実装を先に行う。
+方式によって NodeFinder の wire format と保存形式が変わるため、secure channel の実装とは別の作業として扱う。
 
 **決める条件**
-Session の secure channel を実装した後、既定の bootstrap node の一覧を配布する前に決める。
+既定の bootstrap node の一覧を配布する前に決める。
 
 #### Web of Trust の単位と伝播
 
@@ -130,11 +132,11 @@ README は Web of Trust による検索と公開の保護を掲げるが、信�
 
 ## 5. 現状と残作業
 
-Session は challenge signature を交換するが、通信を暗号化していない。
+Session は secure channel で相手の署名と鍵を検証し、確立後の通信を暗号化している。
 署名鍵は state directory に保存し、node ID は公開鍵から導出して NodeFinder の handshake で照合する。
 Session の handshake の期限と同時数、handshake 中と用途選択後の frame 上限を実装している。
 NodeFinder の Hello/Profile 交換時と確立後の受信期限を、通信周期の 3 倍として実装している。
 DataMessage と NodeProfile の wire decode で要素数の上限を検査し、送信側も同じ上限へ収める。
 NodeFinder の frame と DataMessage を 256 KiB 以下に制限し、可変長 field の制約と送信候補の予算選別を実装している。
 各上限の超過による切断、上限ちょうどの受理、大量情報の往復を test で確認している。
-NodeProfile の到達先の真正性と Web of Trust の policy を決め、信頼できない network へ適用する前に secure channel を実装する。
+NodeProfile の到達先の真正性と Web of Trust の policy を決める。

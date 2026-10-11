@@ -204,10 +204,12 @@ V1 しか存在しないため、どちらの規則でも交渉結果が変わ�
 
 ## 6. 現状と残作業
 
-§5.1 の secure channel は実装していない。
-Session は平文の FramedStream で version、challenge、signature、用途選択の message を交換し、署名は TCP 接続にも鍵にも結び付いていない。
-core-rs の `OmniSecureStream` の handshake は、署名の対象が署名者自身の profile と一時公開鍵に限られ、接頭辞、transcript に依存する鍵導出、鍵確認、作成時刻の検査を持たない。
-connection は TCP stream を FramedStream に包んで返すため、Session 層は byte 列を受け取れない。
+§5.1 の secure channel を実装している。
+connection は TCP stream を返し、SessionConnector と SessionAccepter が `OmniSecureStream` と FramedStream を順に重ねる。
+双方は相手の署名を必須とし、作成時刻の許容幅を 5 分として handshake を行い、検証済みの相手の cert を Session に渡す。
+version と用途選択の message は、暗号化された stream で交換する。
+確立後に送った message の平文が TCP の byte 列に現れないことを、両方向の byte 列を記録する test で確認している。
+相手の切断を受信のエラーとして検出することを、loopback の TCP を使う test で確認している。
 SessionOption の期限、同時数、frame 上限を SessionAccepter と SessionConnector に渡し、handshake の入力境界で強制する。
 受理側は TCP の受理と接続ごとの handshake task を分け、shutdown は cancel 後にすべての task の終了を待つ。
 用途選択後の frame 上限の切り替えも実装している。
@@ -215,6 +217,6 @@ NodeFinder の Hello/Profile 交換時と確立後の受信期限は、通信周
 DataMessage と NodeProfile の wire decode で、確保前に要素数の上限を検査する。
 上限を超えた Session の切断と、送信側が上限以下へ絞った情報の往復を test で確認している。
 NodeFinder の frame 上限は 256 KiB とし、上限ちょうどの送受信と上限超過の拒否を test で確認している。
-secure channel を実装し、複数 version の選択規則を定めるまで、信頼できない network での FileExchanger と Profile 交換は有効にしない。
+複数 version の選択規則を定めるまで、信頼できない network での FileExchanger と Profile 交換は有効にしない。
 
 確認済みの不具合は [issues.md](../issues.md) を参照する。

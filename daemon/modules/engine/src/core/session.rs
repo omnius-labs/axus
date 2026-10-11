@@ -24,14 +24,22 @@ mod tests {
     use rand_core::UnwrapErr;
     use testresult::TestResult;
     use tokio::{
+        io::{AsyncReadExt as _, AsyncWriteExt as _},
         net::{TcpListener, TcpStream},
         sync::{Mutex as TokioMutex, mpsc},
     };
     use tokio_util::bytes::Bytes;
 
-    use omnius_core_base::sleeper::FakeSleeper;
-    use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
+    use omnius_core_base::{clock::ClockUtc, sleeper::FakeSleeper};
     use omnius_core_omnikit::model::omni_addr::OmniAddr;
+    use omnius_core_omnikit::{
+        generated::{
+            omni_secure::{AuthType, ProfileMessage},
+            omni_sign::{OmniSignType, OmniSigner},
+        },
+        model::omni_secure::{CipherAlgorithmType, HashAlgorithmType, KeyDerivationAlgorithmType, KeyExchangeAlgorithmType},
+        service::connection::secure::{OmniSecureStream, OmniSecureStreamType},
+    };
 
     use crate::{
         base::{
@@ -43,7 +51,7 @@ mod tests {
         },
         core::session::{
             SessionAccepter, SessionConnector,
-            message::{HelloMessage, SessionVersion, V1ChallengeMessage, V1RequestMessage, V1RequestType, V1ResultMessage, V1ResultType, V1SignatureMessage},
+            message::{HelloMessage, SessionVersion, V1RequestMessage, V1RequestType, V1ResultMessage, V1ResultType},
             model::{SessionOption, SessionType},
         },
         prelude::*,
@@ -70,13 +78,14 @@ mod tests {
         let session_accepter = SessionAccepter::new(
             tcp_accepter.clone(),
             signer.clone(),
+            Arc::new(ClockUtc),
             sleeper.clone(),
             rng.clone(),
             &[SessionType::NodeFinder],
             SessionOption::default(),
         )
         .await;
-        let session_connector = SessionConnector::new(tcp_connector, signer, rng, SessionOption::default());
+        let session_connector = SessionConnector::new(tcp_connector, signer, Arc::new(ClockUtc), rng, SessionOption::default());
 
         let client = Arc::new(
             session_connector
@@ -112,8 +121,17 @@ mod tests {
         let sleeper = Arc::new(FakeSleeper);
         let addr = OmniAddr::create_tcp("127.0.0.1".parse()?, 1);
 
-        let session_accepter = SessionAccepter::new(tcp_accepter, signer.clone(), sleeper, rng.clone(), &[SessionType::NodeFinder], SessionOption::default()).await;
-        let session_connector = SessionConnector::new(tcp_connector.clone(), signer.clone(), rng, SessionOption::default());
+        let session_accepter = SessionAccepter::new(
+            tcp_accepter,
+            signer.clone(),
+            Arc::new(ClockUtc),
+            sleeper,
+            rng.clone(),
+            &[SessionType::NodeFinder],
+            SessionOption::default(),
+        )
+        .await;
+        let session_connector = SessionConnector::new(tcp_connector.clone(), signer.clone(), Arc::new(ClockUtc), rng, SessionOption::default());
 
         for _ in 0..3 {
             match tokio::time::timeout(TEST_TIMEOUT, session_connector.connect(&addr, &SessionType::FileExchanger)).await? {
@@ -146,13 +164,14 @@ mod tests {
         let session_accepter = SessionAccepter::new(
             tcp_accepter,
             signer.clone(),
+            Arc::new(ClockUtc),
             sleeper,
             rng.clone(),
             &[SessionType::NodeFinder, SessionType::FileExchanger, SessionType::FileExchanger],
             SessionOption::default(),
         )
         .await;
-        let session_connector = SessionConnector::new(tcp_connector, signer, rng, SessionOption::default());
+        let session_connector = SessionConnector::new(tcp_connector, signer, Arc::new(ClockUtc), rng, SessionOption::default());
 
         let client = tokio::time::timeout(TEST_TIMEOUT, session_connector.connect(&addr, &SessionType::FileExchanger)).await??;
         let server = tokio::time::timeout(TEST_TIMEOUT, session_accepter.accept(&SessionType::FileExchanger)).await??;
@@ -187,7 +206,7 @@ mod tests {
         let (accepter, connector, tcp_connector) = create_sessions(option, &[SessionType::NodeFinder]).await?;
         let silent = open_silent_connections(&tcp_connector, 64).await?;
 
-        // 上限を超えた接続には HelloMessage も送らない
+        // 上限を超えた接続には secure handshake の message も送らない
         let excess = framed_stream(tcp_connector.connect(&test_addr()).await?);
         assert_eq!(
             tokio::time::timeout(Duration::from_millis(300), excess.receiver.lock().await.recv())
@@ -229,7 +248,7 @@ mod tests {
         assert_eq!(result.err().expect("handshake did not time out").kind(), &ErrorKind::NetworkError);
         let (peer, _) = peer?;
         let peer = framed_stream(peer);
-        let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
+        let _: ProfileMessage = peer.receiver.lock().await.recv_message().await?;
         assert!(
             tokio::time::timeout(Duration::from_millis(300), peer.receiver.lock().await.recv())
                 .await
@@ -246,16 +265,17 @@ mod tests {
             ..SessionOption::default()
         };
         let (accepter, _connector, tcp_connector) = create_sessions(option, &[SessionType::NodeFinder]).await?;
-        let peer = framed_stream(tcp_connector.connect(&test_addr()).await?);
-        let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
+        let peer = tcp_connector.connect(&test_addr()).await?;
+        // secure handshake の待機に使った時間も全体の期限に含める。
         tokio::time::sleep(Duration::from_millis(250)).await;
+        let peer = secure_framed_stream(peer, OmniSecureStreamType::Connected).await?;
+        let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
         peer.sender
             .lock()
             .await
             .send_message_with::<HelloMessageCodec>(&HelloMessage { version: SessionVersion::V1 })
             .await?;
-        let _: V1ChallengeMessage = peer.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>().await?;
-        // Hello で使った時間を差し引いた期限で、challenge の待機も終わる
+        // 用途の要求を待つ間も、TCP 受理時からの同じ期限で閉じる。
         assert!(
             tokio::time::timeout(Duration::from_millis(300), peer.receiver.lock().await.recv())
                 .await
@@ -280,15 +300,16 @@ mod tests {
         let connect = connector.connect(&addr, &SessionType::NodeFinder);
         let peer = async {
             let (peer, _) = tcp_accepter.accept().await?;
-            let peer = framed_stream(peer);
-            let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
+            // secure handshake の応答を遅らせ、残りの期限で用途選択を待たせる。
             tokio::time::sleep(Duration::from_millis(250)).await;
+            let peer = secure_framed_stream(peer, OmniSecureStreamType::Accepted).await?;
+            let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
             peer.sender
                 .lock()
                 .await
                 .send_message_with::<HelloMessageCodec>(&HelloMessage { version: SessionVersion::V1 })
                 .await?;
-            let _: V1ChallengeMessage = peer.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>().await?;
+            let _: V1RequestMessage = peer.receiver.lock().await.recv_message_with::<V1RequestMessageCodec>().await?;
             assert!(
                 tokio::time::timeout(Duration::from_millis(300), peer.receiver.lock().await.recv())
                     .await
@@ -326,13 +347,22 @@ mod tests {
     #[tokio::test]
     async fn accepter_accepts_the_handshake_frame_boundary_and_closes_an_oversized_frame() -> TestResult {
         let (accepter, _connector, tcp_connector) = create_sessions(SessionOption::default(), &[SessionType::NodeFinder]).await?;
-        let peer = framed_stream(tcp_connector.connect(&test_addr()).await?);
+        let peer = secure_framed_stream(tcp_connector.connect(&test_addr()).await?, OmniSecureStreamType::Connected).await?;
         let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
         peer.sender.lock().await.send(padded_hello_frame(SessionOption::HANDSHAKE_MAX_FRAME_LENGTH)?).await?;
-        let _: V1ChallengeMessage = tokio::time::timeout(TEST_TIMEOUT, peer.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>()).await??;
+        peer.sender
+            .lock()
+            .await
+            .send_message_with::<V1RequestMessageCodec>(&V1RequestMessage {
+                request_type: V1RequestType::NodeFinder,
+            })
+            .await?;
+        let result: V1ResultMessage = tokio::time::timeout(TEST_TIMEOUT, peer.receiver.lock().await.recv_message_with::<V1ResultMessageCodec>()).await??;
+        assert_eq!(result.result_type, V1ResultType::Accept);
+        let _session = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&SessionType::NodeFinder)).await??;
         drop(peer);
 
-        let peer = framed_stream(tcp_connector.connect(&test_addr()).await?);
+        let peer = secure_framed_stream(tcp_connector.connect(&test_addr()).await?, OmniSecureStreamType::Connected).await?;
         let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
         peer.sender.lock().await.send(padded_hello_frame(SessionOption::HANDSHAKE_MAX_FRAME_LENGTH + 1)?).await?;
         assert!(
@@ -359,23 +389,35 @@ mod tests {
             let addr = test_addr();
             let peer = async {
                 let (peer, _) = tcp_accepter.accept().await?;
-                let peer = framed_stream(peer);
+                let peer = secure_framed_stream(peer, OmniSecureStreamType::Accepted).await?;
                 let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
                 peer.sender.lock().await.send(padded_hello_frame(length)?).await?;
                 if length == SessionOption::HANDSHAKE_MAX_FRAME_LENGTH {
-                    let _: V1ChallengeMessage = peer.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>().await?;
-                }
-                assert!(
-                    tokio::time::timeout(Duration::from_millis(300), peer.receiver.lock().await.recv())
+                    let _: V1RequestMessage = peer.receiver.lock().await.recv_message_with::<V1RequestMessageCodec>().await?;
+                    peer.sender
+                        .lock()
                         .await
-                        .expect("connection remained open")
-                        .is_err()
-                );
+                        .send_message_with::<V1ResultMessageCodec>(&V1ResultMessage {
+                            result_type: V1ResultType::Accept,
+                        })
+                        .await?;
+                } else {
+                    assert!(
+                        tokio::time::timeout(Duration::from_millis(300), peer.receiver.lock().await.recv())
+                            .await
+                            .expect("connection remained open")
+                            .is_err()
+                    );
+                }
                 Result::Ok(())
             };
             let (result, peer_result) = tokio::time::timeout(TEST_TIMEOUT, async { tokio::join!(connector.connect(&addr, &SessionType::NodeFinder), peer) }).await?;
-            assert!(result.is_err());
             peer_result?;
+            if length == SessionOption::HANDSHAKE_MAX_FRAME_LENGTH {
+                assert!(result.is_ok());
+            } else {
+                assert!(result.is_err());
+            }
         }
         Ok(())
     }
@@ -432,11 +474,106 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn established_session_does_not_expose_plaintext() -> TestResult {
+        let (tcp_accepter, upstream_connector) = loopback_tcp_pair();
+        let server_signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "server")?);
+        let client_signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "client")?);
+        let clock = Arc::new(ClockUtc);
+        let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
+        let accepter = SessionAccepter::new(
+            tcp_accepter,
+            server_signer.clone(),
+            clock.clone(),
+            Arc::new(FakeSleeper),
+            rng.clone(),
+            &[SessionType::NodeFinder],
+            SessionOption::default(),
+        )
+        .await;
+        let tcp_connector = Arc::new(
+            ConnectionTcpConnectorImpl::new(TcpProxyOption {
+                typ: TcpProxyType::None,
+                addr: None,
+            })
+            .await?,
+        );
+        let connector = SessionConnector::new(tcp_connector, client_signer.clone(), clock, rng, SessionOption::default());
+
+        // TCP を中継し、両方向それぞれの実際の byte 列を順序どおり記録する。
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let addr = listener.local_addr()?;
+        let client_to_server = Arc::new(Mutex::new(Vec::new()));
+        let server_to_client = Arc::new(Mutex::new(Vec::new()));
+        let relay = tokio::spawn({
+            let client_to_server = client_to_server.clone();
+            let server_to_client = server_to_client.clone();
+            async move {
+                let (downstream, _) = listener.accept().await?;
+                let upstream = upstream_connector.connect(&test_addr()).await?;
+                downstream.set_nodelay(true)?;
+                let (down_reader, down_writer) = downstream.into_split();
+                let (up_reader, up_writer) = upstream.into_split();
+                tokio::try_join!(
+                    record_tcp_bytes(down_reader, up_writer, client_to_server),
+                    record_tcp_bytes(up_reader, down_writer, server_to_client)
+                )?;
+                Result::Ok(())
+            }
+        });
+        let client = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&OmniAddr::create_tcp(addr.ip(), addr.port()), &SessionType::NodeFinder)).await??;
+        let server = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&SessionType::NodeFinder)).await??;
+        assert_eq!(client.cert.public_key, server_signer.sign(b"expected peer")?.public_key);
+        assert_eq!(server.cert.public_key, client_signer.sign(b"expected peer")?.public_key);
+        client_to_server.lock().clear();
+        server_to_client.lock().clear();
+
+        for (sender, receiver, recorded, direction) in [
+            (&client.stream, &server.stream, &client_to_server, "connected"),
+            (&server.stream, &client.stream, &server_to_client, "accepted"),
+        ] {
+            // secure stream の 64 KiB 境界もまたぐ message を送る。
+            let plaintext = format!("Axus secret payload {direction} / 57e807fe-c5b4-4739-bb66-3427eccf87a5 / ");
+            let message = TestMessage { value: plaintext.repeat(1024) };
+            let encoded = message.export()?;
+            let (sent, received) = tokio::time::timeout(TEST_TIMEOUT, async {
+                tokio::join!(async { sender.sender.lock().await.send_message(&message).await }, async {
+                    receiver.receiver.lock().await.recv_message::<TestMessage>().await
+                })
+            })
+            .await?;
+            sent?;
+            assert_eq!(received?, message);
+            let bytes = recorded.lock();
+            assert!(bytes.len() > encoded.len(), "TCP capture must contain the transmitted message");
+            assert!(!bytes.windows(encoded.len()).any(|window| window == encoded), "encoded plaintext appeared on TCP");
+            assert!(!bytes.windows(plaintext.len()).any(|window| window == plaintext.as_bytes()), "message text appeared on TCP");
+        }
+
+        drop(client);
+        drop(server);
+        accepter.shutdown().await;
+        tokio::time::timeout(TEST_TIMEOUT, relay).await???;
+        Ok(())
+    }
+
+    async fn record_tcp_bytes(mut reader: tokio::net::tcp::OwnedReadHalf, mut writer: tokio::net::tcp::OwnedWriteHalf, recorded: Arc<Mutex<Vec<u8>>>) -> std::io::Result<()> {
+        let mut buffer = [0; 8192];
+        loop {
+            let length = reader.read(&mut buffer).await?;
+            if length == 0 {
+                return writer.shutdown().await;
+            }
+            recorded.lock().extend_from_slice(&buffer[..length]);
+            writer.write_all(&buffer[..length]).await?;
+        }
+    }
+
     async fn create_sessions(option: SessionOption, supported_types: &[SessionType]) -> Result<(SessionAccepter, SessionConnector, Arc<LoopbackTcpConnector>)> {
         let (tcp_accepter, tcp_connector) = loopback_tcp_pair();
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
-        let accepter = SessionAccepter::new(tcp_accepter, signer, Arc::new(FakeSleeper), rng, supported_types, option.clone()).await;
+        let accepter = SessionAccepter::new(tcp_accepter, signer, Arc::new(ClockUtc), Arc::new(FakeSleeper), rng, supported_types, option.clone()).await;
         let connector = create_connector(tcp_connector.clone(), option)?;
         Ok((accepter, connector, tcp_connector))
     }
@@ -444,19 +581,50 @@ mod tests {
     fn create_connector(tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync>, option: SessionOption) -> Result<SessionConnector> {
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
-        Ok(SessionConnector::new(tcp_connector, signer, rng, option))
+        Ok(SessionConnector::new(tcp_connector, signer, Arc::new(ClockUtc), rng, option))
     }
 
     async fn open_silent_connections(tcp_connector: &LoopbackTcpConnector, count: usize) -> Result<Vec<FramedStream>> {
         let mut streams = Vec::new();
         for _ in 0..count {
             let stream = framed_stream(tcp_connector.connect(&test_addr()).await?);
-            let _: HelloMessage = tokio::time::timeout(TEST_TIMEOUT, stream.receiver.lock().await.recv_message_with::<HelloMessageCodec>())
+            stream
+                .sender
+                .lock()
+                .await
+                .send_message(&ProfileMessage {
+                    session_id: vec![1; 32],
+                    auth_type: AuthType::Sign,
+                    key_exchange_algorithm_type_flags: KeyExchangeAlgorithmType::X25519 as u32,
+                    key_derivation_algorithm_type_flags: KeyDerivationAlgorithmType::HKDF as u32,
+                    cipher_algorithm_type_flags: CipherAlgorithmType::AES_256_GCM as u32,
+                    hash_algorithm_type_flags: HashAlgorithmType::SHA3_256 as u32,
+                    role: 1,
+                })
+                .await?;
+            let _: ProfileMessage = tokio::time::timeout(TEST_TIMEOUT, stream.receiver.lock().await.recv_message())
                 .await
                 .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))??;
             streams.push(stream);
         }
         Ok(streams)
+    }
+
+    async fn secure_framed_stream(stream: TcpStream, stream_type: OmniSecureStreamType) -> Result<FramedStream> {
+        let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "peer")?;
+        let stream = OmniSecureStream::new(
+            stream,
+            stream_type,
+            SessionOption::HANDSHAKE_MAX_FRAME_LENGTH,
+            Some(signer),
+            true,
+            Duration::from_secs(5 * 60),
+            Arc::new(ClockUtc),
+            Arc::new(Mutex::new(ChaCha20Rng::seed_from_u64(2))),
+        )
+        .await?;
+        let (reader, writer) = tokio::io::split(stream);
+        Ok(FramedStream::new(reader, writer))
     }
 
     fn framed_stream(stream: TcpStream) -> FramedStream {
@@ -512,7 +680,19 @@ mod tests {
     }
 
     async fn request_session(tcp_connector: &LoopbackTcpConnector, signer: &OmniSigner, addr: &OmniAddr, request_type: V1RequestType) -> Result<V1ResultType> {
-        let stream = framed_stream(tcp_connector.connect(addr).await?);
+        let stream = OmniSecureStream::new(
+            tcp_connector.connect(addr).await?,
+            OmniSecureStreamType::Connected,
+            SessionOption::HANDSHAKE_MAX_FRAME_LENGTH,
+            Some(signer.clone()),
+            true,
+            Duration::from_secs(5 * 60),
+            Arc::new(ClockUtc),
+            Arc::new(Mutex::new(ChaCha20Rng::seed_from_u64(1))),
+        )
+        .await?;
+        let (reader, writer) = tokio::io::split(stream);
+        let stream = FramedStream::new(reader, writer);
 
         stream
             .sender
@@ -521,16 +701,6 @@ mod tests {
             .send_message_with::<HelloMessageCodec>(&HelloMessage { version: SessionVersion::V1 })
             .await?;
         let _: HelloMessage = stream.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
-
-        let send_challenge_message = V1ChallengeMessage { nonce: [1; 32] };
-        stream.sender.lock().await.send_message_with::<V1ChallengeMessageCodec>(&send_challenge_message).await?;
-        let received_challenge_message: V1ChallengeMessage = stream.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>().await?;
-
-        let send_signature_message = V1SignatureMessage {
-            cert: signer.sign(&received_challenge_message.nonce)?,
-        };
-        stream.sender.lock().await.send_message_with::<V1SignatureMessageCodec>(&send_signature_message).await?;
-        let _: V1SignatureMessage = stream.receiver.lock().await.recv_message_with::<V1SignatureMessageCodec>().await?;
 
         stream
             .sender

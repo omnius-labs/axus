@@ -1,10 +1,12 @@
 use crate::protocol::session::*;
 use std::sync::Arc;
 
+use chrono::Utc;
+use omnius_core_base::clock::Clock;
 use omnius_core_omnikit::generated::omni_sign::OmniSigner;
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
+use omnius_core_omnikit::service::connection::secure::{OmniSecureStream, OmniSecureStreamType};
 use parking_lot::Mutex;
-use rand::RngExt;
 use tokio::{
     net::TcpStream,
     time::{Instant, timeout_at},
@@ -12,7 +14,6 @@ use tokio::{
 
 use crate::{
     base::connection::{ConnectionTcpConnector, FramedRecvExt as _, FramedSendExt as _, FramedStream},
-    core::session::message::{V1ChallengeMessage, V1SignatureMessage},
     prelude::*,
 };
 
@@ -24,15 +25,23 @@ use super::{
 pub struct SessionConnector {
     tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync>,
     signer: Arc<OmniSigner>,
+    clock: Arc<dyn Clock<Utc> + Send + Sync>,
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     option: SessionOption,
 }
 
 impl SessionConnector {
-    pub fn new(tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync>, signer: Arc<OmniSigner>, rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>, option: SessionOption) -> Self {
+    pub fn new(
+        tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync>,
+        signer: Arc<OmniSigner>,
+        clock: Arc<dyn Clock<Utc> + Send + Sync>,
+        rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
+        option: SessionOption,
+    ) -> Self {
         Self {
             tcp_connector,
             signer,
+            clock,
             rng,
             option,
         }
@@ -47,6 +56,21 @@ impl SessionConnector {
     }
 
     async fn handshake(&self, stream: TcpStream, addr: &OmniAddr, typ: &SessionType) -> Result<Session> {
+        let stream = OmniSecureStream::new(
+            stream,
+            OmniSecureStreamType::Connected,
+            self.option.handshake_max_frame_length,
+            Some(self.signer.as_ref().clone()),
+            true,
+            self.option.max_clock_skew,
+            self.clock.clone(),
+            self.rng.clone(),
+        )
+        .await?;
+        let cert = stream
+            .peer_cert()
+            .cloned()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidFormat).with_message("Missing peer signature"))?;
         let (reader, writer) = tokio::io::split(stream);
         let stream = FramedStream::new(reader, writer);
         stream.set_max_frame_length(self.option.handshake_max_frame_length).await;
@@ -58,20 +82,6 @@ impl SessionConnector {
         let version = send_hello_message.version & received_hello_message.version;
 
         if version.contains(SessionVersion::V1) {
-            let send_nonce: [u8; 32] = self.rng.lock().random();
-            let send_challenge_message = V1ChallengeMessage { nonce: send_nonce };
-            stream.sender.lock().await.send_message_with::<V1ChallengeMessageCodec>(&send_challenge_message).await?;
-            let receive_challenge_message: V1ChallengeMessage = stream.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>().await?;
-
-            let send_signature = self.signer.sign(&receive_challenge_message.nonce)?;
-            let send_signature_message = V1SignatureMessage { cert: send_signature };
-            stream.sender.lock().await.send_message_with::<V1SignatureMessageCodec>(&send_signature_message).await?;
-            let received_signature_message: V1SignatureMessage = stream.receiver.lock().await.recv_message_with::<V1SignatureMessageCodec>().await?;
-
-            if received_signature_message.cert.verify(send_nonce.as_slice()).is_err() {
-                return Err(Error::new(ErrorKind::InvalidFormat).with_message("Invalid signature"));
-            }
-
             let send_session_request_message = V1RequestMessage {
                 request_type: match typ {
                     SessionType::NodeFinder => V1RequestType::NodeFinder,
@@ -91,7 +101,7 @@ impl SessionConnector {
                 typ: typ.clone(),
                 address: addr.clone(),
                 handshake_type: SessionHandshakeType::Connected,
-                cert: received_signature_message.cert,
+                cert,
                 stream,
             };
 

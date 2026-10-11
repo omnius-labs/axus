@@ -211,6 +211,7 @@ mod tests {
             SessionAccepter::new(
                 tcp_accepter,
                 identity.signer(),
+                clock.clone(),
                 sleeper.clone(),
                 rng.clone(),
                 &[SessionType::NodeFinder, SessionType::FileExchanger],
@@ -218,7 +219,13 @@ mod tests {
             )
             .await,
         );
-        let session_connector = Arc::new(SessionConnector::new(tcp_connector, identity.signer(), rng.clone(), SessionOption::default()));
+        let session_connector = Arc::new(SessionConnector::new(
+            tcp_connector,
+            identity.signer(),
+            clock.clone(),
+            rng.clone(),
+            SessionOption::default(),
+        ));
         let repo_dir = dir.path().join("repo");
         tokio::fs::create_dir_all(&repo_dir).await?;
         let node_profile_repo = Arc::new(NodeFinderRepo::new(repo_dir.to_str().unwrap(), clock.clone()).await?);
@@ -293,6 +300,7 @@ mod tests {
             SessionAccepter::new(
                 tcp_accepter,
                 identity.signer(),
+                clock.clone(),
                 sleeper.clone(),
                 rng.clone(),
                 &[SessionType::NodeFinder, SessionType::FileExchanger],
@@ -300,7 +308,13 @@ mod tests {
             )
             .await,
         );
-        let session_connector = Arc::new(SessionConnector::new(tcp_connector, identity.signer(), rng.clone(), SessionOption::default()));
+        let session_connector = Arc::new(SessionConnector::new(
+            tcp_connector,
+            identity.signer(),
+            clock.clone(),
+            rng.clone(),
+            SessionOption::default(),
+        ));
         let repo_dir = dir.path().join("repo");
         tokio::fs::create_dir_all(&repo_dir).await?;
         let node_profile_repo = Arc::new(NodeFinderRepo::new(repo_dir.to_str().unwrap(), clock.clone()).await?);

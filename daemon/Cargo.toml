@@ -89,6 +89,7 @@ tempfile = "3.27.0"
 crc = "3.4.0"
 testresult = "0.4.1"
 hkdf = "0.13.0"
+hmac = "0.13.0"
 aes-gcm = "0.10.3"
 parking_lot = "0.12.5"
 x25519-dalek = { version = "=3.0.0-rc.0", features = ["static_secrets"] }

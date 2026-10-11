@@ -32,6 +32,8 @@
 | [アドレスが変わった node が既知 node に重複して残る](./issues/node-profile-rows-keyed-by-uri.md) | 低 | 2026-09-24 | - |
 | [delete_bulk が存在しない key を含むと何も削除せずに成功する](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | 低 | 2026-10-06 | - |
 | [TaskCommunicator::start が受理 channel が閉じても loop を抜けない](./issues/task-communicator-spins-on-closed-session-channel.md) | 低 | 2026-10-07 | - |
+| [SessionConnector が用途選択の結果 Unknown を受理する](./issues/session-connector-accepts-unknown-result.md) | 低 | 2026-10-11 | - |
+| [接続側が接続候補の公開鍵を Session の cert と照合しない](./issues/dialer-does-not-match-candidate-public-key.md) | 中 | 2026-10-11 | - |
 
 既知 node の重複は、NodeProfile の到達先の真正性（[trust-security.md](./design/trust-security.md#nodeprofile-の到達先の真正性)）を決めると保存形式も変わり得るため、あわせて扱う。
 
@@ -39,11 +41,9 @@
 
 | 項目 | 参照 |
 | --- | --- |
-| Session の secure channel がない | [session.md](./design/session.md#session-の-secure-channel) |
 | FileExchanger の block 交換 protocol がない | [file-transfer.md](./design/file-transfer.md#7-現状と残作業) |
 | 公開と購読を始める REST API がない | [file-transfer.md](./design/file-transfer.md#7-現状と残作業) |
 | NodeFinder の能動探索がない | [node-finder.md](./design/node-finder.md#6-設計判断) |
-| Session の認証が接続に束縛されていない | [session.md](./design/session.md#session-の-secure-channel) |
 | 公開側が接続先を探す手段がない | [file-transfer.md](./design/file-transfer.md#公開側の接続先) |
 | REST API の到達範囲と認証が未決である | [daemon-api.md](./design/daemon-api.md#rest-api-の到達範囲と認証) |
 | Web of Trust が未設計である | [trust-security.md](./design/trust-security.md#4-設計判断) |

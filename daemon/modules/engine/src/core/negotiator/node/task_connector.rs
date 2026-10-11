@@ -284,7 +284,7 @@ mod tests {
             Arc::new(Mutex::new(my_node_profile.clone())),
             Arc::new(SessionRegistry::new()),
             Arc::new(TokioMutex::new(session_sender)),
-            Arc::new(SessionConnector::new(tcp_connector, signer, rng.clone(), SessionOption::default())),
+            Arc::new(SessionConnector::new(tcp_connector, signer, clock.clone(), rng.clone(), SessionOption::default())),
             Arc::new(Mutex::new(VolatileHashSet::new(chrono::Duration::seconds(180), clock.clone()))),
             connecting_ids,
             node_profile_repo,

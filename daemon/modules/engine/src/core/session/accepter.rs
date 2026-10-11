@@ -2,8 +2,8 @@ use crate::protocol::session::*;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
+use chrono::Utc;
 use parking_lot::Mutex;
-use rand::RngExt;
 use tokio::{
     net::TcpStream,
     select,
@@ -14,16 +14,17 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use omnius_core_base::sleeper::Sleeper;
+use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 use omnius_core_omnikit::generated::omni_sign::OmniSigner;
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
+use omnius_core_omnikit::service::connection::secure::{OmniSecureStream, OmniSecureStreamType};
 
 use crate::{
     base::{
         connection::{ConnectionTcpAccepter, FramedRecvExt as _, FramedSendExt as _, FramedStream},
         runtime::Shutdown,
     },
-    core::session::message::{HelloMessage, SessionVersion, V1ChallengeMessage, V1RequestMessage, V1SignatureMessage},
+    core::session::message::{HelloMessage, SessionVersion, V1RequestMessage},
     prelude::*,
 };
 
@@ -42,6 +43,7 @@ impl SessionAccepter {
     pub async fn new(
         tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
         signer: Arc<OmniSigner>,
+        clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
         rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         supported_types: &[SessionType],
@@ -59,7 +61,7 @@ impl SessionAccepter {
             receivers.insert(typ.clone(), rx);
         }
 
-        let task_accepter = TaskAccepter::new(Arc::new(TokioMutex::new(senders)), tcp_accepter.clone(), signer, rng, sleeper, option);
+        let task_accepter = TaskAccepter::new(Arc::new(TokioMutex::new(senders)), tcp_accepter.clone(), signer, clock, rng, sleeper, option);
         task_accepter.run().await;
 
         Self {
@@ -102,11 +104,18 @@ impl TaskAccepter {
         senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<Session>>>>,
         tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
         signer: Arc<OmniSigner>,
+        clock: Arc<dyn Clock<Utc> + Send + Sync>,
         rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
         option: SessionOption,
     ) -> Self {
-        let inner = Inner { senders, signer, rng, option };
+        let inner = Inner {
+            senders,
+            signer,
+            clock,
+            rng,
+            option,
+        };
         Self {
             inner,
             tcp_accepter,
@@ -202,12 +211,28 @@ impl Shutdown for TaskAccepter {
 struct Inner {
     senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<Session>>>>,
     signer: Arc<OmniSigner>,
+    clock: Arc<dyn Clock<Utc> + Send + Sync>,
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     option: SessionOption,
 }
 
 impl Inner {
     async fn handshake(&self, stream: TcpStream, addr: SocketAddr) -> Result<()> {
+        let stream = OmniSecureStream::new(
+            stream,
+            OmniSecureStreamType::Accepted,
+            self.option.handshake_max_frame_length,
+            Some(self.signer.as_ref().clone()),
+            true,
+            self.option.max_clock_skew,
+            self.clock.clone(),
+            self.rng.clone(),
+        )
+        .await?;
+        let cert = stream
+            .peer_cert()
+            .cloned()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidFormat).with_message("Missing peer signature"))?;
         let (reader, writer) = tokio::io::split(stream);
         let stream = FramedStream::new(reader, writer);
         stream.set_max_frame_length(self.option.handshake_max_frame_length).await;
@@ -219,20 +244,6 @@ impl Inner {
         let version = send_hello_message.version & received_hello_message.version;
 
         if version.contains(SessionVersion::V1) {
-            let send_nonce: [u8; 32] = self.rng.lock().random();
-            let send_challenge_message = V1ChallengeMessage { nonce: send_nonce };
-            stream.sender.lock().await.send_message_with::<V1ChallengeMessageCodec>(&send_challenge_message).await?;
-            let receive_challenge_message: V1ChallengeMessage = stream.receiver.lock().await.recv_message_with::<V1ChallengeMessageCodec>().await?;
-
-            let send_signature = self.signer.sign(&receive_challenge_message.nonce)?;
-            let send_signature_message = V1SignatureMessage { cert: send_signature };
-            stream.sender.lock().await.send_message_with::<V1SignatureMessageCodec>(&send_signature_message).await?;
-            let received_signature_message: V1SignatureMessage = stream.receiver.lock().await.recv_message_with::<V1SignatureMessageCodec>().await?;
-
-            if received_signature_message.cert.verify(send_nonce.as_slice()).is_err() {
-                return Err(Error::new(ErrorKind::InvalidFormat).with_message("Invalid signature"));
-            }
-
             let received_session_request_message: V1RequestMessage = stream.receiver.lock().await.recv_message_with::<V1RequestMessageCodec>().await?;
             let typ = match received_session_request_message.request_type {
                 V1RequestType::Unknown => None,
@@ -257,7 +268,7 @@ impl Inner {
                     typ,
                     address: OmniAddr::new(format!("tcp({addr})").as_str()),
                     handshake_type: SessionHandshakeType::Accepted,
-                    cert: received_signature_message.cert,
+                    cert,
                     stream,
                 };
                 permit.send(session);
@@ -289,7 +300,7 @@ mod tests {
     use testresult::TestResult;
     use tokio::net::TcpStream;
 
-    use omnius_core_base::sleeper::FakeSleeper;
+    use omnius_core_base::{clock::ClockUtc, sleeper::FakeSleeper};
     use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
 
     use crate::{
@@ -306,6 +317,7 @@ mod tests {
         let session_accepter = SessionAccepter::new(
             Arc::new(PendingTcpAccepter),
             signer,
+            Arc::new(ClockUtc),
             Arc::new(FakeSleeper),
             rng,
             &[SessionType::NodeFinder],

@@ -23,6 +23,7 @@ impl SessionType {
 #[derive(Debug, Clone)]
 pub struct SessionOption {
     pub handshake_timeout: Duration,
+    pub max_clock_skew: Duration,
     pub max_pending_handshake_count: usize,
     pub handshake_max_frame_length: usize,
 }
@@ -33,6 +34,7 @@ impl SessionOption {
     pub fn new() -> Self {
         Self {
             handshake_timeout: Duration::from_secs(10),
+            max_clock_skew: Duration::from_secs(5 * 60),
             max_pending_handshake_count: 64,
             handshake_max_frame_length: Self::HANDSHAKE_MAX_FRAME_LENGTH,
         }
@@ -74,6 +76,7 @@ mod tests {
     fn session_option_defaults_match_input_boundary_limits() {
         let option = SessionOption::default();
         assert_eq!(option.handshake_timeout, Duration::from_secs(10));
+        assert_eq!(option.max_clock_skew, Duration::from_secs(5 * 60));
         assert_eq!(option.max_pending_handshake_count, 64);
         assert_eq!(option.handshake_max_frame_length, 16 * 1024);
     }

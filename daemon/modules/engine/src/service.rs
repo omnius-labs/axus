@@ -87,6 +87,7 @@ impl AxusService {
             SessionAccepter::new(
                 tcp_accepter.clone(),
                 signer.clone(),
+                clock.clone(),
                 sleeper.clone(),
                 rng.clone(),
                 &[SessionType::NodeFinder],
@@ -94,7 +95,7 @@ impl AxusService {
             )
             .await,
         );
-        let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, rng.clone(), SessionOption::default()));
+        let session_connector = Arc::new(SessionConnector::new(tcp_connector.clone(), signer, clock.clone(), rng.clone(), SessionOption::default()));
 
         let node_ref_repo_dir = state_dir.join("repo");
         tokio::fs::create_dir_all(&node_ref_repo_dir).await?;

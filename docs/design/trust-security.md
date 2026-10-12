@@ -12,7 +12,7 @@
 | [design.md](../design.md#11-文書間の責務分担) | 全体構成、他の関心事との境界、横断的な依存関係 |
 | 本書 | security の保証範囲、脅威、identity、Web of Trust の設計判断 |
 | [session.md](./session.md#2-責務と境界) | Session の確立と用途分離 |
-| [file-transfer.md](./file-transfer.md#5-接続相手と-block-の検証) | block の内容 hash 検証 |
+| [file-transfer.md](./file-transfer.md#5-block-交換) | block の内容 hash 検証 |
 | [profile-memo.md](./profile-memo.md#2-責務と境界) | Profile の payload と memo の責務境界 |
 
 ### 1.2 本書の時制について
@@ -46,7 +46,7 @@ Web of Trust はこの信頼選別を担い、transport の盗聴と改竄は Se
 NodeFinder の中継は情報を増幅し得るため、TTL、件数、接続数、message size の上限と、handshake と受信の期限を protocol の入力境界で強制する。
 Session の認証と用途選択までの handshake は、TCP 接続後から全体で 10 秒、受理側の同時数は 64 本以下とする。
 上限を超えた接続は読み書きせずに閉じ、期限を超えた接続も閉じる。
-frame の上限は handshake 中が 16 KiB、用途選択後は NodeFinder が 256 KiB、FileExchanger が 64 MiB であり、受信時に上限を超えた Session は閉じる。
+frame の上限は handshake 中が 16 KiB、用途選択後は NodeFinder が 256 KiB、FileExchanger が block の最大長 1 MiB を基準にした値であり、受信時に上限を超えた Session は閉じる。
 これらは認証前後の相手による受信側の資源消費を抑えるための制約であり、詳細と採用理由は [session.md](./session.md#51-決定済み) が正とする。
 NodeFinder は Hello/Profile 交換中も、確立後も、通信周期の 3 倍の間受信がなければ Session を閉じる。
 既定の通信周期は 20 秒なので受信期限は 60 秒であり、内容が空でも相手は毎周期 DataMessage を送る。
@@ -69,6 +69,7 @@ frame の byte 数と要素数の両方を制限することで、受信側の�
 伝播の手順と件数上限の採用理由は [node-finder.md](./node-finder.md#61-決定済み)、byte 長と送信予算の判断は [rocketpack.md](./rocketpack.md#5-設計判断) が正とする。
 
 FileExchanger は受信 block を hash 検証し、Profile 交換は署名と version 検証を通す。
+FileExchanger は検証に失敗した block を送った node ID を一定時間除外するが、鍵を作り直した相手には除外が及ばない（[file-transfer.md](./file-transfer.md#57-検証と違反)）。
 
 ## 4. 設計判断
 

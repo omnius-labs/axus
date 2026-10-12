@@ -20,7 +20,7 @@
 | [rocketpack.md](./design/rocketpack.md#1-このドキュメントについて) | RocketPack 型の生成、wire format の移行規約 |
 | [session.md](./design/session.md#1-このドキュメントについて) | transport、Session の確立、用途分離、停止 |
 | [node-finder.md](./design/node-finder.md#1-このドキュメントについて) | ノード探索、情報伝播、距離計算、探索状態 |
-| [file-transfer.md](./design/file-transfer.md#1-このドキュメントについて) | ファイルの公開、購読、Merkle 構造、出力先の予約、block の検証 |
+| [file-transfer.md](./design/file-transfer.md#1-このドキュメントについて) | ファイルの公開、購読、Merkle 構造、出力先の予約、block 交換 protocol、block の検証 |
 | [storage.md](./design/storage.md#1-このドキュメントについて) | metadata、block、出力 file の永続化、確定と回収、障害後の回復、migration |
 | [trust-security.md](./design/trust-security.md#1-このドキュメントについて) | 認証、暗号化、内容検証、identity、Web of Trust |
 | [profile-memo.md](./design/profile-memo.md#1-このドキュメントについて) | Profile と memo の責務境界、参照する公開データ |
@@ -155,7 +155,7 @@ file の公開から復号までは、P2P 転送を介さない engine 内の試
 | 番号 | 内容 | 前提とする依存 |
 | --- | --- | --- |
 | 1 | NodeProfile の到達先の真正性を決める | [trust-security.md](./design/trust-security.md#nodeprofile-の到達先の真正性) |
-| 2 | FileExchanger の block 交換 protocol と hash 検証を定義して実装する | 1、[file-transfer.md](./design/file-transfer.md#62-保留) の公開側の接続先と照合位置の判断 |
+| 2 | FileExchanger の block 交換 protocol と hash 検証を実装する | 1、[file-transfer.md](./design/file-transfer.md#5-block-交換) の設計 |
 | 3 | 公開、購読、進捗、cancel の REST API を定義する | 2、[daemon-api.md](./design/daemon-api.md#52-保留) の長時間操作と到達範囲の判断 |
 | 4 | Web of Trust、Profile、memo を順に定義する | [trust-security.md](./design/trust-security.md#4-設計判断)、FileRef を解決できる 2 |
 

@@ -104,14 +104,14 @@ shutdown は handshake の task も cancellation token で終了させ、その�
 
 **決定**
 handshake 中の frame は送受信とも 16 KiB 以下とする。
-用途選択後は NodeFinder の上限を 256 KiB、FileExchanger の上限を 64 MiB に切り替える。
+用途選択後は NodeFinder の上限を 256 KiB に、FileExchanger の上限を block の最大長 1 MiB に block の message の hash と tag の分を加えた値に切り替える。
 受信 frame が上限を超えた Session は閉じる。
-FileExchanger の確立後の受信期限は、block 交換 protocol を定義するときに決める。
+FileExchanger の確立後の受信期限は [file-transfer.md](./file-transfer.md#53-状態-message-と-session-の寿命) が正とする。
 
 **理由**
 認証前の message に必要な範囲へ上限を下げ、受信側が frame のために確保する memory を抑えるためである。
 NodeFinder も伝播情報の受信で資源を消費するため、確立後に 256 KiB の上限を持つ。
-FileExchanger は block 交換 protocol が未定義なので、既存の 64 MiB を維持する。
+FileExchanger が送る最大の message は block を 1 つ載せた message なので、上限は block の最大長から定める（[file-transfer.md](./file-transfer.md#block-の最大長を-1-mib-にする)）。
 
 #### NodeFinder の message の要素数
 
@@ -213,6 +213,7 @@ version と用途選択の message は、暗号化された stream で交換す�
 SessionOption の期限、同時数、frame 上限を SessionAccepter と SessionConnector に渡し、handshake の入力境界で強制する。
 受理側は TCP の受理と接続ごとの handshake task を分け、shutdown は cancel 後にすべての task の終了を待つ。
 用途選択後の frame 上限の切り替えも実装している。
+FileExchanger の frame 上限は 64 MiB のままであり、§5.1 の値への引き下げは block 交換の実装で行う。
 NodeFinder の Hello/Profile 交換時と確立後の受信期限は、通信周期の 3 倍として実装している。
 DataMessage と NodeProfile の wire decode で、確保前に要素数の上限を検査する。
 上限を超えた Session の切断と、送信側が上限以下へ絞った情報の往復を test で確認している。

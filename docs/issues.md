@@ -44,7 +44,6 @@
 | FileExchanger の block 交換 protocol がない | [file-transfer.md](./design/file-transfer.md#7-現状と残作業) |
 | 公開と購読を始める REST API がない | [file-transfer.md](./design/file-transfer.md#7-現状と残作業) |
 | NodeFinder の能動探索がない | [node-finder.md](./design/node-finder.md#6-設計判断) |
-| 公開側が接続先を探す手段がない | [file-transfer.md](./design/file-transfer.md#公開側の接続先) |
 | REST API の到達範囲と認証が未決である | [daemon-api.md](./design/daemon-api.md#rest-api-の到達範囲と認証) |
 | Web of Trust が未設計である | [trust-security.md](./design/trust-security.md#4-設計判断) |
 | Profile と memo が未実装である | [profile-memo.md](./design/profile-memo.md#5-現状と残作業) |

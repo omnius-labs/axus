@@ -2,7 +2,7 @@
 
 ## 1. このドキュメントについて
 
-本書は node の所在情報を交換し、AssetKey を提供する node を探す NodeFinder の設計を扱う。
+本書は node の所在情報を交換し、AssetKey を広告した node を探す NodeFinder の設計を扱う。
 語の定義は [terms.md](../terms.md) が正とする。
 
 ### 1.1 文書間の責務分担
@@ -22,8 +22,10 @@
 
 ## 2. 責務と境界
 
-NodeFinder は既知 node の交換と、AssetKey を提供する node の所在情報を扱う。
-要求は AssetKey だけで伝え、要求元の NodeProfile は運ばないため、NodeFinder が返すのは提供する node だけである（[file-transfer.md](./file-transfer.md#公開側の接続先)）。
+NodeFinder は既知 node の交換と、AssetKey を広告した node の所在情報を扱う。
+要求は AssetKey だけで伝え、要求元の NodeProfile を載せないため、NodeFinder が返すのは、その AssetKey を広告した node だけである。
+何を広告するかは上位 component が決める。
+FileExchanger は取得途中の file も広告するため、file の所在情報には block を一部しか持たない node が含まれる（[file-transfer.md](./file-transfer.md#購読は開始時から所在として広告する)）。
 NodeFinder は asset の内容を解釈せず、AssetKey と NodeProfile の対応だけを返す。
 FileExchanger はこの境界を使うため、探索の message と file 交換の message を混在させない。
 

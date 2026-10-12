@@ -29,6 +29,9 @@
 | rank | file-transfer | `MerkleLayer.rank` | - | Merkle 構造における block の階層。file 本体の block を 0 とする | - |
 | root hash | file-transfer | `OmniHash` | - | 最上位 block の hash である内容識別子 | - |
 | 出力先予約 | file-transfer | - | - | 進行中の購読の出力先を、ほかの購読が出力先にできないようにする購読の行の一意制約 | - |
+| choke | file-transfer | - | - | 相手 node からの block の要求に応じない状態。node 単位で判定し、解除を unchoke と呼ぶ | - |
+| 状態 message | file-transfer | - | - | 相手の block を欲しいかどうかと、相手を choke しているかどうかを伝える FileExchanger の message | - |
+| 不保持の応答 | file-transfer | - | - | 要求された hash の block を保持していないことを伝える FileExchanger の message | - |
 | committed file | file-transfer | `PublishedCommittedFile` | - | root hash を確定し、network へ広告できる公開側の file。root hash と file 名の組で識別する | - |
 | uncommitted file | file-transfer | `PublishedUncommittedFile` | - | import してから root hash を確定するまでの公開側の file。一時 ID で識別する | - |
 | 一時出力 | file-transfer | - | `.<entry 名>.axus-<購読 ID>.part` | 購読ごとに出力先と同じ directory へ規約の名前で作り、復号結果を書き込む file | - |
@@ -36,7 +39,7 @@
 | Task | file-transfer | `TaskDecoder`、`TaskEncoder` | - | 符号化・復号、確定前の取り消し、sweep と出力配置の再試行を制御する component。FileExchanger の接続用 task とは別である | - |
 | AssetKey | node-finder | `AssetKey` | - | NodeFinder が所在を探索する対象の識別子 | ファイル参照 |
 | bootstrap node | node-finder | `bootstrap_node_profiles` | `p2p.bootstrap_nodes` | 起動時に既知 node へ加える、設定で与えた NodeProfile | - |
-| 所在情報 | node-finder | `give_asset_key_locations` | - | AssetKey と、それを提供する NodeProfile 群の対応 | - |
+| 所在情報 | node-finder | `give_asset_key_locations` | - | AssetKey と、それを広告した node の NodeProfile 群の対応 | - |
 | NodeFinder | node-finder | `NodeFinder` | - | 既知 node を交換し、AssetKey の所在情報を探す component | - |
 | 既知 node | node-finder | `NodeFinderRepo` | - | 接続の候補として保存した NodeProfile の集合 | - |
 | NodeProfile | node-finder | `NodeProfile` | `axus:node/` URI | P2P network 上の node の公開鍵と到達先の組 | - |

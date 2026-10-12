@@ -29,13 +29,10 @@
 | [確立後の send_message と受理待ちの Session に期限がない](./issues/session-accept-and-message-without-deadline.md) | 中 | 2026-10-07 | - |
 | [output_lock が全購読で共通で、出力中の購読が他の購読の確定を止める](./issues/output-lock-shared-across-subscriptions.md) | 中 | 2026-10-07 | - |
 | [Failed や Canceled の行の出力先 directory が消えると、sweep の再試行が続き remove もできなくなる](./issues/vanished-output-directory-blocks-sweep-and-remove.md) | 中 | 2026-10-07 | - |
-| [アドレスが変わった node が既知 node に重複して残る](./issues/node-profile-rows-keyed-by-uri.md) | 低 | 2026-09-24 | - |
 | [delete_bulk が存在しない key を含むと何も削除せずに成功する](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | 低 | 2026-10-06 | - |
 | [TaskCommunicator::start が受理 channel が閉じても loop を抜けない](./issues/task-communicator-spins-on-closed-session-channel.md) | 低 | 2026-10-07 | - |
 | [SessionConnector が用途選択の結果 Unknown を受理する](./issues/session-connector-accepts-unknown-result.md) | 低 | 2026-10-11 | - |
-| [接続側が接続候補の公開鍵を Session の cert と照合しない](./issues/dialer-does-not-match-candidate-public-key.md) | 中 | 2026-10-11 | - |
-
-既知 node の重複は、NodeProfile の到達先の真正性（[trust-security.md](./design/trust-security.md#nodeprofile-の到達先の真正性)）を決めると保存形式も変わり得るため、あわせて扱う。
+| [接続側が接続候補の公開鍵を Session の cert と照合しない](./issues/dialer-does-not-match-candidate-public-key.md) | 中 | 2026-10-12 | - |
 
 ## 3. ここに含めていないもの
 

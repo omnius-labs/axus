@@ -129,7 +129,7 @@ NodeFinder は frame の上限に加え、次の要素数を送受信の上限�
 
 上限を超える message は decode で要素数を読んだ直後、collection を確保する前に拒否し、Session を閉じる。
 NodeProfile の `addrs` は wire の decode で検査し、NodeFinder の ProfileMessage にも適用する。
-URI も同じ生成 NodeProfile の制約に従い、自 node のアドレスは起動時に 8 件へ切り詰めて警告を記録する。
+URI も同じ生成 NodeProfile の制約に従い、自 node のアドレスは署名の前に起動時に 8 件へ切り詰めて警告を記録する。
 送信候補の絞り込みと集積情報の扱いは [node-finder.md](./node-finder.md#61-決定済み) が正とする。
 
 **理由**

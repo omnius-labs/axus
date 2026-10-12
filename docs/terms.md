@@ -42,9 +42,10 @@
 | 所在情報 | node-finder | `give_asset_key_locations` | - | AssetKey と、それを広告した node の NodeProfile 群の対応 | - |
 | NodeFinder | node-finder | `NodeFinder` | - | 既知 node を交換し、AssetKey の所在情報を探す component | - |
 | 既知 node | node-finder | `NodeFinderRepo` | - | 接続の候補として保存した NodeProfile の集合 | - |
-| NodeProfile | node-finder | `NodeProfile` | `axus:node/` URI | P2P network 上の node の公開鍵と到達先の組 | - |
+| NodeProfile | node-finder | `NodeProfile` | `axus:node/` URI | P2P network 上の node の公開鍵、到達先、更新時刻を、その node 本人の署名で結んだ値 | - |
 | 到達先 | node-finder | `NodeProfile.addrs` | - | NodeProfile に載せる、その node へ接続できるアドレスの列 | - |
 | node ID | node-finder | `NodeProfile::id()` | - | node の公開鍵の SHA3-256 hash。Kadex の距離計算と Session の重複判定に使う | NodeProfile.id |
+| 更新時刻 | node-finder | `NodeProfile::updated_time` | - | NodeProfile に署名した時刻（unix 秒）。同じ node ID の NodeProfile の新旧を決める | - |
 | FileRef | profile-memo | `FileRef` | - | 上位データが公開済み file を参照する名前と hash の組 | ファイル本体 |
 | memo | profile-memo | `MemoExchanger` | - | Profile を探索、交換、配布する下位機構 | 投稿本文 |
 | Profile | profile-memo | `Profile` | - | 主体の公開情報と公開データへの FileRef 群を表す上位データ | - |
@@ -79,12 +80,12 @@ root hash を予約の単位にすると、同じ内容を別の出力先へ購�
 #### NodeProfile と Session
 
 **境界**
-NodeProfile は探索に使う node の公開鍵と到達先である。
+NodeProfile は探索に使う node の公開鍵と到達先を、node 本人が署名して結んだ値である。
 Session は相手の署名を検証して鍵を合意した後に用途へ渡す通信路であり、相手が誰であるかについては、通信の相手がその公開鍵の秘密鍵を持つことだけを保証する。
 両者の公開鍵の照合は [trust-security.md](./design/trust-security.md#node-id-は公開鍵から導出する) が扱う。
 
 **取り違えると何が起きるか**
-NodeProfile を受け取っただけで、その到達先や相手への信頼まで確定したものとして扱うと、署名のない到達先と未決の trust の contract を迂回する。
+NodeProfile の署名を検証できたことを、その node への信頼や、到達先が現在もその node のものであることの保証として扱うと、Session で確かめる相手と未決の trust の contract を迂回する。
 
 <a id="t-asset-key-vs-file-ref"></a>
 #### AssetKey と FileRef

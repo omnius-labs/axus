@@ -56,7 +56,7 @@ impl AxusService {
         for profile in &option.bootstrap_node_profiles {
             profile.to_uri()?;
         }
-        NodeProfile::new(vec![], option.advertise_addrs.clone()).validate_byte_lengths()?;
+        NodeProfile::validate_addr_byte_lengths(&option.advertise_addrs)?;
         let tcp_accepter = ConnectionTcpAccepterImpl::new(&OmniAddr::from_host_and_port_str(listen_addr)?, option.use_upnp).await?;
         let my_addrs = if option.advertise_addrs.is_empty() {
             tcp_accepter.get_advertised_addrs().await?
@@ -79,8 +79,16 @@ impl AxusService {
         let sleeper: Arc<dyn Sleeper + Send + Sync> = Arc::new(SleeperImpl);
         let identity = NodeIdentity::load_or_create(&state_dir.join("identity")).await?;
         let signer = identity.signer();
-        let my_node_profile = NodeProfile::new(identity.public_key().to_vec(), my_addrs);
-        my_node_profile.validate_byte_lengths()?;
+        let mut my_addrs = my_addrs;
+        if my_addrs.len() > NodeProfile::MAX_WIRE_ADDRS {
+            warn!(
+                address_count = my_addrs.len(),
+                max_address_count = NodeProfile::MAX_WIRE_ADDRS,
+                "too many addresses to advertise; truncating node profile"
+            );
+            my_addrs.truncate(NodeProfile::MAX_WIRE_ADDRS);
+        }
+        let my_node_profile = NodeProfile::sign(&signer, my_addrs, clock.now())?;
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
 
         let session_accepter = Arc::new(
@@ -102,7 +110,7 @@ impl AxusService {
 
         let node_profile_repo = Arc::new(NodeFinderRepo::new(node_ref_repo_dir.as_os_str().to_str().unwrap(), clock.clone()).await?);
         let bootstrap_node_profiles: Vec<&NodeProfile> = option.bootstrap_node_profiles.iter().collect();
-        node_profile_repo.insert_or_ignore_node_profiles(&bootstrap_node_profiles, 0).await?;
+        node_profile_repo.insert_or_update_node_profiles(&bootstrap_node_profiles, 0).await?;
 
         let node_profile_fetcher = Arc::new(NodeProfileFetcherImpl::new(&[]));
         let node_finder_dir = state_dir.join("finder");
@@ -142,6 +150,8 @@ mod tests {
     use crate::protocol::MessageCodec;
     use std::{net::TcpListener, time::Duration};
 
+    use chrono::Utc;
+
     use testresult::TestResult;
 
     use omnius_core_omnikit::generated::omni_hash::{OmniHash, OmniHashAlgorithmType};
@@ -160,16 +170,10 @@ mod tests {
     #[tokio::test]
     async fn oversized_configuration_fails_before_starting_workers() -> TestResult {
         let dir = tempfile::tempdir()?;
-        for option in [
-            AxusServiceOption {
-                advertise_addrs: vec![OmniAddr::new("a".repeat(513))],
-                ..Default::default()
-            },
-            AxusServiceOption {
-                bootstrap_node_profiles: vec![NodeProfile::new(vec![0; 257], vec![])],
-                ..Default::default()
-            },
-        ] {
+        for option in [AxusServiceOption {
+            advertise_addrs: vec![OmniAddr::new("a".repeat(513))],
+            ..Default::default()
+        }] {
             assert!(AxusService::new(dir.path(), "127.0.0.1:0", dir.path(), option).await.is_err());
         }
         assert!(!dir.path().join("identity").exists());
@@ -184,10 +188,7 @@ mod tests {
         let owner = AxusService::new(dir.path().join("owner"), format!("127.0.0.1:{owner_port}"), dir.path(), fast_option(vec![])).await?;
         let owner_id = owner.node_finder.my_node_profile().id().to_vec();
 
-        let owner_node_profile = NodeProfile::new(
-            owner.node_finder.my_node_profile().public_key().to_vec(),
-            vec![OmniAddr::create_tcp("127.0.0.1".parse()?, owner_port)],
-        );
+        let owner_node_profile = owner.node_finder.my_node_profile();
         let seeker_port = free_port()?;
         let seeker = AxusService::new(
             dir.path().join("seeker"),
@@ -227,7 +228,11 @@ mod tests {
 
         assert!(found.iter().all(|node_profile| node_profile.id() == owner_id.as_slice()));
         // owner は特定のアドレスで待ち受けているため、そのアドレスを広告する
-        assert!(found.iter().all(|node_profile| node_profile.addrs == owner_node_profile.addrs));
+        assert!(
+            found
+                .iter()
+                .all(|node_profile| node_profile.addrs() == [OmniAddr::create_tcp("127.0.0.1".parse().unwrap(), owner_port)])
+        );
         assert_eq!(seeker.node_finder.get_session_count().await, 1);
         assert_eq!(owner.node_finder.get_session_count().await, 1);
 
@@ -247,14 +252,16 @@ mod tests {
             let (a_port, b_port) = (free_port()?, free_port()?);
 
             // 互いを bootstrap に指定するため、起動の前に鍵を作って公開鍵を確定させる
-            let a_node_profile = NodeProfile::new(
-                NodeIdentity::load_or_create(&a_dir.join("identity")).await?.public_key().to_vec(),
+            let a_node_profile = NodeProfile::sign(
+                &NodeIdentity::load_or_create(&a_dir.join("identity")).await?.signer(),
                 vec![OmniAddr::create_tcp("127.0.0.1".parse()?, a_port)],
-            );
-            let b_node_profile = NodeProfile::new(
-                NodeIdentity::load_or_create(&b_dir.join("identity")).await?.public_key().to_vec(),
+                Utc::now(),
+            )?;
+            let b_node_profile = NodeProfile::sign(
+                &NodeIdentity::load_or_create(&b_dir.join("identity")).await?.signer(),
                 vec![OmniAddr::create_tcp("127.0.0.1".parse()?, b_port)],
-            );
+                Utc::now(),
+            )?;
 
             let (a, b) = tokio::try_join!(
                 AxusService::new(&a_dir, format!("127.0.0.1:{a_port}"), dir.path(), fast_option(vec![b_node_profile])),
@@ -361,7 +368,7 @@ mod tests {
         };
 
         let service = AxusService::new(dir.path().join("node"), "127.0.0.1:0", dir.path(), option).await?;
-        assert_eq!(service.node_finder.my_node_profile().addrs, advertise_addrs);
+        assert_eq!(service.node_finder.my_node_profile().addrs(), advertise_addrs);
 
         service.shutdown().await;
 
@@ -378,7 +385,7 @@ mod tests {
         };
         let service = AxusService::new(dir.path().join("state"), format!("127.0.0.1:{}", free_port()?), dir.path(), option).await?;
         let profile = service.node_finder.my_node_profile();
-        assert_eq!(profile.addrs, addrs[..NodeProfile::MAX_WIRE_ADDRS]);
+        assert_eq!(profile.addrs(), &addrs[..NodeProfile::MAX_WIRE_ADDRS]);
         assert_eq!(crate::protocol::NodeProfileCodec::decode(&crate::protocol::NodeProfileCodec::encode(&profile)?)?, profile);
         service.shutdown().await;
         Ok(())

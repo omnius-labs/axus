@@ -108,7 +108,7 @@ impl TaskComputer {
     pub async fn set_initial_node_profile(&self) -> Result<()> {
         let node_profiles = self.node_profile_fetcher.fetch().await?;
         let node_profiles: Vec<&NodeProfile> = node_profiles.iter().collect();
-        self.node_profile_repo.insert_or_ignore_node_profiles(&node_profiles, 0).await?;
+        self.node_profile_repo.insert_or_update_node_profiles(&node_profiles, 0).await?;
 
         Ok(())
     }
@@ -253,17 +253,8 @@ impl TaskComputer {
     }
 
     fn select_node_profiles(&self, mut profiles: Vec<Arc<NodeProfile>>, max_count: usize) -> Vec<Arc<NodeProfile>> {
-        let mut rng = self.rng.lock();
-        profiles.shuffle(&mut rng);
+        profiles.shuffle(&mut *self.rng.lock());
         profiles.truncate(max_count);
-        for profile in &mut profiles {
-            // URI から取得した既知 node も、送信時には wire の上限へ収める
-            if profile.addrs.len() > NodeProfile::MAX_WIRE_ADDRS {
-                let profile = Arc::make_mut(profile);
-                profile.addrs.shuffle(&mut rng);
-                profile.addrs.truncate(NodeProfile::MAX_WIRE_ADDRS);
-            }
-        }
         profiles
     }
 

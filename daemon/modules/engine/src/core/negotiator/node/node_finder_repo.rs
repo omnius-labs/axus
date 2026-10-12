@@ -40,7 +40,9 @@ impl NodeFinderRepo {
             name: "2024-03-19_init".to_string(),
             queries: r#"
 CREATE TABLE IF NOT EXISTS node_profiles (
-    value TEXT NOT NULL PRIMARY KEY,
+    node_id BLOB NOT NULL PRIMARY KEY,
+    value TEXT NOT NULL,
+    profile_updated_time INTEGER NOT NULL,
     weight INTEGER NOT NULL,
     created_time TIMESTAMP NOT NULL,
     updated_time TIMESTAMP NOT NULL
@@ -78,25 +80,38 @@ SELECT value
         Ok(res)
     }
 
-    pub async fn insert_or_ignore_node_profiles(&self, items: &[&NodeProfile], weight: i64) -> Result<()> {
+    /// node ID ごとに 1 行だけ保持し、`NodeProfile::updated_time` が新しいものだけで置き換える。
+    /// 置き換えても `weight` は変えない
+    pub async fn insert_or_update_node_profiles(&self, items: &[&NodeProfile], weight: i64) -> Result<()> {
         const CHUNK_SIZE: i64 = 100;
 
         for chunk in items.chunks(CHUNK_SIZE as usize) {
             let mut query_builder: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new(
                 r#"
-INSERT OR IGNORE INTO node_profiles (value, weight, created_time, updated_time)
+INSERT INTO node_profiles (node_id, value, profile_updated_time, weight, created_time, updated_time)
 "#,
             );
 
             let now = self.clock.now().naive_utc();
-            let rows: Vec<String> = chunk.iter().map(|v| v.to_uri()).collect::<Result<_>>()?;
+            let rows: Vec<(Vec<u8>, String, i64)> = chunk.iter().map(|v| Ok((v.id().to_vec(), v.to_uri()?, v.updated_time()))).collect::<Result<_>>()?;
 
-            query_builder.push_values(rows, |mut b, row| {
-                b.push_bind(row);
+            query_builder.push_values(rows, |mut b, (node_id, value, profile_updated_time)| {
+                b.push_bind(node_id);
+                b.push_bind(value);
+                b.push_bind(profile_updated_time);
                 b.push_bind(weight);
                 b.push_bind(now);
                 b.push_bind(now);
             });
+            query_builder.push(
+                r#"
+ON CONFLICT (node_id) DO UPDATE SET
+    value = excluded.value,
+    profile_updated_time = excluded.profile_updated_time,
+    updated_time = excluded.updated_time
+    WHERE excluded.profile_updated_time > node_profiles.profile_updated_time
+"#,
+            );
             query_builder.build().execute(self.db.as_ref()).await?;
         }
 
@@ -143,9 +158,15 @@ mod tests {
     use testresult::TestResult;
 
     use omnius_core_base::clock::FakeClockUtc;
-    use omnius_core_omnikit::model::omni_addr::OmniAddr;
+    use omnius_core_omnikit::{
+        generated::omni_sign::{OmniSignType, OmniSigner},
+        model::omni_addr::OmniAddr,
+    };
 
-    use crate::model::NodeProfile;
+    use crate::{
+        model::NodeProfile,
+        protocol::{MessageCodec as _, NodeProfileCodec},
+    };
 
     use super::NodeFinderRepo;
 
@@ -175,35 +196,84 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_stored_profiles_are_skipped_without_deleting_rows() -> TestResult {
-        use crate::protocol::{tests::legacy, uri::UriConverter};
+        use crate::{generated::axus::model as wire, protocol::uri::UriConverter};
         let dir = tempfile::tempdir()?;
         let clock = Arc::new(FakeClockUtc::new(DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")?.into()));
         let repo = NodeFinderRepo::new(dir.path().to_str().unwrap(), clock).await?;
-        let valid = NodeProfile::new(vec![1], vec![OmniAddr::new("addr")]);
-        repo.insert_or_ignore_node_profiles(&[&valid], 0).await?;
-        let old = legacy::NodeProfile::new(vec![2; 257], vec![]);
-        let uri = UriConverter::encode("node", &old)?;
-        sqlx::query("INSERT INTO node_profiles (value, weight, created_time, updated_time) VALUES (?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+        let valid = NodeProfile::random_for_test(vec![OmniAddr::new("addr")]);
+        repo.insert_or_update_node_profiles(&[&valid], 0).await?;
+
+        let unsigned = UriConverter::encode(
+            "node",
+            &wire::NodeProfileSigningPayload {
+                public_key: vec![2; 32],
+                addrs: vec![],
+                updated_time: 0,
+            },
+        )?;
+        let forged = UriConverter::encode(
+            "node",
+            &wire::NodeProfile {
+                signature: vec![0; 64],
+                ..NodeProfileCodec::to_wire(&NodeProfile::random_for_test(vec![]))
+            },
+        )?;
+        for (node_id, uri) in [(vec![2u8], unsigned), (vec![3u8], forged)] {
+            sqlx::query(
+                "INSERT INTO node_profiles (node_id, value, profile_updated_time, weight, created_time, updated_time) VALUES (?, ?, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            .bind(node_id)
             .bind(uri)
             .execute(repo.db.as_ref())
             .await?;
+        }
         assert_eq!(repo.fetch_node_profiles().await?, vec![valid]);
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM node_profiles").fetch_one(repo.db.as_ref()).await?;
-        assert_eq!(count, 2);
+        assert_eq!(count, 3);
         Ok(())
     }
 
     #[tokio::test]
-    async fn oversized_profile_returns_an_error_without_changing_stored_profiles() -> TestResult {
+    async fn newer_profile_replaces_the_stored_profile_of_the_same_node() -> TestResult {
         let dir = tempfile::tempdir()?;
         let clock = Arc::new(FakeClockUtc::new(DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")?.into()));
         let repo = NodeFinderRepo::new(dir.path().to_str().unwrap(), clock).await?;
-        let valid = NodeProfile::new(vec![1], vec![OmniAddr::new("addr"); NodeProfile::MAX_WIRE_ADDRS]);
-        repo.insert_or_ignore_node_profiles(&[&valid], 1).await?;
+        let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?;
+        let at = |seconds: i64| DateTime::from_timestamp(seconds, 0).unwrap();
+        let first = NodeProfile::sign(&signer, vec![OmniAddr::new("old")], at(100))?;
+        let second = NodeProfile::sign(&signer, vec![OmniAddr::new("new")], at(200))?;
+        let other = NodeProfile::random_for_test(vec![OmniAddr::new("other")]);
 
-        let oversized = NodeProfile::new(vec![2], vec![OmniAddr::new("addr"); NodeProfile::MAX_WIRE_ADDRS + 1]);
-        assert!(repo.insert_or_ignore_node_profiles(&[&oversized], 1).await.is_err());
-        assert_eq!(repo.fetch_node_profiles().await?, vec![valid]);
+        repo.insert_or_update_node_profiles(&[&first, &other], 5).await?;
+        repo.insert_or_update_node_profiles(&[&second], 0).await?;
+
+        let stored = repo.fetch_node_profiles().await?;
+        assert_eq!(stored.len(), 2);
+        assert!(stored.contains(&second));
+        assert!(stored.contains(&other));
+        let weight: i64 = sqlx::query_scalar("SELECT weight FROM node_profiles WHERE node_id = ?")
+            .bind(second.id())
+            .fetch_one(repo.db.as_ref())
+            .await?;
+        assert_eq!(weight, 5);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn older_or_equal_profile_does_not_replace_the_stored_profile() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let clock = Arc::new(FakeClockUtc::new(DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")?.into()));
+        let repo = NodeFinderRepo::new(dir.path().to_str().unwrap(), clock).await?;
+        let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?;
+        let at = |seconds: i64| DateTime::from_timestamp(seconds, 0).unwrap();
+        let current = NodeProfile::sign(&signer, vec![OmniAddr::new("current")], at(200))?;
+        let older = NodeProfile::sign(&signer, vec![OmniAddr::new("older")], at(100))?;
+        let same_time = NodeProfile::sign(&signer, vec![OmniAddr::new("same-time")], at(200))?;
+
+        repo.insert_or_update_node_profiles(&[&current], 0).await?;
+        repo.insert_or_update_node_profiles(&[&older, &same_time], 0).await?;
+
+        assert_eq!(repo.fetch_node_profiles().await?, vec![current]);
         Ok(())
     }
 
@@ -216,11 +286,11 @@ mod tests {
         let repo = NodeFinderRepo::new(path, clock).await?;
 
         let vs: Vec<NodeProfile> = vec![
-            NodeProfile::new(vec![0], vec![OmniAddr::new("test")]),
-            NodeProfile::new(vec![1], vec![OmniAddr::new("test")]),
+            NodeProfile::random_for_test(vec![OmniAddr::new("test")]),
+            NodeProfile::random_for_test(vec![OmniAddr::new("test")]),
         ];
         let vs_ref: Vec<&NodeProfile> = vs.iter().collect();
-        repo.insert_or_ignore_node_profiles(&vs_ref, 1).await?;
+        repo.insert_or_update_node_profiles(&vs_ref, 1).await?;
 
         let res = repo.fetch_node_profiles().await?;
         assert_eq!(res, vs);

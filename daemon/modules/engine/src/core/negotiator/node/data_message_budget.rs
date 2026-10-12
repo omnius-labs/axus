@@ -104,7 +104,7 @@ mod tests {
     use testresult::TestResult;
 
     fn maximum_candidates() -> SendingDataMessage {
-        let profile = Arc::new(NodeProfile::new(vec![1; 256], vec![OmniAddr::new("a".repeat(512)); NodeProfile::MAX_WIRE_ADDRS]));
+        let profile = Arc::new(NodeProfile::random_for_test(vec![OmniAddr::new("a".repeat(512)); NodeProfile::MAX_WIRE_ADDRS]));
         let keys: Vec<_> = (0..DataMessage::MAX_WANT_ASSET_KEYS)
             .map(|i| {
                 Arc::new(AssetKey {
@@ -140,7 +140,7 @@ mod tests {
     fn maximum_field_values_are_budgeted_across_all_categories() -> TestResult {
         let full = message(maximum_candidates());
         let encoded_size = EncodedSize::of(&DataMessageCodec::to_wire(&full))?;
-        assert_eq!(encoded_size, 72_386_544);
+        assert_eq!(encoded_size, 70_088_304);
         assert!(matches!(
             DataMessageCodec::encode(&full),
             Err(RocketPackEncoderError::LengthOutOfRange { context: "DataMessage", .. })
@@ -169,8 +169,7 @@ mod tests {
     #[test]
     fn invalid_candidate_does_not_block_valid_information() -> TestResult {
         let mut candidates = SendingDataMessage::default();
-        candidates.push_node_profiles.push(Arc::new(NodeProfile::new(vec![0; 257], vec![])));
-        candidates.push_node_profiles.push(Arc::new(NodeProfile::new(vec![1], vec![])));
+        candidates.push_node_profiles.push(Arc::new(NodeProfile::random_for_test(vec![])));
         candidates.want_asset_keys.push(Arc::new(AssetKey {
             typ: "a".repeat(65),
             hash: OmniHash {

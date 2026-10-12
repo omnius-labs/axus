@@ -210,7 +210,7 @@ impl TaskConnector {
             let node_profiles: Vec<Arc<NodeProfile>> = node_profiles.into_iter().filter(|n| !connected_ids.contains(n.id())).collect();
 
             for node_profile in node_profiles {
-                for addr in node_profile.addrs.iter() {
+                for addr in node_profile.addrs().iter() {
                     if let Ok(session) = self.session_connector.connect(addr, &SessionType::FileExchanger).await {
                         let status = SessionStatus::new(exchange_type, session, Some(asset_key.hash.clone()), self.clock.clone());
                         self.session_sender

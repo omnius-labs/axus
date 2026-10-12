@@ -1,4 +1,5 @@
 // Frozen pre-migration codecs. Only compatibility tests may use these types.
+// NodeProfile follows the wire format with a signature: it packs without verifying, so tests can craft invalid values.
 #![allow(dead_code)]
 mod asset_key;
 mod data_message;

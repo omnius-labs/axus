@@ -102,6 +102,8 @@ impl omnius_core_rocketpack::RocketPackStruct for FileRef {
 pub struct NodeProfile {
     pub public_key: Vec<u8>,
     pub addrs: Vec<String>,
+    pub updated_time: i64,
+    pub signature: Vec<u8>,
 }
 
 impl omnius_core_rocketpack::RocketPackStruct for NodeProfile {
@@ -111,11 +113,12 @@ impl omnius_core_rocketpack::RocketPackStruct for NodeProfile {
         for item in (&value.addrs).iter() {
             omnius_core_rocketpack::validate_length("NodeProfile.addrs[]", 0, 512, (item).len())?;
         }
+        omnius_core_rocketpack::validate_length("NodeProfile.signature", 0, 64, (&value.signature).len())?;
         Ok(())
     }
 
     fn pack(encoder: &mut impl omnius_core_rocketpack::RocketPackEncoder, value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
-        encoder.write_map(2)?;
+        encoder.write_map(4)?;
         encoder.write_u64(0)?;
         omnius_core_rocketpack::validate_length("NodeProfile.public_key", 0, 256, (&value.public_key).len())?;
         encoder.write_bytes((&value.public_key).as_slice())?;
@@ -126,6 +129,11 @@ impl omnius_core_rocketpack::RocketPackStruct for NodeProfile {
             omnius_core_rocketpack::validate_length("NodeProfile.addrs[]", 0, 512, (item).len())?;
             encoder.write_string((item).as_str())?;
         }
+        encoder.write_u64(2)?;
+        encoder.write_i64(*(&value.updated_time))?;
+        encoder.write_u64(3)?;
+        omnius_core_rocketpack::validate_length("NodeProfile.signature", 0, 64, (&value.signature).len())?;
+        encoder.write_bytes((&value.signature).as_slice())?;
         Ok(())
     }
 
@@ -135,6 +143,8 @@ impl omnius_core_rocketpack::RocketPackStruct for NodeProfile {
     {
         let mut __rpf_storage_public_key: Option<Vec<u8>> = None;
         let mut __rpf_storage_addrs: Option<Vec<String>> = None;
+        let mut __rpf_storage_updated_time: Option<i64> = None;
+        let mut __rpf_storage_signature: Option<Vec<u8>> = None;
         let count = decoder.read_map()?;
 
         for _ in 0..count {
@@ -150,6 +160,12 @@ impl omnius_core_rocketpack::RocketPackStruct for NodeProfile {
                     }
                     __rpf_storage_addrs = Some(__values_1);
                 }
+                2 => {
+                    __rpf_storage_updated_time = Some(decoder.read_i64()?);
+                }
+                3 => {
+                    __rpf_storage_signature = Some(decoder.read_bytes_bounded("NodeProfile.signature", 0, 64)?);
+                }
                 _ => decoder.skip_field()?,
             }
         }
@@ -157,6 +173,79 @@ impl omnius_core_rocketpack::RocketPackStruct for NodeProfile {
         Ok(Self {
             public_key: __rpf_storage_public_key.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: public_key"))?,
             addrs: __rpf_storage_addrs.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: addrs"))?,
+            updated_time: __rpf_storage_updated_time.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: updated_time"))?,
+            signature: __rpf_storage_signature.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: signature"))?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NodeProfileSigningPayload {
+    pub public_key: Vec<u8>,
+    pub addrs: Vec<String>,
+    pub updated_time: i64,
+}
+
+impl omnius_core_rocketpack::RocketPackStruct for NodeProfileSigningPayload {
+    fn validate(value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        omnius_core_rocketpack::validate_length("NodeProfileSigningPayload.public_key", 0, 256, (&value.public_key).len())?;
+        omnius_core_rocketpack::validate_length("NodeProfileSigningPayload.addrs", 0, 8, (&value.addrs).len())?;
+        for item in (&value.addrs).iter() {
+            omnius_core_rocketpack::validate_length("NodeProfileSigningPayload.addrs[]", 0, 512, (item).len())?;
+        }
+        Ok(())
+    }
+
+    fn pack(encoder: &mut impl omnius_core_rocketpack::RocketPackEncoder, value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        encoder.write_map(3)?;
+        encoder.write_u64(0)?;
+        omnius_core_rocketpack::validate_length("NodeProfileSigningPayload.public_key", 0, 256, (&value.public_key).len())?;
+        encoder.write_bytes((&value.public_key).as_slice())?;
+        encoder.write_u64(1)?;
+        omnius_core_rocketpack::validate_length("NodeProfileSigningPayload.addrs", 0, 8, (&value.addrs).len())?;
+        encoder.write_array((&value.addrs).len())?;
+        for item in (&value.addrs).iter() {
+            omnius_core_rocketpack::validate_length("NodeProfileSigningPayload.addrs[]", 0, 512, (item).len())?;
+            encoder.write_string((item).as_str())?;
+        }
+        encoder.write_u64(2)?;
+        encoder.write_i64(*(&value.updated_time))?;
+        Ok(())
+    }
+
+    fn unpack(decoder: &mut impl omnius_core_rocketpack::RocketPackDecoder) -> std::result::Result<Self, omnius_core_rocketpack::RocketPackDecoderError>
+    where
+        Self: Sized,
+    {
+        let mut __rpf_storage_public_key: Option<Vec<u8>> = None;
+        let mut __rpf_storage_addrs: Option<Vec<String>> = None;
+        let mut __rpf_storage_updated_time: Option<i64> = None;
+        let count = decoder.read_map()?;
+
+        for _ in 0..count {
+            match decoder.read_u64()? {
+                0 => {
+                    __rpf_storage_public_key = Some(decoder.read_bytes_bounded("NodeProfileSigningPayload.public_key", 0, 256)?);
+                }
+                1 => {
+                    let __count_0 = decoder.read_array_bounded("NodeProfileSigningPayload.addrs", 0, 8)?;
+                    let mut __values_1: Vec<String> = Vec::new();
+                    for _ in 0..__count_0 {
+                        __values_1.push(decoder.read_string_bounded("NodeProfileSigningPayload.addrs[]", 0, 512)?);
+                    }
+                    __rpf_storage_addrs = Some(__values_1);
+                }
+                2 => {
+                    __rpf_storage_updated_time = Some(decoder.read_i64()?);
+                }
+                _ => decoder.skip_field()?,
+            }
+        }
+
+        Ok(Self {
+            public_key: __rpf_storage_public_key.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: public_key"))?,
+            addrs: __rpf_storage_addrs.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: addrs"))?,
+            updated_time: __rpf_storage_updated_time.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: updated_time"))?,
         })
     }
 }
@@ -164,6 +253,8 @@ impl omnius_core_rocketpack::RocketPackStruct for NodeProfile {
 pub const MAX_WIRE_ADDRS: u32 = 8;
 
 pub const MAX_PUBLIC_KEY_LENGTH: u32 = 256;
+
+pub const MAX_SIGNATURE_LENGTH: u32 = 64;
 
 pub const MAX_ADDR_LENGTH: u32 = 512;
 

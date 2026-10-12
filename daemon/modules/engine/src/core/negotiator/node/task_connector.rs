@@ -153,7 +153,7 @@ impl TaskConnector {
     }
 
     async fn connect_node(&self, node_profile: &NodeProfile) -> Result<()> {
-        for addr in node_profile.addrs.iter() {
+        for addr in node_profile.addrs().iter() {
             if let Ok(session) = self.session_connector.connect(addr, &SessionType::NodeFinder).await {
                 let status = SessionStatus::new(session, self.clock.clone());
                 self.session_sender
@@ -208,7 +208,7 @@ mod tests {
     #[tokio::test]
     async fn connect_skips_own_node_profile() -> TestResult {
         let dir = tempfile::tempdir()?;
-        let my_node_profile = node_profile("me", 1);
+        let my_node_profile = node_profile(1);
         let tcp_connector = Arc::new(CountingTcpConnector::default());
         let task = create_task_connector(
             dir.path().to_str().unwrap(),
@@ -231,8 +231,8 @@ mod tests {
     #[tokio::test]
     async fn concurrent_connects_do_not_target_the_same_node() -> TestResult {
         let dir = tempfile::tempdir()?;
-        let my_node_profile = node_profile("me", 1);
-        let other_node_profile = node_profile("other", 2);
+        let my_node_profile = node_profile(1);
+        let other_node_profile = node_profile(2);
         let tcp_connector = Arc::new(CountingTcpConnector::default());
         let connecting_ids = Arc::new(Mutex::new(HashSet::new()));
 
@@ -276,7 +276,7 @@ mod tests {
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
 
         let node_profile_repo = Arc::new(NodeFinderRepo::new(state_dir, clock.clone()).await?);
-        node_profile_repo.insert_or_ignore_node_profiles(node_profiles, 0).await?;
+        node_profile_repo.insert_or_update_node_profiles(node_profiles, 0).await?;
 
         let (session_sender, _session_receiver) = mpsc::channel(20);
 
@@ -301,8 +301,8 @@ mod tests {
         .await
     }
 
-    fn node_profile(id: &str, port: u16) -> NodeProfile {
-        NodeProfile::new(id.as_bytes().to_vec(), vec![OmniAddr::create_tcp("127.0.0.1".parse().unwrap(), port)])
+    fn node_profile(port: u16) -> NodeProfile {
+        NodeProfile::random_for_test(vec![OmniAddr::create_tcp("127.0.0.1".parse().unwrap(), port)])
     }
 
     #[derive(Default)]

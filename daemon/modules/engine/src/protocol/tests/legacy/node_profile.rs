@@ -4,15 +4,24 @@ use omnius_core_omnikit::model::omni_addr::OmniAddr;
 pub struct NodeProfile {
     pub public_key: Vec<u8>,
     pub addrs: Vec<OmniAddr>,
+    pub updated_time: i64,
+    pub signature: Vec<u8>,
 }
 impl NodeProfile {
     pub const MAX_WIRE_ADDRS: usize = 8;
-    pub fn new(public_key: Vec<u8>, addrs: Vec<OmniAddr>) -> Self {
-        Self { public_key, addrs }
+    pub fn new(public_key: Vec<u8>, addrs: Vec<OmniAddr>, updated_time: i64, signature: Vec<u8>) -> Self {
+        Self {
+            public_key,
+            addrs,
+            updated_time,
+            signature,
+        }
     }
     fn unpack_with_max_addrs(decoder: &mut impl RocketPackDecoder, max_addrs: usize) -> std::result::Result<Self, RocketPackDecoderError> {
         let mut public_key: Option<Vec<u8>> = None;
         let mut addrs: Option<Vec<OmniAddr>> = None;
+        let mut updated_time: Option<i64> = None;
+        let mut signature: Option<Vec<u8>> = None;
 
         let count = decoder.read_map()?;
 
@@ -27,6 +36,8 @@ impl NodeProfile {
                     }
                     addrs = Some(items);
                 }
+                2 => updated_time = Some(decoder.read_i64()?),
+                3 => signature = Some(decoder.read_bytes_vec()?),
                 _ => decoder.skip_field()?,
             }
         }
@@ -34,13 +45,15 @@ impl NodeProfile {
         Ok(Self::new(
             public_key.ok_or(RocketPackDecoderError::Other("missing field: public_key"))?,
             addrs.ok_or(RocketPackDecoderError::Other("missing field: addrs"))?,
+            updated_time.ok_or(RocketPackDecoderError::Other("missing field: updated_time"))?,
+            signature.ok_or(RocketPackDecoderError::Other("missing field: signature"))?,
         ))
     }
 }
 
 impl RocketPackStruct for NodeProfile {
     fn pack(encoder: &mut impl RocketPackEncoder, value: &Self) -> std::result::Result<(), RocketPackEncoderError> {
-        encoder.write_map(2)?;
+        encoder.write_map(4)?;
 
         encoder.write_u64(0)?;
         encoder.write_bytes(value.public_key.as_slice())?;
@@ -50,6 +63,12 @@ impl RocketPackStruct for NodeProfile {
         for addr in value.addrs.iter() {
             encoder.write_string(addr.as_str())?;
         }
+
+        encoder.write_u64(2)?;
+        encoder.write_i64(value.updated_time)?;
+
+        encoder.write_u64(3)?;
+        encoder.write_bytes(value.signature.as_slice())?;
 
         Ok(())
     }

@@ -42,7 +42,7 @@
 
 ## 2. Axus daemon とは
 
-Axus は、個人の server や PC で動かすファイル交換 service である。
+Axus は、個人の server や PC で動かす P2P のファイル配布 service である。
 オープンソースで開発し、データの安全で安価な個人間共有を可能にすること、および BitTorrent の検索における単一障害点を解消することを目的とする。
 daemon は 1 node 分のネットワーク接続、ノード探索、ファイルの符号化と復号、永続状態、ローカル client 向け REST API を 1 process にまとめる。
 
@@ -63,7 +63,7 @@ daemon は 1 node 分のネットワーク接続、ノード探索、ファイ�
 | --- | --- | --- |
 | [daemon/entrypoints/daemon](../daemon/entrypoints/daemon) | `omnius-axus-daemon` | CLI、設定、process のライフサイクル、REST API の実装 |
 | [daemon/entrypoints/interface](../daemon/entrypoints/interface) | `omnius-axus-interface` | OpenAPI から生成する axum router と型であり、手で編集しない |
-| [daemon/modules/engine](../daemon/modules/engine) | `omnius-axus-engine` | Session、ノード探索、ファイル交換、永続化 |
+| [daemon/modules/engine](../daemon/modules/engine) | `omnius-axus-engine` | Session、ノード探索、ファイル転送、永続化 |
 | [daemon/refs/core-rs](../daemon/refs/core-rs) | `omnius-core-*` | 時刻、ID、署名、serialization、migration などの共通基盤 |
 
 `daemon/` は Cargo workspace の root であり、`core-rs` の必要な crate を workspace member として直接 build する。
@@ -127,7 +127,7 @@ API 層は engine を知るが、NodeFinder は FilePublisher と FileSubscriber
 
 ### 5.1 決定済み
 
-#### 探索とファイル交換を分離する
+#### 探索とファイル転送を分離する
 
 **決定**
 NodeFinder は AssetKey から NodeProfile を探し、FileExchanger はその結果を使って block を交換する。

@@ -19,9 +19,19 @@ struct FileRef {
 struct NodeProfile {
   @0 public_key: bytes[..=MAX_PUBLIC_KEY_LENGTH];
   @1 addrs: Vec<string[..=MAX_ADDR_LENGTH]>[..=MAX_WIRE_ADDRS];
+  @2 updated_time: i64;
+  @3 signature: bytes[..=MAX_SIGNATURE_LENGTH];
+}
+
+#[rust::derive(Eq, Hash)]
+struct NodeProfileSigningPayload {
+  @0 public_key: bytes[..=MAX_PUBLIC_KEY_LENGTH];
+  @1 addrs: Vec<string[..=MAX_ADDR_LENGTH]>[..=MAX_WIRE_ADDRS];
+  @2 updated_time: i64;
 }
 
 const MAX_WIRE_ADDRS: u32 = 8;
 const MAX_PUBLIC_KEY_LENGTH: u32 = 256;
+const MAX_SIGNATURE_LENGTH: u32 = 64;
 const MAX_ADDR_LENGTH: u32 = 512;
 const MAX_ASSET_TYPE_LENGTH: u32 = 64;

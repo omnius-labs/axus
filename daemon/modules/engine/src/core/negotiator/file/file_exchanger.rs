@@ -231,7 +231,7 @@ mod tests {
         let node_profile_repo = Arc::new(NodeFinderRepo::new(repo_dir.to_str().unwrap(), clock.clone()).await?);
         let node_finder = Arc::new(
             NodeFinder::new(
-                NodeProfile::new(identity.public_key().to_vec(), vec![]),
+                NodeProfile::sign(&identity.signer(), vec![], clock.now())?,
                 session_connector.clone(),
                 session_accepter.clone(),
                 node_profile_repo,
@@ -320,7 +320,7 @@ mod tests {
         let node_profile_repo = Arc::new(NodeFinderRepo::new(repo_dir.to_str().unwrap(), clock.clone()).await?);
         let node_finder = Arc::new(
             NodeFinder::new(
-                NodeProfile::new(identity.public_key().to_vec(), vec![]),
+                NodeProfile::sign(&identity.signer(), vec![], clock.now())?,
                 session_connector.clone(),
                 session_accepter.clone(),
                 node_profile_repo,

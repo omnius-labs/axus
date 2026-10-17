@@ -13,7 +13,6 @@ const SIGNER_FILE_NAME: &str = "signer";
 /// node の署名鍵を state directory に保存し、再起動後も同じ鍵と node ID を使う
 pub struct NodeIdentity {
     signer: Arc<OmniSigner>,
-    public_key: Vec<u8>,
 }
 
 impl NodeIdentity {
@@ -31,21 +30,11 @@ impl NodeIdentity {
             Err(e) => return Err(e.into()),
         };
 
-        // cert と同じ表現の公開鍵を得るため、署名の結果から取り出す
-        let public_key = signer.sign(&[])?.public_key;
-
-        Ok(Self {
-            signer: Arc::new(signer),
-            public_key,
-        })
+        Ok(Self { signer: Arc::new(signer) })
     }
 
     pub fn signer(&self) -> Arc<OmniSigner> {
         self.signer.clone()
-    }
-
-    pub fn public_key(&self) -> &[u8] {
-        &self.public_key
     }
 
     async fn save(dir: &Path, path: &Path, signer: &OmniSigner) -> Result<()> {
@@ -77,11 +66,11 @@ mod tests {
 
         let created = NodeIdentity::load_or_create(dir.path()).await?;
         let loaded = NodeIdentity::load_or_create(dir.path()).await?;
-        assert_eq!(created.public_key(), loaded.public_key());
+        assert_eq!(created.signer().sign(&[])?.public_key, loaded.signer().sign(&[])?.public_key);
 
         let other_dir = tempfile::tempdir()?;
         let other = NodeIdentity::load_or_create(other_dir.path()).await?;
-        assert_ne!(created.public_key(), other.public_key());
+        assert_ne!(created.signer().sign(&[])?.public_key, other.signer().sign(&[])?.public_key);
 
         Ok(())
     }

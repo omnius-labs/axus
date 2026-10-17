@@ -107,6 +107,7 @@ node ID は Session の署名で確かめた公開鍵から導出するため、
 UPnP は設定 `p2p.use_upnp` で有効にしたときだけ使う。
 アドレスは起動時に 1 回だけ決め、IP が変わったときは再起動で反映する。
 8 件を超える場合は先頭の 8 件へ切り詰め、警告を記録して起動を続ける。
+NodeProfile への署名は、アドレスを決めて切り詰めた後に 1 回だけ作る。
 
 **理由**
 node 自身が知っている情報だけで決まるため、handshake に message を足す必要がない。
@@ -146,7 +147,7 @@ Hello/Profile 交換にも適用し、Session の認証と用途選択を終え�
 
 受信側は要素数を読んだ直後、Vec や HashMap を確保する前に上限を検査し、超過した message の Session を閉じる。
 NodeProfile のアドレス数は wire の decode で検査するため、Hello の後の ProfileMessage にも適用する。
-設定と保存に使う `axus:node/...` の URI も同じ生成 NodeProfile の制約に従う。
+設定と保存に使う `axus:node/...` の URI も、同じ生成 NodeProfile の制約と署名の検証に従う。
 送信側は既存の rng で候補を無作為に選び、各件数を上限以下にする。
 件数で絞った後は、[rocketpack.md](./rocketpack.md#サイズ予算内で各種類の送信候補を交互に選ぶ) の byte 予算に収まる候補を選ぶ。
 複数 message 分を保持する受信状態は、TTL と集積件数の上限を別に持つ。
@@ -156,6 +157,22 @@ frame の byte 数だけでなく、要素数と所在情報の広がりも制�
 既知 node の 32 件は従来の受信後の切り詰めと同じ値であり、ほかの上限とともに decode の入力境界へ移す。
 送信側も同じ上限を守ることで、相手に拒否される message を組み立てずに済む。
 件数を絞るときに無作為に選ぶと、毎回同じ候補だけが伝播する偏りを抑えられる。
+
+#### 既知 node は node ID ごとに更新時刻の新しい NodeProfile を保持する
+
+**決定**
+NodeFinderRepo は node ID ごとに 1 件の NodeProfile を保持する。
+同じ node ID の NodeProfile を受け取ったときは、更新時刻が保持している値より大きい場合だけ置き換え、等しいか小さい場合は無視する。
+置き換えても、行の weight は変えない。
+署名の仕組みは [trust-security.md](./trust-security.md#nodeprofile-は-node-本人の署名で到達先を結ぶ) が正とする。
+
+**理由**
+URI 全体を key にすると、同じ node のアドレスが変わるたびに別の行が残り、到達できないアドレスへの接続の試行が増える。
+署名付きの NodeProfile では、更新時刻の大きいものが本人の新しい到達先であると検証できるため、node ID を key にして新しいほうだけを残せる。
+weight は NodeProfile の出所に付ける優先度であり、到達先の更新によって変えない。
+
+**却下案**
+URI を key のままにして、読み出し時に node ID ごとの新しい値だけを返す案は、保存形式を変えずに済むが、古い行が件数上限を消費し続ける。
 
 ### 6.2 保留
 
@@ -187,6 +204,8 @@ TaskComputer は同じ上限で無作為に候補を絞り、自 node のアド�
 上限ちょうどの受理、各上限の超過による切断、大量情報を持つ node 間の往復、上限以内の URI の互換性を test で確認している。
 DataMessage の符号化結果を 256 KiB 以下に制限し、各種類の候補を交互に選別する。
 明示設定の byte 長違反を worker 開始前に拒否し、保存済みの不適合 URI は警告して読み飛ばす。DB の行を残すことも test で確認している。
+NodeProfile は署名付きで、DataMessage で受信した NodeProfile の更新時刻が許容を超えて進んでいるものは捨てる。
+既知 node は node ID ごとに 1 件を保持し、新しい NodeProfile だけで置き換える。署名が不正な URI も、不適合な URI として読み飛ばす。
 
 重複した Session の解消は、互いを bootstrap に指定した 2 node の結合試験で確認している。
 lookup で得た NodeProfile には、相手が広告したアドレスが含まれることを結合試験で確認している。

@@ -83,7 +83,7 @@ impl Default for NodeFinderIntervals {
 impl NodeFinder {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        mut my_node_profile: NodeProfile,
+        my_node_profile: NodeProfile,
         session_connector: Arc<SessionConnector>,
         session_accepter: Arc<SessionAccepter>,
         node_profile_repo: Arc<NodeFinderRepo>,
@@ -93,16 +93,6 @@ impl NodeFinder {
         rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         option: NodeFinderOption,
     ) -> Result<Self> {
-        // 件数を絞る前に全アドレスの byte 長を確認し、設定の違反を隠さない。
-        my_node_profile.validate_byte_lengths()?;
-        if my_node_profile.addrs.len() > NodeProfile::MAX_WIRE_ADDRS {
-            warn!(
-                address_count = my_node_profile.addrs.len(),
-                max_address_count = NodeProfile::MAX_WIRE_ADDRS,
-                "too many addresses to advertise; truncating node profile"
-            );
-            my_node_profile.addrs.truncate(NodeProfile::MAX_WIRE_ADDRS);
-        }
         NodeProfileCodec::encode(&my_node_profile)?;
         let (tx, rx) = mpsc::channel(20);
 
@@ -212,6 +202,7 @@ impl NodeFinder {
             self.sessions.clone(),
             self.node_profile_repo.clone(),
             self.session_receiver.clone(),
+            self.clock.clone(),
             self.sleeper.clone(),
             self.option.clone(),
         )

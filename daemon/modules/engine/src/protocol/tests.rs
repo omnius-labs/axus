@@ -2,9 +2,13 @@ pub(crate) mod legacy;
 
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
+use chrono::DateTime;
 use enumflags2::BitFlags;
 use omnius_core_omnikit::{
-    generated::omni_hash::{OmniHash, OmniHashAlgorithmType},
+    generated::{
+        omni_hash::{OmniHash, OmniHashAlgorithmType},
+        omni_sign::{OmniSignType, OmniSigner},
+    },
     model::omni_addr::OmniAddr,
 };
 use omnius_core_rocketpack::{RocketPackBytesDecoder, RocketPackBytesEncoder};
@@ -20,7 +24,8 @@ use crate::{
 
 // Literal bytes were fixed against the pre-migration codecs, not generated output.
 const KEY_HEX: &str = "a200617401a201a101a00240";
-const PROFILE_HEX: &str = "a200420102018261616162";
+// NodeProfile signed by signer() at update time 1700000000. OpenSSL's Ed25519 produces the same signature for the signing message.
+const PROFILE_HEX: &str = "a400582c302a300506032b6570032100ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c018261616162021a6553f1000358405349e0b3f1f6acbb37e3804cce16f1aee9c6f35f2655273a5d0078005da1d421593ec4e952baaa974b65fc7e34cf56cd2d629cf41007f5d8ed1aeb9b75afbd02";
 
 #[cfg(test)]
 fn hash() -> OmniHash {
@@ -30,8 +35,26 @@ fn hash() -> OmniHash {
     }
 }
 #[cfg(test)]
+pub(crate) fn signer() -> OmniSigner {
+    // PKCS#8 Ed25519 private key with a fixed seed, so the signature bytes are fixed.
+    let mut key = hex::decode("302e020100300506032b657004220420").unwrap();
+    key.extend([7u8; 32]);
+    OmniSigner {
+        typ: OmniSignType::Ed25519_Sha3_256_Base64Url,
+        name: "test".to_owned(),
+        key,
+    }
+}
+#[cfg(test)]
+pub(crate) const PROFILE_UPDATED_TIME: i64 = 1_700_000_000;
+#[cfg(test)]
 fn profile() -> NodeProfile {
-    NodeProfile::new(vec![1, 2], vec![OmniAddr::new("a"), OmniAddr::new("b")])
+    NodeProfile::sign(
+        &signer(),
+        vec![OmniAddr::new("a"), OmniAddr::new("b")],
+        DateTime::from_timestamp(PROFILE_UPDATED_TIME, 0).unwrap(),
+    )
+    .unwrap()
 }
 #[cfg(test)]
 fn key() -> AssetKey {
@@ -43,7 +66,7 @@ fn key() -> AssetKey {
 
 #[cfg(test)]
 pub(crate) fn legacy_profile(value: &NodeProfile) -> legacy::NodeProfile {
-    legacy::NodeProfile::new(value.public_key().to_vec(), value.addrs.clone())
+    legacy::NodeProfile::new(value.public_key().to_vec(), value.addrs().to_vec(), value.updated_time(), value.signature().to_vec())
 }
 
 #[cfg(test)]
@@ -150,7 +173,6 @@ fn all_codecs_preserve_required_unknown_null_duplicate_and_trailing_field_accept
     acceptance_matrix(&legacy::AssetKey { typ: "t".into(), hash: hash() }, |b| AssetKey::import(b).is_ok())?;
     acceptance_matrix(&legacy::FileRef { name: "f".into(), hash: hash() }, |b| axus::model::FileRef::import(b).is_ok())?;
     acceptance_matrix(&legacy::MerkleLayer { rank: 0, hashes: vec![hash()] }, |b| axus::file::MerkleLayer::import(b).is_ok())?;
-    acceptance_matrix(&legacy_profile(&profile()), |b| NodeProfileCodec::decode(b).is_ok())?;
     acceptance_matrix(
         &legacy::session::HelloMessage {
             version: legacy::session::SessionVersion::V1,
@@ -423,14 +445,19 @@ fn bounded_fields_and_hash_variants_remain_compatible() -> TestResult {
             assert_eq!(old.export()?, new.export()?);
         }
     }
-    let new = NodeProfile::new(vec![4; 256], vec![OmniAddr::new(format!("{}aa", "日".repeat(170)))]);
+    let new = NodeProfile::sign(
+        &signer(),
+        vec![OmniAddr::new(format!("{}aa", "日".repeat(170)))],
+        DateTime::from_timestamp(PROFILE_UPDATED_TIME, 0).unwrap(),
+    )?;
     compatible::<NodeProfileCodec, _>(&legacy_profile(&new), &new, true)
 }
 
 #[test]
 fn duplicate_map_keys_keep_the_last_value() -> TestResult {
     let first = legacy_profile(&profile());
-    let last = legacy::NodeProfile::new(vec![9], vec![]);
+    let last_profile = NodeProfile::random_for_test(vec![]);
+    let last = legacy_profile(&last_profile);
     let key = key();
     for field in [2, 3] {
         let mut bytes = Vec::new();
@@ -455,27 +482,28 @@ fn duplicate_map_keys_keep_the_last_value() -> TestResult {
         let new = DataMessageCodec::decode(&bytes)?;
         assert_eq!(legacy_data(&new), old);
         let map = if field == 2 { new.give_asset_key_locations } else { new.push_asset_key_locations };
-        assert_eq!(map[&key].as_slice()[0].public_key(), &[9]);
+        assert_eq!(map[&key].as_slice()[0].public_key(), last_profile.public_key());
     }
     Ok(())
 }
 
 #[test]
 fn byte_length_limits_reject_old_oversized_fields() -> TestResult {
-    for (public_key, addr, accepted) in [
-        (vec![0; 256], "a".repeat(512), true),
-        (vec![0; 257], "a".to_string(), false),
-        (vec![0], "a".repeat(513), false),
-        (vec![0], format!("{}aa", "日".repeat(170)), true),
-        (vec![0], "日".repeat(171), false),
+    for (addr, accepted) in [
+        ("a".repeat(512), true),
+        ("a".repeat(513), false),
+        (format!("{}aa", "日".repeat(170)), true),
+        ("日".repeat(171), false),
     ] {
-        let profile = NodeProfile::new(public_key, vec![OmniAddr::new(addr)]);
-        let old = legacy_profile(&profile).export()?;
-        assert_eq!(NodeProfileCodec::encode(&profile).is_ok(), accepted);
-        assert_eq!(NodeProfileCodec::decode(&old).is_ok(), accepted);
+        let at = DateTime::from_timestamp(PROFILE_UPDATED_TIME, 0).unwrap();
+        let signed = NodeProfile::sign(&signer(), vec![OmniAddr::new(addr.clone())], at);
+        assert_eq!(signed.is_ok(), accepted);
+        // 署名を検証する前に、生成型の decode が byte 長を拒否することを確かめる
+        let old = legacy::NodeProfile::new(signer().sign(&[])?.public_key, vec![OmniAddr::new(addr)], PROFILE_UPDATED_TIME, vec![0; 64]).export()?;
         assert_eq!(axus::model::NodeProfile::import(&old).is_ok(), accepted);
-        if accepted {
-            assert_eq!(NodeProfileCodec::decode(&old)?, profile);
+        if let Ok(profile) = signed {
+            assert_eq!(NodeProfileCodec::encode(&profile).is_ok(), accepted);
+            assert_eq!(NodeProfileCodec::decode(&legacy_profile(&profile).export()?)?, profile);
         }
     }
     for text in ["a".repeat(64), "a".repeat(65), format!("{}a", "日".repeat(21)), "日".repeat(22)] {

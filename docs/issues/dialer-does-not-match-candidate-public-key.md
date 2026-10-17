@@ -1,8 +1,8 @@
 # 接続側が接続候補の公開鍵を Session の cert と照合しない
 
-**深刻度: 中**（偽の到達先を付けた NodeProfile を配布できる第三者が誘発できる）
+**深刻度: 中**（署名付き NodeProfile の到達先が別の node のものになった場合に顕在）
 
-調査日 2026-10-11 / 対象コミット `794035e`
+調査日 2026-10-12 / 対象コミット `4bb0571`
 
 [issues.md](../issues.md) の 1 項目。
 
@@ -25,14 +25,15 @@ if let Ok(session) = self.session_connector.connect(addr, &SessionType::NodeFind
 ## 原因
 
 Session は相手の署名と鍵を検証するが、接続側が期待する相手の公開鍵を受け取らない。
-[node/task_communicator.rs:167](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L167) の照合は、相手が送った NodeProfile の公開鍵と、その相手自身の cert を比べるものであり、接続候補の公開鍵とは比べない。
+[node/task_communicator.rs:172](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L172) の照合は、相手が送った NodeProfile の公開鍵と、その相手自身の cert を比べるものであり、接続候補の公開鍵とは比べない。
 
 ## 影響
 
-NodeProfile の到達先には署名がないため、第三者はある node の公開鍵に自分の到達先を付けて配布できる（[trust-security.md](../design/trust-security.md#nodeprofile-の到達先の真正性)）。
-接続側はその到達先で第三者の node と Session を確立し、元の node を接続済みとして接続候補から外す。
-第三者の node は、本物の node の署名を作れないため、本物の node として認証されることはない。
-NodeFinder の Session は、[node/task_communicator.rs:128](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L128) で相手が送った NodeProfile の node ID で登録されるため、第三者の node 自身の Session として扱われる。
+NodeProfile の署名により、第三者はある node の公開鍵に自分の到達先を付けて配布できない（[trust-security.md](../design/trust-security.md#nodeprofile-は-node-本人の署名で到達先を結ぶ)）。
+ただし、署名付き NodeProfile の到達先は古くなり得る。
+node がアドレスを変えた後、そのアドレスを別の node が使うと、接続側はその到達先で別の node と Session を確立し、元の node を接続済みとして接続候補から外す。
+別の node は、本物の node の署名を作れないため、本物の node として認証されることはない。
+NodeFinder の Session は、[node/task_communicator.rs:133](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L133) で相手が送った NodeProfile の node ID で登録されるため、第三者の node 自身の Session として扱われる。
 
 ## 対応方針
 

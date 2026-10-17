@@ -708,7 +708,7 @@ NodeFinder への広告と要求の登録、AxusService への結線もない。
 接続の task は Session を node ID だけで区別し、接続枠は公開用の発信、購読用の発信、受理の全体の上限だけを持つ。
 購読側には、保存した block、現在の rank の未取得 block、提供する root hash を FileExchanger へ渡す入口がない。
 import は block size が 0 でないことだけを検査し、FileExchanger の frame 上限は 64 MiB である。
-block 交換の実装は、[design.md](../design.md#62-ロードマップ) の順序に従い、NodeProfile の到達先の真正性を決めた後に着手する。
+block 交換の実装は、[design.md](../design.md#62-ロードマップ) の最初の項目である。
 公開と購読を始める REST API はない。
 
 確認済みの不具合は [issues.md](../issues.md) を参照する。

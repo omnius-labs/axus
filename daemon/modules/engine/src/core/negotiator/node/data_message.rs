@@ -1,5 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
+use chrono::{DateTime, Utc};
+
 use crate::model::{AssetKey, NodeProfile};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -19,6 +21,24 @@ impl DataMessage {
             push_asset_key_locations: HashMap::new(),
         }
     }
+
+    /// 更新時刻が `now` より許容幅を超えて進んでいる NodeProfile を取り除き、取り除いた件数を返す。
+    /// 署名は本人のものなので Session は閉じず、その NodeProfile だけを捨てる
+    pub fn remove_future_node_profiles(&mut self, now: DateTime<Utc>) -> usize {
+        let mut removed = 0;
+        let mut retain = |profiles: &mut Vec<Arc<NodeProfile>>| {
+            let before = profiles.len();
+            profiles.retain(|profile| profile.is_updated_within_skew(now));
+            removed += before - profiles.len();
+        };
+        retain(&mut self.push_node_profiles);
+        for profiles in self.give_asset_key_locations.values_mut().chain(self.push_asset_key_locations.values_mut()) {
+            retain(profiles);
+        }
+        self.give_asset_key_locations.retain(|_, profiles| !profiles.is_empty());
+        self.push_asset_key_locations.retain(|_, profiles| !profiles.is_empty());
+        removed
+    }
 }
 
 impl Default for DataMessage {
@@ -35,6 +55,40 @@ mod tests {
     use super::*;
     use crate::prelude::*;
     use crate::protocol::{MessageCodec, node::DataMessageCodec};
+
+    #[test]
+    fn future_node_profiles_are_removed_from_every_category() {
+        use omnius_core_omnikit::generated::{
+            omni_hash::{OmniHash, OmniHashAlgorithmType},
+            omni_sign::{OmniSignType, OmniSigner},
+        };
+
+        let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
+        let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test").unwrap();
+        let skew = NodeProfile::MAX_FUTURE_UPDATE_SKEW.as_secs() as i64;
+        let signed_at = |seconds: i64| Arc::new(NodeProfile::sign(&signer, vec![], DateTime::from_timestamp(seconds, 0).unwrap()).unwrap());
+        let (current, edge, future) = (signed_at(1_000_000), signed_at(1_000_000 + skew), signed_at(1_000_000 + skew + 1));
+        let key = |typ: &str| {
+            Arc::new(AssetKey {
+                typ: typ.to_owned(),
+                hash: OmniHash {
+                    typ: OmniHashAlgorithmType::None,
+                    value: vec![],
+                },
+            })
+        };
+        let mut message = DataMessage {
+            push_node_profiles: vec![current.clone(), future.clone(), edge.clone()],
+            give_asset_key_locations: HashMap::from([(key("kept"), vec![future.clone(), current.clone()]), (key("emptied"), vec![future.clone()])]),
+            push_asset_key_locations: HashMap::from([(key("emptied"), vec![future])]),
+            ..DataMessage::new()
+        };
+
+        assert_eq!(message.remove_future_node_profiles(now), 4);
+        assert_eq!(message.push_node_profiles, vec![current.clone(), edge]);
+        assert_eq!(message.give_asset_key_locations, HashMap::from([(key("kept"), vec![current])]));
+        assert!(message.push_asset_key_locations.is_empty());
+    }
 
     #[test]
     fn oversized_counts_are_rejected_before_reading_elements() -> TestResult {

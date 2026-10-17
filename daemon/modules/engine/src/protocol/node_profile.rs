@@ -13,12 +13,15 @@ impl MessageCodec for NodeProfileCodec {
     fn to_wire(value: &NodeProfile) -> Self::Wire {
         Self::Wire {
             public_key: value.public_key().to_vec(),
-            addrs: value.addrs.iter().map(|addr| addr.as_str().to_owned()).collect(),
+            addrs: value.addrs().iter().map(|addr| addr.as_str().to_owned()).collect(),
+            updated_time: value.updated_time(),
+            signature: value.signature().to_vec(),
         }
     }
 
     fn from_wire(value: Self::Wire) -> std::result::Result<NodeProfile, RocketPackDecoderError> {
-        Ok(NodeProfile::new(value.public_key, value.addrs.into_iter().map(OmniAddr::from).collect()))
+        NodeProfile::verified(value.public_key, value.addrs.into_iter().map(OmniAddr::from).collect(), value.updated_time, value.signature)
+            .map_err(|_| RocketPackDecoderError::Other("invalid node profile signature"))
     }
 }
 

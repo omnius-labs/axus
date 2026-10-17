@@ -15,7 +15,9 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use omnius_core_base::sleeper::Sleeper;
+use chrono::Utc;
+
+use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 
 use crate::{
     base::{
@@ -35,6 +37,7 @@ pub struct TaskCommunicator {
     sessions: Arc<SessionRegistry>,
     node_profile_repo: Arc<NodeFinderRepo>,
     session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
+    clock: Arc<dyn Clock<Utc> + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
     option: NodeFinderOption,
     join_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
@@ -63,6 +66,7 @@ impl TaskCommunicator {
         sessions: Arc<SessionRegistry>,
         node_profile_repo: Arc<NodeFinderRepo>,
         session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
+        clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
         option: NodeFinderOption,
     ) -> Result<Arc<Self>> {
@@ -73,6 +77,7 @@ impl TaskCommunicator {
             sessions,
             node_profile_repo,
             session_receiver,
+            clock,
             sleeper,
             option,
             join_handle: Arc::new(TokioMutex::new(None)),
@@ -216,6 +221,7 @@ impl TaskCommunicator {
             let receiver = TaskReceiver {
                 status,
                 node_profile_repo: this.node_profile_repo.clone(),
+                clock: this.clock.clone(),
             };
             let f = async {
                 let communicate = this.option.intervals.communicate;
@@ -278,6 +284,7 @@ impl TaskSender {
 struct TaskReceiver {
     status: Arc<SessionStatus>,
     node_profile_repo: Arc<NodeFinderRepo>,
+    clock: Arc<dyn Clock<Utc> + Send + Sync>,
 }
 
 impl TaskReceiver {
@@ -285,9 +292,14 @@ impl TaskReceiver {
         self.status.session.stream.receiver.lock().await.recv_message_with::<DataMessageCodec>().await
     }
 
-    async fn apply(&self, data_message: DataMessage) -> Result<()> {
+    async fn apply(&self, mut data_message: DataMessage) -> Result<()> {
+        let removed = data_message.remove_future_node_profiles(self.clock.now());
+        if removed > 0 {
+            debug!(removed, "dropped node profiles updated later than the allowed clock skew");
+        }
+
         let push_node_profiles: Vec<&NodeProfile> = data_message.push_node_profiles.iter().map(|n| n.as_ref()).collect();
-        self.node_profile_repo.insert_or_ignore_node_profiles(&push_node_profiles, 0).await?;
+        self.node_profile_repo.insert_or_update_node_profiles(&push_node_profiles, 0).await?;
         self.node_profile_repo.shrink(1024).await?;
 
         {
@@ -484,7 +496,7 @@ mod tests {
             requested: Mutex::new(Vec::new()),
         });
         let sessions = Arc::new(SessionRegistry::new());
-        let (task, session_sender) = create_task_communicator_with_sleeper(dir.path().to_str().unwrap(), sessions.clone(), node_profile("me"), intervals, sleeper.clone()).await?;
+        let (task, session_sender) = create_task_communicator_with_sleeper(dir.path().to_str().unwrap(), sessions.clone(), node_profile(), intervals, sleeper.clone()).await?;
         let (session, peer, node_profile) = session_pair()?;
         session.stream.set_max_frame_length(FramedStream::NODE_FINDER_MAX_FRAME_LENGTH).await;
         session_sender
@@ -637,10 +649,21 @@ mod tests {
         let received: DataMessage = tokio::time::timeout(Duration::from_secs(1), fixture.peer.receiver.lock().await.recv_message_with::<DataMessageCodec>()).await??;
         assert_eq!(received, DataMessage::default());
         assert_eq!(fixture.sessions.len().await, 1);
-        let oversized = boundary_message(field, max + 1);
-        assert!(DataMessageCodec::encode(&oversized).is_err());
         // 旧 pack は送信上限を検査しないため、不正な peer の受信テストに使う。
-        let bytes = crate::protocol::tests::legacy_data(&oversized).export()?;
+        let bytes = if field == 6 {
+            // 上限を超える件数の NodeProfile は署名で作れないため、署名を検証しない旧形式で作る
+            let addrs = (0..=max).map(|i| OmniAddr::new(format!("addr-{i}"))).collect();
+            let oversized = crate::protocol::tests::legacy::NodeProfile::new(fixture.node_profile.public_key().to_vec(), addrs, Utc::now().timestamp(), vec![0; 64]);
+            crate::protocol::tests::legacy::DataMessage {
+                push_node_profiles: vec![Arc::new(oversized)],
+                ..Default::default()
+            }
+            .export()?
+        } else {
+            let oversized = boundary_message(field, max + 1);
+            assert!(DataMessageCodec::encode(&oversized).is_err());
+            crate::protocol::tests::legacy_data(&oversized).export()?
+        };
         fixture.peer.sender.lock().await.send(bytes.into()).await?;
         // 受信期限の 1.5 秒より前に、decode error によって閉じる
         fixture.wait_closed(Duration::from_millis(300)).await?;
@@ -649,7 +672,7 @@ mod tests {
     }
 
     fn boundary_message(field: u8, count: usize) -> DataMessage {
-        let profile = Arc::new(node_profile("known"));
+        let profile = Arc::new(node_profile());
         let mut message = DataMessage::default();
         match field {
             0 => message.push_node_profiles = vec![profile; count],
@@ -670,12 +693,7 @@ mod tests {
                     message.push_asset_key_locations = locations;
                 }
             }
-            6 => {
-                message.push_node_profiles = vec![Arc::new(NodeProfile::new(
-                    b"known".to_vec(),
-                    (0..count).map(|i| OmniAddr::new(format!("addr-{i}"))).collect(),
-                ))]
-            }
+            6 => message.push_node_profiles = vec![Arc::new(NodeProfile::random_for_test((0..count).map(|i| OmniAddr::new(format!("addr-{i}"))).collect()))],
             _ => unreachable!(),
         }
         message
@@ -696,15 +714,74 @@ mod tests {
         for count in [NodeProfile::MAX_WIRE_ADDRS, NodeProfile::MAX_WIRE_ADDRS + 1] {
             let dir = tempfile::tempdir()?;
             let mut fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), Duration::from_millis(500)).await?;
-            fixture.node_profile.addrs = (0..count).map(|i| OmniAddr::new(format!("addr-{i}"))).collect();
-            fixture.answer_handshake().await?;
+            let addrs: Vec<_> = (0..count).map(|i| OmniAddr::new(format!("addr-{i}"))).collect();
+            if count == NodeProfile::MAX_WIRE_ADDRS {
+                fixture.node_profile = NodeProfile::sign(&fixture.signer, addrs, Utc::now())?;
+                fixture.answer_handshake().await?;
+            } else {
+                // 署名を作れない件数は、署名の検証より前の件数の検査で拒否される
+                let oversized = crate::protocol::tests::legacy::NodeProfile::new(fixture.node_profile.public_key().to_vec(), addrs, Utc::now().timestamp(), vec![0; 64]);
+                answer_handshake_with_legacy_profile(fixture.peer.clone(), oversized).await?;
+            }
             if count == NodeProfile::MAX_WIRE_ADDRS {
                 fixture.wait_registered().await?;
-                assert_eq!(fixture.sessions.statuses().await[0].1.node_profile.lock().as_ref().unwrap().addrs.len(), count);
+                assert_eq!(fixture.sessions.statuses().await[0].1.node_profile.lock().as_ref().unwrap().addrs().len(), count);
                 fixture.task.shutdown().await;
             }
             fixture.wait_closed(Duration::from_millis(300)).await?;
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn received_node_profiles_are_stored_by_update_time_and_future_ones_are_dropped() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), Duration::from_millis(500)).await?;
+        fixture.answer_handshake().await?;
+        fixture.wait_registered().await?;
+
+        let now = Utc::now();
+        let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?;
+        let skew = chrono::Duration::from_std(NodeProfile::MAX_FUTURE_UPDATE_SKEW)?;
+        let current = Arc::new(NodeProfile::sign(&signer, vec![OmniAddr::new("current")], now)?);
+        let older = Arc::new(NodeProfile::sign(&signer, vec![OmniAddr::new("older")], now - chrono::Duration::seconds(60))?);
+        let future_signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "future")?;
+        let future = Arc::new(NodeProfile::sign(&future_signer, vec![], now + skew + chrono::Duration::seconds(60))?);
+
+        let send = |profiles: Vec<Arc<NodeProfile>>| async {
+            let message = DataMessage {
+                push_node_profiles: profiles,
+                ..DataMessage::default()
+            };
+            fixture.peer.sender.lock().await.send_message_with::<DataMessageCodec>(&message).await
+        };
+        let stored = || async { fixture.task.node_profile_repo.fetch_node_profiles().await };
+        let wait_for = |expected: Arc<NodeProfile>| async move {
+            tokio::time::timeout(SHUTDOWN_TIMEOUT, async move {
+                while !stored().await?.contains(expected.as_ref()) {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                Result::Ok(())
+            })
+            .await
+            .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))?
+        };
+
+        send(vec![future.clone(), current.clone()]).await?;
+        wait_for(current.clone()).await?;
+        assert!(!stored().await?.contains(future.as_ref()));
+
+        // 同じ node の古い NodeProfile では置き換わらない
+        send(vec![older.clone()]).await?;
+        let barrier = Arc::new(NodeProfile::random_for_test(vec![]));
+        send(vec![barrier.clone()]).await?;
+        wait_for(barrier).await?;
+        let stored = stored().await?;
+        assert!(stored.contains(current.as_ref()));
+        assert!(!stored.contains(older.as_ref()));
+
+        assert_eq!(fixture.sessions.len().await, 1);
+        fixture.task.shutdown().await;
         Ok(())
     }
 
@@ -742,15 +819,14 @@ mod tests {
         // URI 上限内の既知 node を、1 message の件数上限より多く用意する
         let known: Vec<_> = (0..96)
             .map(|i| {
-                Arc::new(NodeProfile::new(
-                    format!("known-{i}").into_bytes(),
-                    (0..NodeProfile::MAX_WIRE_ADDRS).map(|j| OmniAddr::new(format!("addr-{j}"))).collect(),
+                Arc::new(NodeProfile::random_for_test(
+                    (0..NodeProfile::MAX_WIRE_ADDRS).map(|j| OmniAddr::new(format!("addr-{j}-of-{i}"))).collect(),
                 ))
             })
             .collect();
         a_task
             .node_profile_repo
-            .insert_or_ignore_node_profiles(&known.iter().map(|p| p.as_ref()).collect::<Vec<_>>(), 0)
+            .insert_or_update_node_profiles(&known.iter().map(|p| p.as_ref()).collect::<Vec<_>>(), 0)
             .await?;
         let keys: Vec<_> = (0..2048).map(|i| asset_key(i, b_profile.id())).collect();
         {
@@ -808,10 +884,10 @@ mod tests {
                 push_asset_key_locations: sending.push_asset_key_locations.clone(),
             };
             assert!(DataMessageCodec::encode(&message)?.len() <= FramedStream::NODE_FINDER_MAX_FRAME_LENGTH);
-            assert!(sending.push_node_profiles.iter().all(|p| p.addrs.len() <= NodeProfile::MAX_WIRE_ADDRS));
+            assert!(sending.push_node_profiles.iter().all(|p| p.addrs().len() <= NodeProfile::MAX_WIRE_ADDRS));
             for profiles in sending.give_asset_key_locations.values().chain(sending.push_asset_key_locations.values()) {
                 assert_eq!(profiles.len(), DataMessage::MAX_LOCATION_NODE_PROFILES);
-                assert!(profiles.iter().all(|p| p.addrs.len() <= NodeProfile::MAX_WIRE_ADDRS));
+                assert!(profiles.iter().all(|p| p.addrs().len() <= NodeProfile::MAX_WIRE_ADDRS));
             }
         }
         tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
@@ -871,8 +947,8 @@ mod tests {
         let b_signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "b")?;
         let a_cert = a_signer.sign(b"test")?;
         let b_cert = b_signer.sign(b"test")?;
-        let a_profile = NodeProfile::new(a_cert.public_key.clone(), vec![]);
-        let b_profile = NodeProfile::new(b_cert.public_key.clone(), vec![]);
+        let a_profile = NodeProfile::sign(&a_signer, vec![], Utc::now())?;
+        let b_profile = NodeProfile::sign(&b_signer, vec![], Utc::now())?;
         let (a, b) = tokio::io::duplex(64 * 1024);
         let (a_reader, a_writer) = tokio::io::split(a);
         let (b_reader, b_writer) = tokio::io::split(b);
@@ -898,6 +974,7 @@ mod tests {
         sessions: Arc<SessionRegistry>,
         _session_sender: mpsc::Sender<SessionStatus>,
         peer: FramedStream,
+        signer: OmniSigner,
         node_profile: NodeProfile,
     }
 
@@ -909,7 +986,7 @@ mod tests {
                 ..NodeFinderIntervals::default()
             };
             let (task, session_sender) = create_task_communicator_with_intervals(state_dir, sessions.clone(), intervals).await?;
-            let (session, peer, node_profile) = session_pair()?;
+            let (session, peer, signer, node_profile) = session_pair_with_signer()?;
             session.stream.set_max_frame_length(FramedStream::NODE_FINDER_MAX_FRAME_LENGTH).await;
             session_sender
                 .send(SessionStatus::new(session, Arc::new(ClockUtc)))
@@ -920,6 +997,7 @@ mod tests {
                 sessions,
                 _session_sender: session_sender,
                 peer,
+                signer,
                 node_profile,
             })
         }
@@ -980,7 +1058,7 @@ mod tests {
 
         let peer_task = tokio::spawn(answer_handshake(peer, peer_node_profile.clone()));
 
-        let (received, _) = TaskCommunicator::handshake(&session, &node_profile("me"), NodeFinderIntervals::default().receive_timeout()).await?;
+        let (received, _) = TaskCommunicator::handshake(&session, &node_profile(), NodeFinderIntervals::default().receive_timeout()).await?;
         assert_eq!(received, peer_node_profile);
         peer_task.await??;
 
@@ -1001,7 +1079,7 @@ mod tests {
             Result::Ok(())
         });
 
-        let err = TaskCommunicator::handshake(&session, &node_profile("me"), NodeFinderIntervals::default().receive_timeout())
+        let err = TaskCommunicator::handshake(&session, &node_profile(), NodeFinderIntervals::default().receive_timeout())
             .await
             .unwrap_err();
         assert_eq!(err.kind(), &ErrorKind::UnsupportedType);
@@ -1012,11 +1090,11 @@ mod tests {
 
     #[tokio::test]
     async fn handshake_rejects_peer_with_own_id() -> TestResult {
-        let (session, peer, _) = session_pair()?;
+        let (session, peer, peer_node_profile) = session_pair()?;
 
-        let peer_task = tokio::spawn(answer_handshake(peer, node_profile("me")));
+        let peer_task = tokio::spawn(answer_handshake(peer, peer_node_profile.clone()));
 
-        let err = TaskCommunicator::handshake(&session, &node_profile("me"), NodeFinderIntervals::default().receive_timeout())
+        let err = TaskCommunicator::handshake(&session, &peer_node_profile, NodeFinderIntervals::default().receive_timeout())
             .await
             .unwrap_err();
         assert_eq!(err.kind(), &ErrorKind::Reject);
@@ -1029,9 +1107,9 @@ mod tests {
     async fn handshake_rejects_profile_that_does_not_match_the_certificate() -> TestResult {
         let (session, peer, _) = session_pair()?;
 
-        let peer_task = tokio::spawn(answer_handshake(peer, node_profile("someone else")));
+        let peer_task = tokio::spawn(answer_handshake(peer, node_profile()));
 
-        let err = TaskCommunicator::handshake(&session, &node_profile("me"), NodeFinderIntervals::default().receive_timeout())
+        let err = TaskCommunicator::handshake(&session, &node_profile(), NodeFinderIntervals::default().receive_timeout())
             .await
             .unwrap_err();
         assert_eq!(err.kind(), &ErrorKind::Reject);
@@ -1049,7 +1127,7 @@ mod tests {
         sessions: Arc<SessionRegistry>,
         intervals: NodeFinderIntervals,
     ) -> Result<(Arc<TaskCommunicator>, mpsc::Sender<SessionStatus>)> {
-        create_task_communicator_with_profile(state_dir, sessions, node_profile("me"), intervals).await
+        create_task_communicator_with_profile(state_dir, sessions, node_profile(), intervals).await
     }
 
     async fn create_task_communicator_with_profile(
@@ -1074,8 +1152,9 @@ mod tests {
         let task = TaskCommunicator::new(
             Arc::new(Mutex::new(my_node_profile)),
             sessions,
-            Arc::new(NodeFinderRepo::new(state_dir, clock).await?),
+            Arc::new(NodeFinderRepo::new(state_dir, clock.clone()).await?),
             Arc::new(TokioMutex::new(session_receiver)),
+            clock,
             sleeper,
             NodeFinderOption {
                 state_dir: state_dir.to_string(),
@@ -1103,6 +1182,11 @@ mod tests {
     }
 
     async fn answer_handshake(peer: FramedStream, node_profile: NodeProfile) -> Result<()> {
+        answer_handshake_with_legacy_profile(peer, crate::protocol::tests::legacy_profile(&node_profile)).await
+    }
+
+    /// 署名を検証しない旧形式の pack で、仕様外の NodeProfile も送る
+    async fn answer_handshake_with_legacy_profile(peer: FramedStream, node_profile: crate::protocol::tests::legacy::NodeProfile) -> Result<()> {
         peer.sender
             .lock()
             .await
@@ -1111,9 +1195,7 @@ mod tests {
             })
             .await?;
         let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
-        let message = crate::protocol::tests::legacy::node::ProfileMessage {
-            node_profile: crate::protocol::tests::legacy_profile(&node_profile),
-        };
+        let message = crate::protocol::tests::legacy::node::ProfileMessage { node_profile };
         peer.sender.lock().await.send(message.export()?.into()).await?;
         let _: ProfileMessage = peer.receiver.lock().await.recv_message_with::<ProfileMessageCodec>().await?;
         Ok(())
@@ -1121,13 +1203,18 @@ mod tests {
 
     /// local 側の Session と、相手側の stream および Session の cert と一致する相手の NodeProfile を返す
     fn session_pair() -> Result<(Session, FramedStream, NodeProfile)> {
+        let (session, peer, _, node_profile) = session_pair_with_signer()?;
+        Ok((session, peer, node_profile))
+    }
+
+    fn session_pair_with_signer() -> Result<(Session, FramedStream, OmniSigner, NodeProfile)> {
         let (local, peer) = tokio::io::duplex(64 * 1024);
         let (local_reader, local_writer) = tokio::io::split(local);
         let (peer_reader, peer_writer) = tokio::io::split(peer);
 
         let peer_signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?;
         let peer_cert = peer_signer.sign(b"test")?;
-        let peer_node_profile = NodeProfile::new(peer_cert.public_key.clone(), vec![]);
+        let peer_node_profile = NodeProfile::sign(&peer_signer, vec![], Utc::now())?;
         let session = Session {
             typ: SessionType::NodeFinder,
             address: OmniAddr::create_tcp("127.0.0.1".parse()?, 1),
@@ -1136,10 +1223,10 @@ mod tests {
             stream: FramedStream::new(local_reader, local_writer),
         };
 
-        Ok((session, FramedStream::new(peer_reader, peer_writer), peer_node_profile))
+        Ok((session, FramedStream::new(peer_reader, peer_writer), peer_signer, peer_node_profile))
     }
 
-    fn node_profile(public_key: &str) -> NodeProfile {
-        NodeProfile::new(public_key.as_bytes().to_vec(), vec![])
+    fn node_profile() -> NodeProfile {
+        NodeProfile::random_for_test(vec![])
     }
 }

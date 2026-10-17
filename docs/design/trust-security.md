@@ -31,7 +31,8 @@
 | 機構 | 保証するもの | 保証しないもの |
 | --- | --- | --- |
 | Session の secure channel | 通信の相手が署名者本人であること、確立後の通信の機密性と改竄検出 | 相手への信頼、相手が公開する内容の正しさ |
-| NodeFinder の handshake での公開鍵の照合 | 相手の NodeProfile と node ID が Session の署名者のものであること | NodeProfile の到達先の真正性 |
+| NodeFinder の handshake での公開鍵の照合 | 相手の NodeProfile と node ID が Session の署名者のものであること | 到達先が現在もその node のものであること |
+| NodeProfile の署名 | 公開鍵、到達先、更新時刻を node 本人が示したこと | node への信頼、到達先が現在もその node のものであること |
 | FramedStream | message 境界と frame の大きさの上限 | 通信内容の機密性と改竄検出 |
 | Merkle hash | 期待する hash に対する block 内容の一致 | 提供者の信頼性、検索結果の正当性 |
 | Web of Trust | §4 で決める信頼 policy | transport の暗号化と block の内容検証 |
@@ -64,11 +65,12 @@ DataMessage と NodeProfile の wire decode では、次の要素数を collecti
 | NodeProfile の `addrs` | 8 件 |
 
 NodeProfile のアドレス数と byte 長の検査は ProfileMessage と `axus:node/...` の URI にも適用する。
-自 node のアドレスが多い場合は起動時に 8 件へ切り詰めて警告を記録し、送信側も各件数を同じ上限以下へ無作為に絞る。
+自 node のアドレスが多い場合は、署名の前に起動時に 8 件へ切り詰めて警告を記録する。
+送信側は NodeProfile の件数を同じ上限以下へ無作為に絞るが、署名した NodeProfile の到達先は変えない。
 frame の byte 数と要素数の両方を制限することで、受信側の確保量と処理量、所在情報の中継に伴う資源消費を抑える。
 伝播の手順と件数上限の採用理由は [node-finder.md](./node-finder.md#61-決定済み)、byte 長と送信予算の判断は [rocketpack.md](./rocketpack.md#5-設計判断) が正とする。
 
-FileExchanger は受信 block を hash 検証し、Profile 交換は署名と version 検証を通す。
+FileExchanger は受信 block を hash 検証し、NodeProfile は署名を、Profile 交換は署名と version を検証する。
 FileExchanger は検証に失敗した block を送った node ID を一定時間除外するが、鍵を作り直した相手には除外が及ばない（[file-transfer.md](./file-transfer.md#57-検証と違反)）。
 
 ## 4. 設計判断
@@ -93,27 +95,54 @@ ID を保持せずに導出するため、ID と鍵が食い違う NodeProfile �
 安定した ID と鍵の対応を署名で示す案は、鍵の rotation を表現できるが、証明 chain と失効処理が必要になるため採らない。
 ID と鍵を分離して trust graph で対応を表す案は、Web of Trust の設計が先に必要になり、すべての照合が複雑になるため採らない。
 
+#### NodeProfile は node 本人の署名で到達先を結ぶ
+
+**決定**
+NodeProfile は公開鍵、到達先、更新時刻、署名で構成し、署名は node 本人の鍵で作る。
+署名の対象は、署名を除いた値を RocketPack で符号化した bytes の先頭に、用途と version を示す固定の接頭辞を付けたものである。
+署名を作るのは起動時の 1 回だけであり、接続のたびには作らない。
+
+NodeProfile 型は、自 node の鍵で署名して作る経路と、wire または URI から署名を検証して作る経路でしか作れない。
+署名の不一致と形式の不正は decode の失敗となり、Session を閉じる。
+DataMessage で受信した NodeProfile のうち、更新時刻が受信時刻より 5 分を超えて進んでいるものは、その NodeProfile だけを捨てて Session を保つ。
+handshake の ProfileMessage の NodeProfile には時刻の検査を課さない。
+更新時刻の古さによる拒否はしない。
+設定の bootstrap node には、署名付きの URI だけを指定できる。
+
+同じ node ID の NodeProfile は、更新時刻の大きいほうを新しいものとして扱い、既知 node には node ID ごとに 1 件だけを保持する（[node-finder.md](./node-finder.md#既知-node-は-node-id-ごとに更新時刻の新しい-nodeprofile-を保持する)）。
+
+**理由**
+署名がなければ、第三者がある node の公開鍵に偽の到達先を付けて配布できる。
+署名を付けると、中継する node は到達先を書き換えられず、受信側は配布の経路によらず、到達先をその node 本人が示したことを検証できる。
+更新時刻は、古い署名付き NodeProfile の再配布で到達先が古い値へ戻ることを防ぐ。
+
+署名の対象を再符号化で作るのは、wire の形を平坦に保ち、署名の検証より前にも公開鍵と到達先を読めるようにするためである。
+RocketPack の符号化は値だけで決まるため、署名者と検証者は同じ bytes を得る。
+同じ鍵が Session の handshake でも署名を作るため、接頭辞で用途を分け、ほかの署名を NodeProfile の署名として使えないようにする。
+
+更新時刻の許容を 5 分にするのは、Session の handshake が許す時計の差と同じにして、時計に関する前提を 1 つにするためである。
+許容を超えた NodeProfile で Session を閉じないのは、中継する node と受信する node の時計の差によって、正直な相手も送り得るためである。
+ProfileMessage を検査しないのは、相手自身の NodeProfile であり、Session の cert の公開鍵と照合した後は Session の識別にだけ使い、既知 node の更新順序には入らないためである。
+古さで拒否しないのは、拒否すると長期間稼働する node が定期的に署名し直して広告し直す必要が生じ、起動時に発行した bootstrap 用の URI も期限で使えなくなるためである。
+古い署名の再配布で起きるのは古い到達先への接続の試行であり、その到達先が別の node のものになっていても、接続側が接続候補の公開鍵を Session の cert と照合すれば区別できる。
+この照合は [dialer-does-not-match-candidate-public-key](../issues/dialer-does-not-match-candidate-public-key.md) が扱う。
+
+署名が示すのは、到達先を node 本人が示したことだけである。
+その node への信頼と、到達先が現在もその node のものであることは示さない。
+第三者は、接続の失敗を誘って特定の node を探索から外せる。
+この選別は Web of Trust が担う。
+代償として、NodeProfile は署名と更新時刻の分だけ大きくなる。
+また、時計の巻き戻りで前回以下の更新時刻を付けて署名した NodeProfile は、前回の値を保持する受信側では置き換えに使われず、前回より大きい更新時刻で署名し直す必要がある。
+
+**却下案**
+接続に成功した到達先だけを保存して配布する案は、wire の形を変えずに済むが、受信した到達先を最初に試す段階が残り、配布の途中での書き換えも検出できない。
+署名者の名前を持つ `OmniCert` をそのまま載せる案は、公開鍵が NodeProfile の公開鍵と重複し、署名に使わない field も増えるため採らない。
+署名の対象を受信した bytes にし、wire に符号化済みの body と署名を載せる案は、再符号化に依存しないが、公開鍵を取り出すたびに body の decode が要り、URI と送信予算の計算の形も変わるため採らない。
+署名の対象を RocketPack と別の連結規則で定める案は、符号化から独立するが、第二の符号化規約を保守する必要があるため採らない。
+更新順序に単調増加の counter を使う案は、時計に依存しないが、再起動をまたぐ保存と、保存に失敗したときの巻き戻りの扱いが要るため採らない。
+古い NodeProfile を年齢で拒否し、定期的に署名し直す案は、古い情報が自然に消えるが、定期的な署名と広告の仕組みが要るため採らない。
+
 ### 4.2 保留
-
-#### NodeProfile の到達先の真正性
-
-**現状**
-NodeProfile の到達先には署名がなく、第三者はある node の公開鍵に偽の到達先を付けて配布できる。
-偽の到達先の node は本物の node の署名を作れないため、Session の secure channel（[session.md](./session.md#session-の-secure-channel)）の下では、本物の node として Session を確立することも、handshake を中継して通信を読み書きすることもできない。
-偽の到達先の node は、自分の鍵で Session を確立できる。
-接続側は接続候補の公開鍵と Session の cert を照合しておらず、偽の到達先の node との Session を、その候補への接続として扱う（[dialer-does-not-match-candidate-public-key](../issues/dialer-does-not-match-candidate-public-key.md)）。
-照合を加えても、第三者は接続の失敗を誘って特定の node を探索から外せる。
-
-候補は次の 2 つである。
-
-1. NodeProfile 全体に本人が署名すると、配布の経路によらず到達先を検証できるが、NodeProfile の wire format に署名と更新順序の field が必要になる。
-2. 接続に成功した到達先だけを保存して配布すると wire format は変わらないが、未検証の到達先を最初に試す段階は残る。
-
-**なぜ今決めないか**
-方式によって NodeFinder の wire format と保存形式が変わるため、secure channel の実装とは別の作業として扱う。
-
-**決める条件**
-既定の bootstrap node の一覧を配布する前に決める。
 
 #### Web of Trust の単位と伝播
 
@@ -140,4 +169,8 @@ NodeFinder の Hello/Profile 交換時と確立後の受信期限を、通信周
 DataMessage と NodeProfile の wire decode で要素数の上限を検査し、送信側も同じ上限へ収める。
 NodeFinder の frame と DataMessage を 256 KiB 以下に制限し、可変長 field の制約と送信候補の予算選別を実装している。
 各上限の超過による切断、上限ちょうどの受理、大量情報の往復を test で確認している。
-NodeProfile の到達先の真正性と Web of Trust の policy を決める。
+NodeProfile は署名を付けて生成し、wire と URI から作る経路で検証する。
+起動時に自 node の鍵で署名し、DataMessage で受信した NodeProfile のうち更新時刻が許容を超えて進んでいるものは捨てる。
+署名の検証、改ざんの拒否、固定した署名の bytes、更新時刻による置き換えを test で確認している。
+Web of Trust の policy は未決である。
+接続側が接続候補の公開鍵を Session の cert と照合する処理は、既知の不具合として [issues.md](../issues.md) に載せている。

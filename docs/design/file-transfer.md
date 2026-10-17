@@ -352,7 +352,7 @@ node ID は鍵を作り直せば変えられるため、除外は同じ node ID 
 
 ### 6.1 決定済み
 
-探索と file 交換の分離は [design.md](../design.md#51-決定済み) が正とする。
+探索と file 転送の分離は [design.md](../design.md#51-決定済み) が正とする。
 
 #### MerkleLayer.rank は子 block の rank を表す
 

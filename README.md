@@ -2,11 +2,11 @@
 <img width="128" src="https://github.com/omnius-labs/axus/blob/main/docs/logo.png?raw=true" alt="Axus logo">
 </p>
 
-<h1 align="center">Axus - Omnius File Exchanger (Work in Progress)</h1>
+<h1 align="center">Axus - Omnius P2P File Distribution (Work in Progress)</h1>
 
 [![test-daemon-all](https://github.com/omnius-labs/axus/actions/workflows/test-daemon-all.yml/badge.svg)](https://github.com/omnius-labs/axus/actions/workflows/test-daemon-all.yml)
 
-Axus is a peer-to-peer (P2P) file-sharing service.
+Axus is a peer-to-peer (P2P) file distribution system that runs on personal servers and PCs, designed to eliminate single points of failure in file discovery.
 
 ## Features
 

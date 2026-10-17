@@ -27,7 +27,7 @@ NodeFinder は既知 node の交換と、AssetKey を広告した node の所在
 何を広告するかは上位 component が決める。
 FileExchanger は取得途中の file も広告するため、file の所在情報には block を一部しか持たない node が含まれる（[file-transfer.md](./file-transfer.md#購読は開始時から所在として広告する)）。
 NodeFinder は asset の内容を解釈せず、AssetKey と NodeProfile の対応だけを返す。
-FileExchanger はこの境界を使うため、探索の message と file 交換の message を混在させない。
+FileExchanger はこの境界を使うため、探索の message と file 転送の message を混在させない。
 
 [NodeProfileFetcher](../../daemon/modules/engine/src/core/negotiator/node/node_profile_fetcher.rs) は bootstrap 用の NodeProfile 群を外部から取得する。
 URI 変換の詳細と checksum は [protocol/uri.rs](../../daemon/modules/engine/src/protocol/uri.rs) が正である。

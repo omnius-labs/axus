@@ -1,9 +1,9 @@
 # AGENTS.md
 
-Rust を変更する前に [docs/coding/rust.md](./docs/coding/rust.md) を読む。
-本書の正本は core-rs にあり、2 章から 4 章を変更する場合は core-rs と pxna も同時に更新する。
+Read [docs/coding/rust.md](./docs/coding/rust.md) before changing Rust.
+The canonical of this document is in core-rs; when changing chapters 2 to 4, update the core-rs canonical at the same time.
 
-検証は次のコマンドで実行する。
+Run the following command for verification.
 
 ```sh
 cd daemon

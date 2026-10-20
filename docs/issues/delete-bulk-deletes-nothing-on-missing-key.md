@@ -1,36 +1,35 @@
-# delete_bulk が存在しない key を含むと何も削除せずに成功する
+# delete_bulk succeeds deleting nothing when it contains a missing key
 
-**深刻度: 低**（現在の呼び出しは存在する key だけを渡すため未顕在）
+**Severity: Low** (not visible because the current callers pass only existing keys)
 
-調査日 2026-10-06 / 対象コミット `8432b83`
+Investigated on 2026-10-06 / Target commit `8432b83`
 
-[issues.md](../issues.md) の 1 項目。
+One item of [issues.md](../issues.md).
 
-## 症状
+## Symptoms
 
-`KeyValueRocksdbStorage::delete_bulk` に存在しない key が 1 つでも含まれると、その key より前に積んだ削除も含めて何も書かずに成功を返す。
-削除されなかった key は、呼び出し元から見て削除済みに見える。
+When `KeyValueRocksdbStorage::delete_bulk` contains at least one missing key, it returns success without writing anything, including the deletions queued before that key.
+A key that was not deleted looks deleted to the caller.
 
-## 該当箇所
+## Location
 
-[key_value_rocksdb_storage.rs:430](../../daemon/modules/engine/src/base/storage/key_value_rocksdb_storage.rs#L430) は、名前から内部 ID を引けなかった key で `return Ok(())` し、[同ファイル:438](../../daemon/modules/engine/src/base/storage/key_value_rocksdb_storage.rs#L438) の `write_opt` に届かない。
+[key_value_rocksdb_storage.rs:430](../../daemon/modules/engine/src/base/storage/key_value_rocksdb_storage.rs#L430) `return Ok(())`s on a key whose name could not be resolved to an internal ID, never reaching the `write_opt` at [the same file:438](../../daemon/modules/engine/src/base/storage/key_value_rocksdb_storage.rs#L438).
 
 ```rust
 None => return Ok(()),
 ```
 
-## 原因
+## Cause
 
-存在しない key を読み飛ばすには `continue` が必要だが、`return Ok(())` と書かれており、batch の書き込みに届かない。
-`test_delete_bulk` は、存在しない key だけを渡しても error にならないことと、存在する key だけを渡して削除されることを別々に確かめ、両者が混在する場合を確かめていない。
+Skipping a missing key needs `continue`, but the code is written as `return Ok(())`, so the batch write is never reached.
+`test_delete_bulk` checks separately that passing only missing keys does not error and that passing only existing keys deletes them, but does not check the mixed case.
 
-## 影響
+## Impact
 
-唯一の呼び出し元の `delete_prefix`（[store.rs:189](../../daemon/modules/engine/src/core/negotiator/file/file_publisher/store.rs#L189)）は、同じ mutex 内で列挙した key だけを渡すため、現時点では影響しない。
-存在する key と存在しない key が混在する呼び出しを足すと、削除されない key が残る。
-コードを読んで確認した。実行による再現は行っていない。
+The only caller, `delete_prefix` ([store.rs:189](../../daemon/modules/engine/src/core/negotiator/file/file_publisher/store.rs#L189)), passes only the keys enumerated inside the same mutex, so it is not affected at this point.
+Adding a call that mixes existing and missing keys leaves undeleted keys.
 
-## 対応方針
+## Proposed fix
 
-存在しない key は `continue` で読み飛ばし、残りを 1 つの batch で削除する。
-存在する key と存在しない key が混在する呼び出しで、存在する key がすべて削除されることを test する。
+Skip missing keys with `continue` and delete the rest in one batch.
+Test that a call mixing existing and missing keys deletes all the existing keys.

@@ -1,46 +1,46 @@
-# RocketPack 型の設計
+# Design of RocketPack types
 
-## 1. このドキュメントについて
+## 1. About this document
 
-本書は RocketPack で符号化する型の正、生成物、手書き実装からの移行規約を扱う。
-語の定義は [terms.md](../terms.md) が正とする。
+This document covers the source of truth for types encoded with RocketPack, the generated artifacts, and the migration conventions from hand-written implementations.
+Term definitions are the source of [terms.md](../terms.md).
 
-### 1.1 文書間の責務分担
+### 1.1 Division of responsibilities among documents
 
-| 文書または正本 | 受け持つもの |
+| Document or source of truth | Owns |
 | --- | --- |
-| [design.md](../design.md#11-文書間の責務分担) | 全体構成、他の関心事との境界、横断的な依存関係 |
-| 本書 | Axus が採用する RocketPack 型生成と移行の設計 |
-| [rocketpack-compiler.md](../../daemon/refs/core-rs/docs/design/rocketpack-compiler.md) | `rocketpack.yaml` の書式、外部型の参照、生成される module の構成 |
-| [core-rs の DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#5-rocketpack) | RocketPack の長さ制約と decode 時の検査 |
-| [rocketpack-compiler](../../daemon/refs/core-rs/entrypoints/rocketpack-compiler) | compiler の実装 |
-| [rocketpack-compiled-example](../../daemon/refs/core-rs/entrypoints/rocketpack-compiled-example) | compiler 設定と生成物の例 |
-| `.rpf` file | 型、field 番号、外部型参照の正 |
+| [design.md](../design.md#11-division-of-responsibilities-among-documents) | Overall structure, boundaries with other concerns, cross-cutting dependencies |
+| This document | Design of the RocketPack type generation Axus adopts and its migration |
+| [rocketpack-compiler.md](../../daemon/refs/core-rs/docs/design/rocketpack-compiler.md) | Syntax of `rocketpack.yaml`, references to external types, structure of the generated module |
+| [core-rs DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#5-rocketpack) | RocketPack length constraints and decode-time checks |
+| [rocketpack-compiler](../../daemon/refs/core-rs/entrypoints/rocketpack-compiler) | compiler implementation |
+| [rocketpack-compiled-example](../../daemon/refs/core-rs/entrypoints/rocketpack-compiled-example) | Example of compiler configuration and generated artifacts |
+| `.rpf` files | Source of truth for types, field numbers, and external type references |
 
-### 1.2 本書の時制について
+### 1.2 Tenses used in this document
 
-本文は完成形の設計を記述する。
-実装状況と残作業は §6 に集約する。
+The body describes the completed design.
+The implementation status and remaining work are consolidated in §6.
 
-## 2. 責務と境界
+## 2. Responsibilities and boundaries
 
-Axus は rpf を通信型の正として、Rust の型宣言と `RocketPackStruct` 実装を生成する。
-生成型をそのまま扱える AssetKey、FileRef、MerkleLayer は生成型を使う。
-DataMessage の `Arc` と `HashMap`、NodeProfile の `OmniAddr` と ID キャッシュのように Rust 上の表現が異なる場合は、手書きの domain 型を別に保持する。
-domain 型は `RocketPackStruct` を実装せず、[protocol module](../../daemon/modules/engine/src/protocol) の専用 codec が生成型との相互変換と符号化・復号を担当する。
-Session の整数 enum と nonce 配列も、専用 codec が生成型との対応を持つ。
-compiler の内部設計は `core-rs` が持ち、本書は Axus から見た入出力と移行規約だけを扱う。
+Axus makes the rpf the source of truth for communication types and generates the Rust type declarations and `RocketPackStruct` implementations.
+Types that can be handled as generated types directly, such as AssetKey, FileRef, and MerkleLayer, use the generated types.
+When the Rust representation differs, such as DataMessage's `Arc` and `HashMap`, or NodeProfile's `OmniAddr` and ID cache, a hand-written domain type is kept separately.
+The domain types do not implement `RocketPackStruct`; the dedicated codec in the [protocol module](../../daemon/modules/engine/src/protocol) handles conversion to and from the generated types and encoding/decoding.
+The integer enums and nonce arrays of Session also keep a correspondence with generated types in the dedicated codec.
+The compiler's internal design belongs to `core-rs`; this document covers only the inputs, outputs, and migration conventions as seen from Axus.
 
-## 3. 生成の入力と出力
+## 3. Inputs and outputs of generation
 
 ```mermaid
 flowchart LR
     Rpf[rpf file]
     Conf[rocketpack.yaml]
     Compiler[rocketpack-compiler]
-    Generated[生成された Rust module]
-    Codec[protocol の専用 codec]
-    Domain[domain 型]
+    Generated[Generated Rust module]
+    Codec[Dedicated codec in protocol]
+    Domain[Domain types]
 
     Rpf --> Compiler
     Conf --> Compiler
@@ -49,148 +49,149 @@ flowchart LR
     Codec --> Domain
 ```
 
-定義を rpf 1 箇所に集めることで、encode 側と decode 側の field 番号の対応を人手で保つ必要がなくなる。
-入力は [rpfs](../../daemon/rpfs) と [rocketpack.yaml](../../daemon/rocketpack.yaml)、出力は engine の crate root に組み込む [generated.rs](../../daemon/modules/engine/src/generated.rs) と同名 directory である。
-生成物は version 管理し、通常の build で compiler を起動しない。[gen-rocketpack.sh](../../daemon/gen-rocketpack.sh) が core-rs workspace から compiler を実行し、target を `AGENT_TEMP_DIR` 配下に置く。
-`rocketpack.yaml` の書式、生成される module の構成、生成物の置き場は [rocketpack-compiler.md](../../daemon/refs/core-rs/docs/design/rocketpack-compiler.md) が正とする。
+Concentrating the definitions into a single rpf removes the need to keep the field number correspondence between the encode side and the decode side by hand.
+The inputs are [rpfs](../../daemon/rpfs) and [rocketpack.yaml](../../daemon/rocketpack.yaml), and the outputs are [generated.rs](../../daemon/modules/engine/src/generated.rs) and a same-named directory included in the engine's crate root.
+The generated artifacts are version-controlled, and the compiler is not run in a normal build.
+[gen-rocketpack.sh](../../daemon/gen-rocketpack.sh) runs the compiler from the core-rs workspace and places the target under `AGENT_TEMP_DIR`.
+The syntax of `rocketpack.yaml`, the structure of the generated module, and where artifacts go are the source of [rocketpack-compiler.md](../../daemon/refs/core-rs/docs/design/rocketpack-compiler.md).
 
-## 4. wire format の移行
+## 4. Migration of the wire format
 
-rpf の struct の field と enum の variant は `@N` の番号を持ち、この N が wire 上の field 番号である。
-`Option<T>` の field は値が `None` のとき map から省き、要素数もそれに合わせて数える。
-未知の番号を受け取った側は、その field を読み飛ばして残りの復号を続ける。
-移行は `Option` の省略と未知の field の読み飛ばしを前提にしており、手書き実装と生成物の間で field の有無が違っても復号できる。
-長さ制約と decode 時の検査は [core-rs の DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#5-rocketpack) が正とする。
+The fields of rpf structs and the variants of enums carry a `@N` number, and this N is the field number on the wire.
+An `Option<T>` field omits its key from the map when the value is `None`, and the element count is counted accordingly.
+A receiver that gets an unknown number skips that field and continues decoding the rest.
+Migration assumes the `Option` omission and skipping unknown fields, so hand-written implementations and generated artifacts can decode each other even when the set of fields differs.
+Length constraints and decode-time checks are the source of [core-rs DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#5-rocketpack).
 
-移行の不変条件は wire format を変えないことである。
-手書き実装が使っている field 番号をそのまま `@N` へ写し、番号の詰め直しや採番規則の統一を同時に行わない。
-1 つの型の宣言と codec を手書きと生成物に分けず、型ごとに正を 1 つにする。
-rpf では要素数と byte 長の上限を型に書けるため、移した型では上限を decode の時点で強制できる。
-生成 pack が同じ上限を送信時にも検査することを受け入れる。
+The invariant of migration is not changing the wire format.
+Field numbers used by the hand-written implementation are mapped to `@N` as-is, and field renumbering or unifying the numbering rules is not done at the same time.
+A type's declaration and codec are not split between hand-written and generated; each type has one source of truth.
+Because the rpf can express element-count and byte-length limits on a type, a migrated type can enforce the limits at decode time.
+Accept that the generated pack also checks the same limits at send time.
 
-byte 完全一致の例外は DataMessage の複数要素 map である。
-`HashMap` から生成型の `BTreeMap` へ変換すると走査順が変わるが、受信側は map の順序に依存しないため wire 互換として許容する。
-この部分は旧から新、新から旧の相互復号と map の内容の同一性で検証し、単一要素 map とその他の通信型は byte 固定を維持する。
-NodeProfile の URI は §5.1 の決定に従って受容範囲を変更する。
+The exception to byte-for-byte identity is DataMessage's multi-element map.
+Converting from `HashMap` to the generated type's `BTreeMap` changes the traversal order, but since the receiving side does not depend on map order, it is tolerated as wire-compatible.
+This part is verified by mutual decoding from old to new and new to old and by the identity of the map contents; single-element maps and the other communication types stay byte-fixed.
+The accepted range of NodeProfile URIs is changed per the decision in §5.1.
 
-## 5. 設計判断
+## 5. Design decisions
 
-### 5.1 決定済み
+### 5.1 Decided
 
-#### RocketPack 型を rpf から生成する
+#### Generate RocketPack types from the rpf
 
-**決定**
-RocketPack で符号化する型は rpf を正とし、Rust の型宣言と `RocketPackStruct` 実装を生成する。
-生成物は手で編集せず、型と field 番号の変更は rpf にだけ加える。
+**Decision**
+Types encoded with RocketPack make the rpf the source of truth, and the Rust type declarations and `RocketPackStruct` implementations are generated.
+The generated artifacts are not hand-edited; changes to types and field numbers are made only in the rpf.
 
-**理由**
-手書きでは pack と unpack が同じ field 番号を別々の箇所で扱い、対応のずれを型で検出できないためである。
-定義を 1 箇所に集めることで、Rust 以外の言語向けの生成先を後から追加する余地も残る。
+**Rationale**
+With hand-written code, pack and unpack handle the same field numbers in separate places, and a mismatch is not detectable through types.
+Concentrating the definitions in one place also leaves room to add generation targets for languages other than Rust later.
 
-**却下案**
-手書きの `RocketPackStruct` 実装を続ける案は、既存 code に採用の痕跡があるが、型の正が実装の中に散るため採用しない。
+**Rejected**
+Continuing hand-written `RocketPackStruct` implementations leaves traces of adoption in existing code, but since the source of truth for the types would be scattered across implementations, it is not adopted.
 
-#### OmniAddr は string とし、変換を Axus に置く
+#### OmniAddr is a string, with conversion in Axus
 
-**決定**
-OmniAddr は Axus の rpf では string とし、domain 型との変換は NodeProfile の専用 codec に置く。
-OmniHash と OmniCert は omnikit の manifest を dependency として参照する。core-rs は変更しない。
+**Decision**
+In Axus's rpf, OmniAddr is a string, and the conversion to and from the domain type lives in the dedicated codec for NodeProfile.
+OmniHash and OmniCert reference the omnikit manifest as a dependency. core-rs is not changed.
 
-**理由**
-現行の NodeProfile が string として符号化している表現を保ち、Axus の通信表現の責務を Axus に置くためである。
-変換は `as_str` と `OmniAddr::from` を使い、parse や正規化を加えない。
+**Rationale**
+To keep the representation that the current NodeProfile encodes as a string and to keep the responsibility for Axus's communication representation in Axus.
+The conversion uses `as_str` and `OmniAddr::from`, and adds no parsing or normalization.
 
-**却下案**
-core-rs に Axus 用の OmniAddr schema を追加する案は、Axus の通信形式の責務を依存先へ持ち込むため採用しない。
+**Rejected**
+Adding an OmniAddr schema for Axus to core-rs would move the responsibility for Axus's communication format into a dependency, so it is not adopted.
 
-#### NodeProfile の URI とネットワークの受容上限を統一する
+#### Unify the NodeProfile URI and network acceptance limits
 
-**決定**
-NodeProfileUri を廃止し、URI とネットワークで同じ生成 NodeProfile を使う。
-addrs は双方で最大 8 件とし、pack も生成 codec の上限検査に従う。
-9 件以上のアドレスを含む既存 URI の互換性は破棄し、decode 失敗を受け入れる。
-URI への符号化は `NodeProfile::to_uri` が `Result<String>` を返し、上限超過を呼び出し元で扱う。
+**Decision**
+NodeProfileUri is removed, and the same generated NodeProfile is used for the URI and the network.
+`addrs` is at most 8 entries in both, and the pack also follows the generated codec's limit checks.
+Compatibility with existing URIs containing 9 or more addresses is dropped, and decode failures are accepted.
+Encoding to a URI has `NodeProfile::to_uri` return `Result<String>`, and a limit overflow is handled by the caller.
 
-**理由**
-同じ NodeProfile に二つの schema と受容範囲を持たず、制約の強い方に統一するためである。
-`Display` の `fmt::Error` を `to_string` に返すと panic するため、URI 化を専用メソッドとして公開する。
+**Rationale**
+To avoid two schemas and acceptance ranges for the same NodeProfile and to unify on the more restrictive one.
+Because returning `Display`'s `fmt::Error` from `to_string` panics, URI generation is exposed as a dedicated method.
 
-**却下案**
-URI 用の無制限 schema と codec を維持する案は、既存 URI の互換性より schema の統一を優先するため採用しない。
+**Rejected**
+Keeping an unlimited schema and codec for URIs prioritizes schema unification over compatibility with existing URIs, so it is not adopted.
 
-#### 必要な型だけ domain 型と通信型を分ける
+#### Separate domain types and communication types only where needed
 
-**決定**
-生成型を直接扱える型には手書きの振る舞いを追加する。
-domain 型を別に置く場合は専用 codec で明示的に変換し、domain 型から `RocketPackStruct` を外す。
+**Decision**
+Types that can directly handle the generated type get hand-written behavior added.
+When a domain type is kept separately, the conversion is explicit in a dedicated codec, and `RocketPackStruct` is removed from the domain type.
 
-**理由**
-全型の二重化を避けつつ、共有所有権、キャッシュ、enum などの Rust 上の表現を保つためである。
+**Rationale**
+To avoid duplicating every type while keeping Rust-side representations such as shared ownership, caches, and enums.
 
-**却下案**
-domain 型へ薄い `RocketPackStruct` 実装を残す案は、domain 値と通信表現の変換を送受信側で明示する方針に反するため採用しない。
+**Rejected**
+Leaving a thin `RocketPackStruct` implementation on the domain types violates the policy of making the conversion between domain values and communication representations explicit at the send and receive sides, so it is not adopted.
 
-#### DataMessage の map 順序変化と送信時検査を受け入れる
+#### Accept DataMessage's map order changes and send-time checks
 
-**決定**
-DataMessage も生成型へ切り替える。複数要素 map の順序変化は §4 の例外として許容する。
-既存の件数上限を schema に写し、上限超過値を生成 pack が送信時にも拒否することを受け入れる。
-DataMessage の byte 長上限と可変長 field の制限は、次の決定に従う。
+**Decision**
+DataMessage is also switched to the generated type. The order change of multi-element maps is tolerated as the exception in §4.
+The existing count limits are written into the schema, and it is accepted that the generated pack also rejects over-limit values at send time.
+DataMessage's byte-length limit and variable-length field limits follow the next decision.
 
-**理由**
-受信側の map 解釈と既存の件数上限を維持したまま、codec の正を rpf に集約するためである。
+**Rationale**
+To consolidate the source of truth for the codec into the rpf while keeping the receiving side's map interpretation and the existing count limits.
 
-#### NodeFinder の byte 長を V1 の入力境界で制限する
+#### Limit NodeFinder byte lengths at V1 input boundaries
 
-**決定**
-NodeFinder の frame payload と DataMessage の符号化結果は 256 KiB 以下とする。
-公開鍵は 256 byte、アドレス 1 件の UTF-8 表現は 512 byte、AssetKey の種別は 64 byte 以下とする。
-個別 field の制約と全体サイズの定数は rpf に置き、全体サイズは frame 層と専用 codec が強制する。
-既存の件数上限は維持するが、件数以内でも byte 長を超える組み合わせは拒否する。
-V1 に適用し、上限以内の wire format は維持する。上限超過の旧 message と URI は受理しない。
+**Decision**
+NodeFinder's frame payload and the encoded result of a DataMessage are at most 256 KiB.
+A public key is at most 256 bytes, one address's UTF-8 representation 512 bytes, and an AssetKey's kind 64 bytes.
+The per-field constraints and the overall size constant live in the rpf, and the overall size is enforced by the frame layer and the dedicated codec.
+The existing count limits are kept, but combinations within the count that exceed the byte length are rejected.
+Applied to V1, and wire formats within the limits are kept. Over-limit old messages and URIs are not accepted.
 
-**理由**
-件数だけでは可変長の値と NodeProfile の重複による受信 memory の消費を制限できない。
-frame 自体の上限を下げると、decode 前の buffer も制限できる。
+**Rationale**
+Counts alone cannot limit the receive-side memory consumed by variable-length values and duplicate NodeProfiles.
+Lowering the frame limit itself also constrains the buffer before decoding.
 
-**却下案**
-1 MiB の上限は一度に多くの情報を伝播できるが、接続ごとの受信 memory の抑制を優先して採らない。
-version の追加は交渉と移行の経路を増やすため、上限超過データの互換性を破棄して V1 に適用する。
+**Rejected**
+A 1 MiB limit can propagate a lot of information at once, but constraining the per-connection receive memory is prioritized, so it is not taken.
+Adding a version adds negotiation and migration paths, so compatibility with over-limit data is dropped and V1 is applied instead.
 
-#### サイズ予算内で各種類の送信候補を交互に選ぶ
+#### Alternating candidate types within the size budget
 
-**決定**
-送信候補は件数で絞った後、node 情報、要求、応答、所在の伝播から交互に選ぶ。
-候補順と最初に選ぶ種類を無作為化し、符号化サイズが予算に収まる候補だけを採用する。
-所在情報の AssetKey と NodeProfile 群は一単位として扱い、候補の符号化サイズと collection の header を計上する。
-予算から外れた候補は次の計算周期で選び直し、全候補の送信完了は保証しない。
+**Decision**
+Send candidates are narrowed by count and then chosen alternately from node info, requests, responses, and location propagation.
+The candidate order and the kind chosen first are randomized, and only candidates whose encoded size fits the budget are adopted.
+A location's AssetKey and its NodeProfile set are treated as one unit, and the encoded size and the collection headers are accounted for.
+Candidates that fall out of the budget are reconsidered in the next computation cycle; completing the send of all candidates is not guaranteed.
 
-**理由**
-一種類の大量情報が他の情報の送信機会を奪うことを防ぎ、現行の無作為な件数選別と同じ寿命で候補を管理するためである。
+**Rationale**
+To prevent a single kind of large information from depriving other information of send opportunities, and to manage candidates with the same lifetime as the current random count selection.
 
-**却下案**
-応答の最優先は要求と所在の伝播を遅らせるため採らない。
-未送信 queue は容量、期限、候補更新の管理が増えるため採らない。
+**Rejected**
+Prioritizing responses delays requests and location propagation, so it is not taken.
+An unsent queue adds management of capacity, deadlines, and candidate updates, so it is not taken.
 
-#### 設定違反は拒否し、保存済みの不適合 URI は読み飛ばす
+#### Reject configuration violations and skip stored non-conforming URIs
 
-**決定**
-明示した bootstrap URI と自 node の byte 長違反は、起動時に理由を示して拒否する。
-保存済みの不適合 URI は警告して読み飛ばし、DB の行を残す。
-アドレスの文字列は切り詰めない。自 node のアドレス件数超過を 8 件に絞る既存の扱いは維持する。
+**Decision**
+A byte-length violation of an explicit bootstrap URI or of the local node causes a rejection with a reason at startup.
+Stored non-conforming URIs are skipped with a warning, and the DB rows are kept.
+Address strings are not truncated. The existing handling that trims the local node's address count to 8 is kept.
 
-**理由**
-設定の誤りを利用者へ返しつつ、使えない既知 node の記録だけを理由に daemon 全体を止めないためである。
-文字列の切り詰めは接続先の意味を変え、DB の削除は保存済み情報を失うため採らない。
+**Rationale**
+To return configuration errors to the user while not stopping the whole daemon just because a record of an unusable known node exists.
+Truncating strings would change the meaning of the connect target, and deleting DB rows would lose stored information, so neither is taken.
 
-## 6. 現状と残作業
+## 6. Current status and remaining work
 
-生成型と専用 codec への移行を完了した。
-再生成の再現性、旧 codec との互換性、URI の境界と送受信の件数上限を検証した。
+The migration to generated types and dedicated codecs is complete.
+Regeneration reproducibility, compatibility with the old codec, and the URI boundaries and send/receive count limits are verified.
 
-NodeFinder の frame と DataMessage の符号化結果を 256 KiB 以下に制限している。
-field の上限は生成 pack/unpack、全体の上限は frame 層と専用 codec で検査する。
-最大件数と最大長の field を組み合わせた test fixture の符号化サイズは 72,386,544 byte であり、この組み合わせを送信時に拒否する。
-TaskComputer は件数選別後に各種類の候補を交互に採用し、サイズ予算内に収める。
-byte 長の境界、多バイト文字、大量候補の選別と往復、設定違反の拒否、保存済み DB 行の保持を test で確認している。
-既知の不具合は [issues.md](../issues.md) を参照する。
+NodeFinder's frame and DataMessage encoded results are limited to 256 KiB or less.
+Field limits are checked by the generated pack/unpack, and the overall limit by the frame layer and the dedicated codec.
+The encoded size of a test fixture combining the maximum-count and maximum-length fields is 72,386,544 bytes, and this combination is rejected at send time.
+TaskComputer adopts candidates of each kind alternately after the count selection and fits them within the size budget.
+Byte-length boundaries, multi-byte characters, the selection of many candidates and round trips, the rejection of configuration violations, and the retention of stored DB rows are confirmed by tests.
+For known bugs, see [issues.md](../issues.md).

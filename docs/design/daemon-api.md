@@ -1,54 +1,54 @@
-# daemon と API 層の設計
+# Design of the daemon and API layer
 
-## 1. このドキュメントについて
+## 1. About this document
 
-本書は daemon process のライフサイクル、設定境界、REST API の contract と生成物の境界を扱う。
-語の定義は [terms.md](../terms.md) が正とする。
+This document covers the lifecycle of the daemon process, the configuration boundaries, the REST API contract, and the boundary of generated artifacts.
+Term definitions are the source of [terms.md](../terms.md).
 
-### 1.1 文書間の責務分担
+### 1.1 Division of responsibilities among documents
 
-| 文書または正本 | 受け持つもの |
+| Document or source of truth | Owns |
 | --- | --- |
-| [design.md](../design.md#11-文書間の責務分担) | 全体構成、他の関心事との境界、横断的な依存関係 |
-| 本書 | daemon の所有関係、設定境界、REST API と生成の設計 |
-| [openapi.yaml](../../daemon/openapi.yaml) | REST API の path、schema、status code |
-| [entrypoints/interface](../../daemon/entrypoints/interface) | OpenAPI から生成する Rust interface |
-| [entrypoints/daemon](../../daemon/entrypoints/daemon) | daemon の実装 |
+| [design.md](../design.md#11-division-of-responsibilities-among-documents) | Overall structure, boundaries with other concerns, cross-cutting dependencies |
+| This document | Ownership in the daemon, configuration boundaries, and the design of the REST API and generation |
+| [openapi.yaml](../../daemon/openapi.yaml) | REST API paths, schemas, and status codes |
+| [entrypoints/interface](../../daemon/entrypoints/interface) | Rust interface generated from OpenAPI |
+| [entrypoints/daemon](../../daemon/entrypoints/daemon) | daemon implementation |
 
-### 1.2 本書の時制について
+### 1.2 Tenses used in this document
 
-本文は完成形の設計を記述する。
-実装状況と残作業は §6 に集約する。
+The body describes the completed design.
+The implementation status and remaining work are consolidated in §6.
 
-## 2. 責務と境界
+## 2. Responsibilities and boundaries
 
-daemon は engine を所有して起動と停止を管理し、local client へ REST API を提供する。
-P2P transport、探索、file protocol の意味論は、それぞれの設計文書が持つ。
+The daemon owns the engine, manages startup and shutdown, and provides a REST API to local clients.
+The semantics of the P2P transport, lookup, and the file protocol belong to their respective design documents.
 
-## 3. process のライフサイクル
+## 3. Process lifecycle
 
-[Executor](../../daemon/entrypoints/daemon/src/executor.rs) は設定 directory を決定して設定を読み込み、`core.state_dir` を作成して、その中の `axus.lock` を取得する。
-同じ永続状態を使う daemon の多重起動を、この lock で防ぐ。
-続いて logging を初期化し、[DaemonState](../../daemon/entrypoints/daemon/src/state.rs) を構築して [ApiServer](../../daemon/entrypoints/daemon/src/server.rs) を起動する。
-SIGINT または SIGTERM は共通の cancellation token に変換し、HTTP server と engine の停止を同じ process 境界で管理する。
+[Executor](../../daemon/entrypoints/daemon/src/executor.rs) decides the configuration directory, reads the configuration, creates `core.state_dir`, and acquires `axus.lock` in it.
+This lock prevents multiple daemons using the same persistent state.
+Then it initializes logging, constructs [DaemonState](../../daemon/entrypoints/daemon/src/state.rs), and starts [ApiServer](../../daemon/entrypoints/daemon/src/server.rs).
+SIGINT and SIGTERM are converted to a common cancellation token, and the HTTP server and engine shutdowns are managed at the same process boundary.
 
-DaemonState は daemon の所有物を保持し、終了時には `AxusService::shutdown()` を起点として下位 task を停止する。
-所有関係と停止順序を同じ階層にすることで、background task の取り残しを防ぐ。
+DaemonState holds the daemon's owned objects and, at shutdown, stops the lower-level tasks starting from `AxusService::shutdown()`.
+Keeping ownership and stop order in the same hierarchy prevents background tasks from being left behind.
 
-## 4. 設定と OpenAPI 生成
+## 4. Configuration and OpenAPI generation
 
-### 4.1 設定の境界
+### 4.1 Configuration boundaries
 
-[config.rs](../../daemon/entrypoints/daemon/src/config.rs) は、永続状態の置き場、待ち受け address、他の node に広告する address と UPnP の利用、起動時に接続する bootstrap node、logging を外部設定から内部型へ変換する。
-HTTP API と P2P transport は別の待ち受け口であるため、両者の address を別々に設定できなければならない。
-一時 directory は process 寿命に従い、再起動後も必要な情報は `state_dir` 配下に置く。
+[config.rs](../../daemon/entrypoints/daemon/src/config.rs) converts the location of the persistent state, the listen address, the addresses advertised to other nodes and UPnP use, the bootstrap nodes to connect to at startup, and logging from the external configuration into internal types.
+Because the HTTP API and the P2P transport are separate listen points, their addresses must be configurable separately.
+The temporary directory follows the process lifetime; information needed after a restart lives under `state_dir`.
 
-設定 file 名、既定値、CLI option の正は README と code に置く。
-本書は、API と P2P の設定を混同しないこと、および永続状態と一時状態を分けることだけを規定する。
+The source of truth for the configuration file name, defaults, and CLI options is the README and the code.
+This document only prescribes not mixing the API and P2P settings and separating persistent state from temporary state.
 
-### 4.2 OpenAPI からの code generation
+### 4.2 Code generation from OpenAPI
 
-REST API は [openapi.yaml](../../daemon/openapi.yaml) を contract の正とし、生成物と手書き実装を分ける。
+The REST API makes [openapi.yaml](../../daemon/openapi.yaml) the source of truth for the contract and separates generated artifacts from hand-written implementation.
 
 ```mermaid
 flowchart LR
@@ -65,63 +65,63 @@ flowchart LR
     Handler --> Router
 ```
 
-生成物を毎回作り直せることが前提なので、API 変更は OpenAPI と handler 実装にだけ加える。
-この境界により、schema と router の手編集による食い違いを防ぐ。
+Regenerating the artifacts from scratch is a precondition, so API changes are made only in the OpenAPI and the handler implementation.
+This boundary prevents discrepancies from hand-editing the schema and the router.
 
-## 5. 設計判断
+## 5. Design decisions
 
-### 5.1 決定済み
+### 5.1 Decided
 
-#### OpenAPI を REST contract の正とする
+#### OpenAPI is the source of truth for the REST contract
 
-**決定**
-REST API の path、schema、status code は `openapi.yaml` で定義し、Rust interface は生成する。
+**Decision**
+The REST API paths, schemas, and status codes are defined in `openapi.yaml`, and the Rust interface is generated.
 
-**理由**
-schema、router、client が別々の定義を持つ状態を避け、変更点を 1 箇所に集約するためである。
+**Rationale**
+To avoid a state where the schema, the router, and the client have separate definitions, and to concentrate changes into a single place.
 
-**却下案**
-生成された interface の直接編集は、再生成で失われ、OpenAPI と実装を食い違わせるため採用しない。
+**Rejected**
+Directly editing the generated interface is not adopted because regeneration would lose it and would make the OpenAPI and the implementation diverge.
 
-### 5.2 保留
+### 5.2 Deferred
 
-#### 長時間 REST 操作の表現
+#### Representation of long-running REST operations
 
-**現状**
-file の符号化、取得、復号は内部状態を持つ長時間処理であり、外部 API への写し方を定めていない。
+**Current state**
+Encoding, fetching, and decoding a file are long-running operations with internal state, and how to map them onto the external API is not decided.
 
-候補は次の 2 つである。
+The candidates are the following two.
 
-1. job resource を作って polling させると再接続に強いが、job の保存期間と cancel contract が必要になる。
-2. stream または server-sent event で進捗を返すと即時性があるが、切断時の再開規則が必要になる。
+1. Creating a job resource and polling it is resilient to reconnection, but requires a job retention period and a cancel contract.
+2. Streaming progress as a stream or server-sent events is immediate, but requires rules for resuming after disconnection.
 
-**なぜ今決めないか**
-FilePublisher と FileSubscriber の public operation が daemon 層に接続されるまでは、安定させるべき外部 contract がないためである。
+**Why not decided yet**
+Because there is no external contract to stabilize until FilePublisher's and FileSubscriber's public operations are wired to the daemon layer.
 
-**決める条件**
-公開開始、購読開始、進捗取得の endpoint を `openapi.yaml` に追加する前に決める。
+**Decision condition**
+Decide before adding the endpoints for starting a publish, starting a subscription, and fetching progress to `openapi.yaml`.
 
-#### REST API の到達範囲と認証
+#### Reach and authentication of the REST API
 
-**現状**
-REST API は認証を持たず、`openapi.yaml` の health は `security: []` である。
-待ち受け address は設定 `api.listen_addr` で自由に選べ、local client だけが接続する前提を daemon は強制していない。
+**Current state**
+The REST API has no authentication, and the health endpoint in `openapi.yaml` has `security: []`.
+The listen address can be freely chosen with the `api.listen_addr` setting, and the daemon does not enforce the premise that only local clients connect.
 
-候補は次の 2 つである。
+The candidates are the following two.
 
-1. loopback address だけで待ち受けることを強制すると認証を持たずに済むが、別の machine の client から操作できない。
-2. token などの認証を加えると待ち受け address を自由にできるが、token の発行と保管の手順が必要になる。
+1. Forcing a loopback-only listen address removes the need for authentication, but clients on another machine cannot operate it.
+2. Adding authentication such as a token frees the listen address, but requires procedures for issuing and storing the token.
 
-**なぜ今決めないか**
-状態を変える endpoint がなく、health 以外に守るべき操作がないためである。
+**Why not decided yet**
+Because there are no state-changing endpoints, and nothing other than health needs to be protected.
 
-**決める条件**
-公開や購読のように状態を変える最初の endpoint を `openapi.yaml` に追加する前に決める。
+**Decision condition**
+Decide before adding the first state-changing endpoint, such as publish or subscribe, to `openapi.yaml`.
 
-## 6. 現状と残作業
+## 6. Current status and remaining work
 
-Executor は config、file lock、signal、HTTP server を組み立て、DaemonState は AxusService を所有して停止まで管理する。
-API と P2P は別の待ち受け address を持ち、health handler は稼働を返す。
-file 公開、購読、進捗、cancel の endpoint は未定義である。
+Executor assembles the config, file lock, signal handling, and HTTP server, and DaemonState owns AxusService and manages it until shutdown.
+The API and P2P have separate listen addresses, and the health handler reports that the daemon is running.
+The endpoints for publishing files, subscribing, progress, and cancel are not defined.
 
-確認済みの不具合は [issues.md](../issues.md) を参照する。
+For confirmed bugs, see [issues.md](../issues.md).

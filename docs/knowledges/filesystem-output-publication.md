@@ -1,41 +1,41 @@
-# 置換しない rename は OS ごとに別の API で提供される
+# A non-replacing rename is provided by a different API on each OS
 
-**出所: 文献と動作確認**（Linux man-pages 6.19 / macOS 26.6.2 rename(2) / Microsoft Learn MoveFileExW・MoveFile / Rust std 1.96.0 ソース / 2026-10-04、2026-10-07）
+**Source: literature and runtime verification** (Linux man-pages 6.19 / macOS 26.6.2 rename(2) / Microsoft Learn MoveFileExW and MoveFile / Rust std 1.96.0 source / 2026-10-04, 2026-10-07)
 
-[knowledges.md](../knowledges.md) の 1 項目。
+One item of [knowledges.md](../knowledges.md).
 
-## 事実
+## Facts
 
-Rust の `std::fs::rename` は、Unix では `rename`、Windows では `MoveFileExW` または `SetFileInformationByHandle` に対応し、既存の file の追加先を置き換える。
-既存 entry があれば失敗する rename は、OS ごとに次の API で得られる。
+Rust's `std::fs::rename` maps to `rename` on Unix and `MoveFileExW` or `SetFileInformationByHandle` on Windows, and replaces an existing file's target.
+A rename that fails when an existing entry is present is obtained, per OS, with the following APIs.
 
-| OS | API | 追加先が既存のとき | 保存先が対応しないとき |
+| OS | API | When the target exists | When the store does not support it |
 | --- | --- | --- | --- |
-| Linux | `renameat2` の `RENAME_NOREPLACE` | `EEXIST` で失敗する | `EINVAL` で失敗する |
-| macOS | `renamex_np` の `RENAME_EXCL` | `EEXIST` で失敗する | `ENOTSUP` で失敗する |
-| Windows | `MOVEFILE_REPLACE_EXISTING` を指定しない `MoveFileExW` | 失敗する | 資料に記載がない |
+| Linux | `renameat2` with `RENAME_NOREPLACE` | Fails with `EEXIST` | Fails with `EINVAL` |
+| macOS | `renamex_np` with `RENAME_EXCL` | Fails with `EEXIST` | Fails with `ENOTSUP` |
+| Windows | `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING` | Fails | Not documented |
 
-Linux の `RENAME_NOREPLACE` は、man-pages の記載では ext4（Linux 3.15）、btrfs・tmpfs・cifs（3.17）、xfs（4.0）、ext2・vfat ほか（4.9）が対応する。
-macOS の `RENAME_EXCL` は、`getattrlist(2)` の `VOL_CAP_INT_RENAME_EXCL` を持つ filesystem で有効になる。
-Windows の `MOVEFILE_WRITE_THROUGH` を指定した `MoveFileExW` は、移動が disk に反映されるまで戻らない。
-`MOVEFILE_REPLACE_EXISTING` を指定しない場合の既存の追加先の扱いは、`MoveFileExW` の資料ではフラグの説明の反対として読み取れ、`MoveFile` の資料は追加先が存在してはならないと記す。
+Per man-pages, Linux's `RENAME_NOREPLACE` is supported by ext4 (Linux 3.15), btrfs, tmpfs, and cifs (3.17), xfs (4.0), and ext2, vfat, and others (4.9).
+macOS's `RENAME_EXCL` is effective on filesystems with `VOL_CAP_INT_RENAME_EXCL` in `getattrlist(2)`.
+Windows's `MoveFileExW` with `MOVEFILE_WRITE_THROUGH` does not return until the move is reflected to disk.
+The handling of an existing target without `MOVEFILE_REPLACE_EXISTING` can be read as the opposite of the flag's description in the `MoveFileExW` documentation, and the `MoveFile` documentation states that the target must not exist.
 
-どの API も、rename は同じ filesystem または volume の中で 1 つの名前を別の名前に付け替える。
-Windows の `MOVEFILE_COPY_ALLOWED` を指定すると volume をまたぐ移動が copy と削除になるが、付け替えではなくなる。
+For any API, a rename renames one name to another within the same filesystem or volume.
+Specifying Windows's `MOVEFILE_COPY_ALLOWED` makes a cross-volume move a copy and delete, which is no longer a rename.
 
-macOS 26.6.2 の `/private/tmp` の filesystem で、`renamex_np` の `RENAME_EXCL` による配置が成功し、移動元の名前が消えて移動先に内容が残ることを確認した。
-移動先に通常 file、directory、symlink、dangling symlink がある場合は、すべて `EEXIST` で失敗し、移動元と既存の内容を保持した。
+On the filesystem of macOS 26.6.2 `/private/tmp`, a placement with `renamex_np`'s `RENAME_EXCL` succeeded, the source name disappeared, and the content remained at the target.
+With a regular file, directory, symlink, or dangling symlink at the target, all failed with `EEXIST`, keeping the source and the existing content.
 
-## 根拠
+## Evidence
 
-[Linux man-pages 6.19 rename(2)](https://man7.org/linux/man-pages/man2/rename.2.html)、macOS 26.6.2 の `man 2 rename`、[Microsoft Learn MoveFileExW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)、[Microsoft Learn MoveFile](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefile) を 2026-10-04 に参照した。
-`std::fs::rename` の対応先は Rust 1.96.0 の配布ソース `library/std/src/fs.rs` の文書 comment で確認した。
-2026-10-07 に、Python の `ctypes` から macOS の `renamex_np` を呼び、一時 directory で配置と 4 種の既存 entry の拒否を確認した。
-macOS では engine の配置 test も実行し、同じ既存 entry の保護と親 directory の同期の成功を確認した。
-Linux と Windows での実行と電源断の試験は未確認である。
+Consulted [Linux man-pages 6.19 rename(2)](https://man7.org/linux/man-pages/man2/rename.2.html), macOS 26.6.2 `man 2 rename`, [Microsoft Learn MoveFileExW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw), and [Microsoft Learn MoveFile](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefile) on 2026-10-04.
+The `std::fs::rename` mapping was confirmed in the documented comments of `library/std/src/fs.rs` in the Rust 1.96.0 distributed source.
+On 2026-10-07, macOS `renamex_np` was called from Python's `ctypes`, and the placement and the rejection of the 4 kinds of existing entries were confirmed in a temporary directory.
+The placement test of the engine was also run on macOS, confirming the same existing-entry protection and the success of the parent-directory sync.
+Execution on Linux and Windows and power-loss tests are not confirmed.
 
-## 含意
+## Implications
 
-[storage.md §4.5](../design/storage.md#45-出力の確定と回復) は、一時出力を置換しない rename で出力先へ配置し、一時出力と出力先の有無から配置の有無を判定する。
-保存先が対応しない場合の失敗は、§4.5 で Failed として扱う。
-Windows の directory entry の永続化は、[storage.md §4.2](../design/storage.md#42-永続化の保証と境界) で `MOVEFILE_WRITE_THROUGH` に依存する。
+[storage.md §4.5](../design/storage.md#45-output-finalization-and-recovery) places the temporary output with a non-replacing rename and judges placement from the presence of the temporary output and the destination.
+A failure when the store does not support it is handled as Failed in §4.5.
+On Windows, the directory entry persistence depends on `MOVEFILE_WRITE_THROUGH` in [storage.md §4.2](../design/storage.md#42-durability-guarantees-and-boundaries).

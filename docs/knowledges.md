@@ -1,37 +1,37 @@
-# Axus の外部知識
+# Axus External Knowledge
 
-本書は依存ライブラリと OS の挙動について、一次資料で確認した事実を扱う。
-Axus の設計判断と実装状況は設計文書、コードの不具合は issues が持つ。
+This document covers facts about depends and the OS confirmed against primary sources.
+Axus design decisions and implementation status live in the design documents, and code bugs in the issues.
 
-## 1. この文書について
+## 1. About this document
 
-### 1.1 文書間の責務分担
+### 1.1 Division of responsibilities among documents
 
-| 文書 | 受け持つもの |
+| Document | Owns |
 | --- | --- |
-| 本書 | 外部の事実の一覧、検証対象、出所、確認日、項目間の関係 |
-| [design.md](./design.md#11-文書間の責務分担) | 文書族の地図と、外部仕様を前提にした設計判断 |
-| [terms.md](./terms.md#2-用語一覧) | プロジェクトの語の定義と表記 |
-| [issues.md](./issues.md) | 外部仕様との照合で判明した実装の不具合 |
+| This document | The list of external facts, the verification targets, the sources, the confirmation dates, and the relations between items |
+| [design.md](./design.md#11-division-of-responsibilities-among-documents) | The map of the document family and design decisions that assume external specifications |
+| [terms.md](./terms.md#2-terminology) | Definitions and notation of project terms |
+| [issues.md](./issues.md) | Implementation bugs found when checked against external specifications |
 
-### 1.2 使い方
+### 1.2 Usage
 
-依存 version、対応 OS、外部仕様が変わったら検証対象を突き合わせ、事実と根拠を更新する。
-過去の版の記述を本文に残さない。
-「文献のみ」は参照日から 3 か月ごとに一次資料を読み直し、内容が同じなら確認日を進める。
-「文献と動作確認」は、一次資料に加えて、実環境で再現した事実を含み、障害試験は含まない。
-障害試験を行っていない項目を「検証済み」と扱わない。
+When a dependency version, supported OS, or external specification changes, reconcile the verification targets and update the facts and evidence.
+Do not keep descriptions of past versions in the body.
+For "literature only", re-read the primary source every 3 months from the reference date, and advance the confirmation date if the content is unchanged.
+For "literature and runtime verification", the entry includes facts reproduced in a real environment in addition to the primary source, and does not include fault injection tests.
+Items without fault injection tests are not handled as "verified".
 
-## 2. 一覧
+## 2. List
 
-| 項目 | 検証対象 | 出所 | 最終確認日 |
+| Item | Verification target | Source | Last confirmed |
 | --- | --- | --- | --- |
-| [RocksDB の電源断耐久性は sync 指定と build 時の定義に依存する](./knowledges/rocksdb-write-durability.md) | rocksdb 0.24.0 / librocksdb-sys 0.17.3+10.4.2 / cc 1.2.56 | 検証済み | 2026-10-06 |
-| [SQLite の WAL の電源断耐久性は同期条件に依存する](./knowledges/sqlite-wal-durability.md) | SQLx 0.9.0 / libsqlite3-sys 0.30.1 / bundled SQLite 3.46.0 | 文献のみ | 2026-10-04 |
-| [file の I/O 完了だけでは内容と directory entry の永続化は揃わない](./knowledges/filesystem-sync-durability.md) | Tokio 1.52.3 / Rust std 1.96.0 / Linux man-pages 6.19 / Apple fsync(2) archived manual | 文献と動作確認 | 2026-10-07 |
-| [置換しない rename は OS ごとに別の API で提供される](./knowledges/filesystem-output-publication.md) | Linux man-pages 6.19 / macOS 26.6.2 rename(2) / Microsoft Learn MoveFileExW / Rust std 1.96.0 | 文献と動作確認 | 2026-10-07 |
+| [RocksDB power-loss durability depends on the sync flag and build-time definitions](./knowledges/rocksdb-write-durability.md) | rocksdb 0.24.0 / librocksdb-sys 0.17.3+10.4.2 / cc 1.2.56 | Verified | 2026-10-06 |
+| [SQLite WAL power-loss durability depends on the sync conditions](./knowledges/sqlite-wal-durability.md) | SQLx 0.9.0 / libsqlite3-sys 0.30.1 / bundled SQLite 3.46.0 | Literature only | 2026-10-04 |
+| [File I/O completion alone does not align content and directory entry persistence](./knowledges/filesystem-sync-durability.md) | Tokio 1.52.3 / Rust std 1.96.0 / Linux man-pages 6.19 / Apple fsync(2) archived manual | Literature and runtime verification | 2026-10-07 |
+| [A non-replacing rename is provided by a different API on each OS](./knowledges/filesystem-output-publication.md) | Linux man-pages 6.19 / macOS 26.6.2 rename(2) / Microsoft Learn MoveFileExW / Rust std 1.96.0 | Literature and runtime verification | 2026-10-07 |
 
-RocksDB と SQLite の同期は、実体より後に metadata を確定する順序の前提である。
-filesystem の同期と置換しない rename は、それに加えて購読の出力を確定し、再起動時に配置の有無を判定する手順に関わる。
-Windows の directory entry の永続化は rename の項目の `MOVEFILE_WRITE_THROUGH` に依存するため、2 つの filesystem の項目は合わせて読み直す。
-各項目の含意から [storage.md](./design/storage.md#1-このドキュメントについて) の依存する節を参照する。
+The RocksDB and SQLite syncing are the premise of the order that finalizes metadata after the bodies.
+The filesystem syncing and non-replacing rename additionally relate to finalizing a subscription output and judging placement at restart.
+Because Windows directory entry persistence depends on the rename item's `MOVEFILE_WRITE_THROUGH`, the two filesystem items are re-read together.
+The dependent sections of [storage.md](./design/storage.md#1-about-this-document) are referenced from each item's implications.

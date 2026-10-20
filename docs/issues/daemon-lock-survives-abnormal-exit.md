@@ -1,43 +1,43 @@
-# 異常終了した daemon の lock file が残り、再起動できなくなる
+# Lock file of an abnormally terminated daemon remains and prevents restart
 
-**深刻度: 中**（`kill -9`、OS クラッシュ、電源断のあと、手で file を消すまで daemon を起動できない）
+**Severity: Medium** (after `kill -9`, an OS crash, or a power loss, the daemon cannot start until the file is removed by hand)
 
-調査日 2026-10-06 / 対象コミット `374c397`
+Investigated on 2026-10-06 / Target commit `374c397`
 
-[issues.md](../issues.md) の 1 項目。
+One item of [issues.md](../issues.md).
 
-## 症状
+## Symptoms
 
-daemon が正常に終了せず `axus.lock` が残っていると、次の起動は lock の取得で `AlreadyExists` の error になり、失敗する。
-正常に終了すると、`FileLock` の `Drop` が file を消す。
+If the daemon does not exit normally and `axus.lock` remains, the next startup fails with an `AlreadyExists` error when acquiring the lock.
+On a normal exit, the `FileLock` `Drop` deletes the file.
 
-## 該当箇所
+## Location
 
-[file_lock.rs:23](../../daemon/refs/core-rs/modules/base/src/file_lock.rs#L23) の `FileLock::acquire` は、`create_new(true)` で file を作る。
-file には自分の process ID を書くが、取得するときには読まない。
+[file_lock.rs:23](../../daemon/refs/core-rs/modules/base/src/file_lock.rs#L23) `FileLock::acquire` creates the file with `create_new(true)`.
+The process ID is written into the file but is not read when acquiring.
 
 ```rust
 OpenOptions::new().write(true).create_new(true).open(path).await?
 ```
 
-daemon は [executor.rs:113](../../daemon/entrypoints/daemon/src/executor.rs#L113) でこの `FileLock::acquire` を呼ぶ。
+The daemon calls this `FileLock::acquire` at [executor.rs:113](../../daemon/entrypoints/daemon/src/executor.rs#L113).
 
-## 原因
+## Cause
 
-排他を file の存在だけで判定し、process の生死と結び付けていない。
-`Drop` が走らない終了では、file が残る。
+Exclusivity is judged only by the file's existence and is not tied to the process's liveness.
+On an exit where `Drop` does not run, the file remains.
 
-## 影響
+## Impact
 
-異常終了した daemon は、利用者が `axus.lock` を手で消すまで再起動しない。
-error には lock の path が付くため、消すべき file は分かる。
-設定 directory に lock を置いていた変更前も、同じ性質だった。
+An abnormally terminated daemon does not restart until the user deletes `axus.lock` by hand.
+The error carries the lock path, so the file to delete is identifiable.
+The same property held before the change, when the lock was placed in the configuration directory.
 
-コードを読んで確認した。実行による再現は行っていない。
+Confirmed by reading the code. Not reproduced by execution.
 
-## 対応方針
+## Proposed fix
 
-core-rs の `FileLock` を、OS の advisory lock（Linux と macOS は `flock`、Windows は `LockFileEx`）で排他するように改める。
-process が終了すると OS が lock を解放するため、file が残っていても次の取得に成功する。
-別の process が lock を保持している間は取得が失敗し、その process を `kill` した後は、file が残っていても取得に成功することを test する。
-core-rs の変更を先に行い、axus は submodule を更新して使う。
+Change core-rs's `FileLock` to serialize with OS advisory locks (`flock` on Linux and macOS, `LockFileEx` on Windows).
+Because the OS releases the lock when the process exits, the next acquire succeeds even if the file remains.
+Test that acquisition fails while another process holds the lock and succeeds, with the file remaining, after `kill`ing that process.
+Change core-rs first, and have axus update the submodule and use it.

@@ -1,42 +1,42 @@
-# transport と Session の設計
+# Design of transport and Session
 
-## 1. このドキュメントについて
+## 1. About this document
 
-本書は TCP 接続を Session へ組み立てる手順、用途分離、停止の contract を扱う。
-語の定義は [terms.md](../terms.md) が正とする。
+This document covers the procedure for assembling a TCP connection into a Session, use separation, and the shutdown contract.
+Term definitions are the source of [terms.md](../terms.md).
 
-### 1.1 文書間の責務分担
+### 1.1 Division of responsibilities among documents
 
-| 文書または正本 | 受け持つもの |
+| Document or source of truth | Owns |
 | --- | --- |
-| [design.md](../design.md#11-文書間の責務分担) | 全体構成、他の関心事との境界、横断的な依存関係 |
-| 本書 | transport、Session の確立、用途分離、停止 |
-| [trust-security.md](./trust-security.md#2-責務と境界) | Session が保証する認証と保証しない security の境界 |
-| [core/session](../../daemon/modules/engine/src/core/session) | Session protocol の実装 |
-| [core-rs の DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#62-secure-connection) | `OmniSecureStream` の handshake の構成、鍵導出、frame の暗号化 |
-| [base/connection](../../daemon/modules/engine/src/base/connection.rs) | TCP 接続と framed stream の実装 |
+| [design.md](../design.md#11-division-of-responsibilities-among-documents) | Overall structure, boundaries with other concerns, cross-cutting dependencies |
+| This document | transport, Session establishment, use separation, shutdown |
+| [trust-security.md](./trust-security.md#2-responsibilities-and-boundaries) | What Session authenticates and the security boundary it does not guarantee |
+| [core/session](../../daemon/modules/engine/src/core/session) | Session protocol implementation |
+| [core-rs DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#62-secure-connection) | Structure of the `OmniSecureStream` handshake, key derivation, frame encryption |
+| [base/connection](../../daemon/modules/engine/src/base/connection.rs) | TCP connection and framed stream implementation |
 
-### 1.2 本書の時制について
+### 1.2 Tenses used in this document
 
-本文は完成形の設計を記述する。
-実装状況と残作業は §6 に集約する。
+The body describes the completed design.
+The implementation status and remaining work are consolidated in §6.
 
-## 2. 責務と境界
+## 2. Responsibilities and boundaries
 
-Session 層は接続を認証し、1 つの用途に割り当てて上位 component へ渡す。
-NodeFinder と FileExchanger の message は、それぞれの protocol 層が解釈する。
+The Session layer authenticates a connection, assigns it to one use, and hands it to the higher-level component.
+The messages of NodeFinder and FileExchanger are interpreted by each protocol layer.
 
-## 3. 接続と確立
+## 3. Connection and establishment
 
-[connection](../../daemon/modules/engine/src/base/connection.rs) は、TCP の受理と発信を trait の背後に置く。
-発信側は直接 TCP と SOCKS5 proxy を同じ境界で扱い、受理側は必要に応じて UPnP の port mapping を扱う。
-Session 層は connection から受け取った byte 列を core-rs の `OmniSecureStream` で保護し、その上に `FramedStream` を置く。
-上位層は接続方法ではなく、`FramedStream` が提供する長さ区切りの message 列だけを利用する。
+[connection](../../daemon/modules/engine/src/base/connection.rs) hides TCP acceptance and dialing behind a trait.
+The dialing side handles plain TCP and SOCKS5 proxy at the same boundary, and the accepting side handles UPnP port mapping when needed.
+The Session layer protects the byte stream received from connection with core-rs's `OmniSecureStream` and places `FramedStream` on top.
+The higher layers use only the length-delimited message stream that `FramedStream` provides, not the connection method.
 
-RocketPack の encode と decode は [framed.rs](../../daemon/modules/engine/src/base/connection/stream/framed.rs) の拡張を通す。
-これにより session と negotiator は、TCP の partial read や message 境界を扱わずに済む。
+RocketPack encoding and decoding pass through the extension in [framed.rs](../../daemon/modules/engine/src/base/connection/stream/framed.rs).
+This lets the session and negotiator avoid handling TCP partial reads and message boundaries.
 
-発信側と受理側は、secure channel、version、用途の順に合意する。
+The dialing side and the accepting side agree on the secure channel, the version, and the use in that order.
 
 ```mermaid
 sequenceDiagram
@@ -44,180 +44,179 @@ sequenceDiagram
     participant A as Accepter
 
     C->>A: TCP connect
-    Note over C,A: OmniSecureStream の handshake で鍵を合意し、互いの署名を検証する
-    Note over C,A: 以後の message は暗号化された stream で送る
-    par version の交換
+    Note over C,A: The OmniSecureStream handshake agrees on keys and verifies each other's signatures
+    Note over C,A: Subsequent messages are sent on an encrypted stream
+    par version exchange
         C->>A: HelloMessage
         A->>C: HelloMessage
     end
     C->>A: V1RequestMessage
     A->>C: V1ResultMessage
-    Note over C,A: Accept の場合だけ Session を上位へ渡す
+    Note over C,A: A Session is handed up only on Accept
 ```
 
-version と用途の交換を暗号化の後に置くため、第三者は交渉の内容を読むことも書き換えることもできない。
-用途の確定を認証の後に置くことで、未認証の接続を NodeFinder や FileExchanger の queue に入れない。
-version 交渉は、双方が共通して対応する手順だけを選ばなければならない。
-Session の handshake は TCP 接続後から secure channel の確立と用途選択の完了までとし、期限、同時数、frame 上限を §5.1 のとおり制限する。
-NodeFinder の Hello/Profile 交換は、その後に上位 protocol で行う。
-この交換と確立後の受信には通信周期の 3 倍の期限を適用し、詳細は [node-finder.md](./node-finder.md#61-決定済み) が正とする。
+Because version and use are exchanged after encryption, a third party can neither read nor rewrite the negotiation.
+Placing the use determination after authentication keeps unauthenticated connections out of the NodeFinder and FileExchanger queues.
+The version negotiation must select only the procedures that both sides support in common.
+The Session handshake spans from after the TCP connection to the completion of the secure channel and use selection, with the deadline, concurrency, and frame limits restricted per §5.1.
+The NodeFinder Hello/Profile exchange happens afterwards in the higher-level protocol.
+This exchange and post-establishment reception apply a deadline of 3 times the communication cycle, and [node-finder.md](./node-finder.md#61-decided) is the source of truth for the details.
 
-## 4. 用途と停止
+## 4. Uses and shutdown
 
-1 本の Session は NodeFinder または FileExchanger のどちらか一方に割り当てる（§5.1）。
-用途間の多重化を session 層に持ち込まないため、上位 protocol は自分の message だけを処理する。
+One Session is assigned to either NodeFinder or FileExchanger (§5.1).
+Because multiplexing across uses is not introduced into the session layer, each higher-level protocol processes only its own messages.
 
-[Shutdown](../../daemon/modules/engine/src/base/runtime/shutdown.rs) は、所有する下位 component を順に停止するための共通 contract である。
-worker は cancellation token の cancel で自ら終了し、shutdown はその join handle の終了を待つ。
-`abort` で future を外から打ち切らないため、worker は所有者の寿命を越えて残らず、終了時の後始末も必ず通る。
+[Shutdown](../../daemon/modules/engine/src/base/runtime/shutdown.rs) is the common contract for stopping owned lower-level components in order.
+A worker exits itself when its cancellation token is cancelled, and shutdown waits for the termination of the join handle.
+Because futures are not aborted from outside with `abort`, a worker does not outlive its owner's lifetime, and the shutdown cleanup always runs.
 
-## 5. 設計判断
+## 5. Design decisions
 
-### 5.1 決定済み
+### 5.1 Decided
 
-#### 1 Session を 1 用途に割り当てる
+#### Assign one Session to one use
 
-**決定**
-NodeFinder と FileExchanger は別の Session を使い、用途ごとの受理 queue と接続上限を持つ。
+**Decision**
+NodeFinder and FileExchanger use separate Sessions and each have an accept queue and connection limits for their use.
 
-**理由**
-message protocol と接続資源を用途ごとに隔離し、一方の負荷が他方の処理を占有しないようにするためである。
+**Rationale**
+To isolate message protocols and connection resources per use so that the load of one does not monopolize the other's processing.
 
-#### handshake の期限と並列度
+#### Handshake deadline and concurrency
 
-**決定**
-受理側と発信側は、TCP 接続後の handshake 全体に 1 つの 10 秒の期限を設け、期限を超えた接続を閉じる。
-secure channel の確立、version、用途の各交換で期限を延長しない。
-受理側は接続ごとの handshake を並行して進め、同時数を 64 本以下に制限する。
-上限を超えた接続は読み書きせずに閉じ、log に記録する。
-shutdown は handshake の task も cancellation token で終了させ、その終了を待つ。
+**Decision**
+The accepting and dialing sides set one 10-second deadline over the whole handshake after the TCP connection and close connections that exceed it.
+The deadline is not extended by the secure channel, version, or use exchanges.
+The accepting side progresses handshakes per connection in parallel and limits the concurrency to 64.
+Connections over the limit are closed without reading or writing and are logged.
+Shutdown also cancels handshake tasks with the cancellation token and waits for their termination.
 
-**理由**
-応答しない相手が受理と発信を占有する時間を制限し、認証前の相手による接続資源の消費を抑えるためである。
-接続ごとに処理すると、1 本の無応答接続がほかの handshake を止めない。
-同時数にも上限を置くことで、期限が来るまで大量の task と stream が残ることを防ぐ。
+**Rationale**
+To limit how long a non-responding peer can occupy accepting and dialing, and to curb connection-resource consumption by unauthenticated peers.
+Processing per connection keeps one unresponsive connection from stopping other handshakes.
+The concurrency limit also prevents a large number of tasks and streams from lingering until the deadline.
 
-**却下案**
-少数の worker が handshake を直列に処理する方式は、無応答接続が worker を占有すると次の接続を受理できなくなるため採用しない。
+**Rejected**
+A design where a few workers process handshakes serially is not adopted because an unresponsive connection would occupy a worker and prevent accepting the next connection.
 
-#### 用途に応じた frame 上限
+#### Frame limits by use
 
-**決定**
-handshake 中の frame は送受信とも 16 KiB 以下とする。
-用途選択後は NodeFinder の上限を 256 KiB に、FileExchanger の上限を block の最大長 1 MiB に block の message の hash と tag の分を加えた値に切り替える。
-受信 frame が上限を超えた Session は閉じる。
-FileExchanger の確立後の受信期限は [file-transfer.md](./file-transfer.md#53-状態-message-と-session-の寿命) が正とする。
+**Decision**
+Frames during the handshake are at most 16 KiB in both directions.
+After use selection, the limit switches to 256 KiB for NodeFinder and, for FileExchanger, the maximum block length of 1 MiB plus the hash and tag carried in the block message.
+A Session whose received frame exceeds the limit is closed.
+The post-establishment receive deadline of FileExchanger is the source of [file-transfer.md](./file-transfer.md#53-state-messages-and-session-lifetime).
 
-**理由**
-認証前の message に必要な範囲へ上限を下げ、受信側が frame のために確保する memory を抑えるためである。
-NodeFinder も伝播情報の受信で資源を消費するため、確立後に 256 KiB の上限を持つ。
-FileExchanger が送る最大の message は block を 1 つ載せた message なので、上限は block の最大長から定める（[file-transfer.md](./file-transfer.md#block-の最大長を-1-mib-にする)）。
+**Rationale**
+To lower the limit to the range needed by pre-authentication messages and to curb the memory the receiving side reserves for frames.
+NodeFinder also consumes resources receiving propagated information, so it holds a 256 KiB limit after establishment.
+The largest message FileExchanger sends carries one block, so the limit is derived from the maximum block length (see [file-transfer.md](./file-transfer.md#set-the-maximum-block-length-to-1-mib)).
 
-#### NodeFinder の message の要素数
+#### Element counts of NodeFinder messages
 
-**決定**
-NodeFinder は frame の上限に加え、次の要素数を送受信の上限とする。
+**Decision**
+On top of the frame limit, NodeFinder uses the following element counts as the send/receive limits.
 
-| 対象 | 1 message の上限 |
+| Target | Limit per message |
 | --- | --- |
-| `push_node_profiles` | 32 件 |
-| `want_asset_keys` | 1024 件 |
-| `give_asset_key_locations` | 1024 件 |
-| `push_asset_key_locations` | 1024 件 |
-| 各 AssetKey に付ける NodeProfile | 8 件 |
-| NodeProfile の `addrs` | 8 件 |
+| `push_node_profiles` | 32 |
+| `want_asset_keys` | 1024 |
+| `give_asset_key_locations` | 1024 |
+| `push_asset_key_locations` | 1024 |
+| NodeProfiles per AssetKey | 8 |
+| NodeProfile `addrs` | 8 |
 
-上限を超える message は decode で要素数を読んだ直後、collection を確保する前に拒否し、Session を閉じる。
-NodeProfile の `addrs` は wire の decode で検査し、NodeFinder の ProfileMessage にも適用する。
-URI も同じ生成 NodeProfile の制約に従い、自 node のアドレスは署名の前に起動時に 8 件へ切り詰めて警告を記録する。
-送信候補の絞り込みと集積情報の扱いは [node-finder.md](./node-finder.md#61-決定済み) が正とする。
+A message over the limit is rejected at decode right after reading the element count, before allocating the collection, and the Session is closed.
+NodeProfile `addrs` is checked at wire decode and also applies to NodeFinder's ProfileMessage.
+URIs follow the same generated NodeProfile constraints, and the local node's addresses are truncated to 8 at startup before signing, with a warning logged.
+Candidate narrowing and the handling of aggregate information are the source of [node-finder.md](./node-finder.md#61-decided).
 
-**理由**
-frame の上限だけでは 1 message 内の collection と所在情報の数が多くなり得るため、受信側の確保量と処理量を要素数でも制限する。
-送信側も同じ上限へ収めることで、件数を理由に相手が Session を閉じることを防ぐ。
+**Rationale**
+The frame limit alone still allows many collections and location entries per message, so the allocation and processing amounts on the receiving side are also limited by element count.
+Keeping the sending side within the same limits prevents the peer from closing the Session over the count.
 
-#### Session の secure channel
+#### Secure channel of the Session
 
-**決定**
-Session は core-rs の `OmniSecureStream` で TCP の byte 列を暗号化し、双方が相手の署名を必須とする。
-相手が署名を送らない接続と、署名の検証に失敗した接続は閉じる。
-Session が `OmniSecureStream` の handshake に求める性質は次の 4 つである。
+**Decision**
+A Session encrypts the TCP byte stream with core-rs's `OmniSecureStream` and requires the peer's signature from both sides.
+Connections that do not send a signature and connections whose signature fails verification are closed.
+The four properties Session requires of the `OmniSecureStream` handshake are the following.
 
-- 署名は、用途を示す接頭辞、接続の向き、双方の profile と一時公開鍵を含む handshake の transcript を対象にする。
-- 鍵導出は同じ transcript に依存する。
-- 双方は、導出した鍵で鍵確認を交換してから handshake を完了する。鍵確認は、transcript に加えて双方の署名の公開鍵を対象にする。
-- 一時公開鍵の作成時刻は transcript に含め、受け取った側は自分の時刻との差が許容幅を超える handshake を拒否する。Session は許容幅を 5 分とする。
+- The signature covers a transcript of the handshake that includes a prefix indicating the use, the connection direction, both sides' profiles, and their ephemeral public keys.
+- Key derivation depends on the same transcript.
+- Both sides exchange a key confirmation with the derived keys before completing the handshake. The key confirmation covers the two sides' signing public keys in addition to the transcript.
+- The creation time of the ephemeral public key is included in the transcript, and the receiver rejects handshakes whose difference from its own clock exceeds the tolerance. Session sets the tolerance to 5 minutes.
 
-Session の HelloMessage、用途の要求と結果は、暗号化された stream で交換する。
-challenge と signature を交換する旧い V1 の手順は廃止し、SessionVersion を増やさずに V1 の内容を置き換える。
-handshake の message と鍵導出の構成は [core-rs の DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#62-secure-connection) が正とする。
+Session's HelloMessage, use request, and use result are exchanged on the encrypted stream.
+The old V1 procedure that exchanged a challenge and a signature is removed, and the V1 contents are replaced without raising SessionVersion.
+The handshake messages and key derivation structure are the source of [core-rs DESIGN.md](../../daemon/refs/core-rs/docs/DESIGN.md#62-secure-connection).
 
-**理由**
-相手が選んだ nonce だけに署名する方式では、署名が TCP 接続にも鍵にも結び付かない。
-ある node を自分へ接続させた第三者は、handshake を本物の相手へ中継して双方に互いを認証させ、その後の平文を読み書きできる。
-一時公開鍵を署名の対象に含めると、第三者は鍵を差し替えられず、合意した鍵を得られない。
+**Rationale**
+In a scheme that signs only a nonce chosen by the peer, the signature binds to neither the TCP connection nor the keys.
+A third party that routes a node's connection to itself relays the handshake to the genuine peer so both authenticate each other, and can then read and write the plaintext afterwards.
+Including the ephemeral public key in the signed transcript prevents the third party from substituting a key and obtaining the agreed keys.
 
-署名の対象を署名者自身の値に限ると、別の攻撃が残る。
-第三者は中継の途中で署名を自分の鍵によるものへ差し替え、他の node の通信を自分の名義にできる。
-記録した handshake を再送して、認証に成功した接続を作ることもできる。
-再送は、相手が接続ごとに選ぶ値を transcript に含めることで、署名の検証の失敗として検出する。
-署名の差し替えは、鍵確認の対象に双方の署名の公開鍵を含めることで検出する。
-差し替えを受けた側は第三者の公開鍵で、署名した本人は自分の公開鍵で鍵確認を計算するため、両者の値が一致しない。
+Limiting the signed target to the signer's own values leaves another attack.
+On relay, a third party can replace the signature with one from its own key and put another node's communication under its own name.
+It can also replay a recorded handshake to create a connection that passes authentication.
+Replay is detected as a signature verification failure by including a value that the peer picks per connection in the transcript.
+Substituting a signature is detected by including both sides' signing public keys in the key confirmation target: the relayed side computes the confirmation with the third party's public key, while the signer computes it with its own, so the two values disagree.
 
-作成時刻の検査は、古い署名をそのまま使う相手を、相手の値に依存せずに拒否するために加える。
-transcript による再送の検出は、受け取る側が接続ごとに異なる値を選ぶことに依存するが、時刻の検査はこの前提が崩れた場合にも働く。
-代償として、時計が許容幅を超えてずれた node は Session を確立できない。
+The creation-time check rejects a peer reusing an old signature without depending on any value of the peer.
+Replay detection through the transcript depends on the receiver choosing a different value per connection, while the time check also works when that premise breaks.
+The cost is that nodes whose clocks skew beyond the tolerance cannot establish a Session.
 
-接頭辞は、同じ署名鍵を Session 以外の署名にも使うときに、ある用途の署名を別の用途へ流用させないためである。
-V1 の内容を置き換えるのは、配布済みの network がなく、旧い手順との互換を保つ相手がいないためである。
+The prefix prevents a signature for one use from being repurposed for another when the same signing key signs outside of Sessions.
+Replacing the V1 contents is because no network has been distributed, and there is no peer that needs compatibility with the old procedure.
 
-**却下案**
-`OmniSecureStream` の handshake を変更せず、用途の要求に双方の node ID を入れて暗号化後に照合する案は、Axus では名義の差し替えを防げる。
-しかし弱点が共有 library に残り、ほかの利用者が同じ照合を各自で実装することになるため採用しない。
+**Rejected**
+Leaving the `OmniSecureStream` handshake unchanged and reconciling both node IDs put in the use request after encryption prevents name substitution in Axus.
+But the weakness stays in the shared library, and other users would each implement the same reconciliation, so it is not adopted.
 
-Session 専用の鍵合意を Axus に定義する案は、設計と監査の負担が最も大きく、core-rs の secure connection と役割が重複するため採用しない。
+Defining Session-specific key agreement in Axus has the largest design and audit burden and overlaps the role of core-rs's secure connection, so it is not adopted.
 
-handshake に加えて、frame の暗号化、認証付きの終了、鍵の更新まで置き換える案（core-rs の [PR #201](https://github.com/omnius-labs/core-rs/pull/201)）は、Session が求める性質に対して設計と実装が複雑になりすぎるため採用しない。
+Replacing frame encryption, authenticated shutdown, and key rotation on top of the handshake as well (core-rs [PR #201](https://github.com/omnius-labs/core-rs/pull/201)) makes the design and implementation too complex for the properties Session requires, so it is not adopted.
 
-旧い V1 を残して新しい version を追加する案は、互換を保つ相手がいないまま、中継を防げない手順と接頭辞のない署名対象を実装に残すため採用しない。
+Keeping the old V1 and adding a new version would keep a relayable procedure and a prefix-less signed target in the implementation while no peer needs compatibility, so it is not adopted.
 
-### 5.2 保留
+### 5.2 Deferred
 
-#### Session の version 選択
+#### Session version selection
 
-**現状**
-[connector.rs](../../daemon/modules/engine/src/core/session/connector.rs)、[accepter.rs](../../daemon/modules/engine/src/core/session/accepter.rs)、[task_communicator.rs](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs) は、送った version と受け取った version の積集合を取り、空なら `UnsupportedType` の error を返す。
-NodeFinder の HelloMessage は対応 version を bit flag の集合で運ぶが、[message.rs](../../daemon/modules/engine/src/core/session/message.rs) の Session の HelloMessage は `SessionVersion` を 1 つだけ運び、未知の値を decode で拒否する。
-定義されている version は V1 だけであり、複数の共通 version から 1 つを選ぶ規則は定めていない。
+**Current state**
+[connector.rs](../../daemon/modules/engine/src/core/session/connector.rs), [accepter.rs](../../daemon/modules/engine/src/core/session/accepter.rs), and [task_communicator.rs](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs) intersect the version they sent with the one they received and return an `UnsupportedType` error when empty.
+NodeFinder's HelloMessage carries the supported versions as a set of bit flags, but Session's HelloMessage in [message.rs](../../daemon/modules/engine/src/core/session/message.rs) carries only one `SessionVersion` and rejects unknown values at decode.
+The only defined version is V1, and the rule for choosing one among multiple common versions is not defined.
 
-候補は次の 2 つである。
+The candidates are the following two.
 
-1. 数値が最も大きい共通 version を選ぶと新機能を優先できるが、version 番号と優先順位を常に一致させる必要がある。
-2. 明示的な優先順位表から選ぶと安定版を優先できるが、version 追加のたびに表を更新する必要がある。
+1. Choosing the largest numeric common version prioritizes new features, but the version number and the priority must always agree.
+2. Choosing from an explicit priority table prioritizes stable versions, but the table must be updated on every version addition.
 
-**なぜ今決めないか**
-V1 しか存在しないため、どちらの規則でも交渉結果が変わらない。
+**Why not decided yet**
+Because only V1 exists, both rules produce the same negotiation result.
 
-**決める条件**
-`SessionVersion` または `NodeFinderVersion` に 2 つ目の version を追加する前に決める。
-`SessionVersion` に追加する場合は、Session の HelloMessage が対応 version の集合を運べるように wire format も同時に変える。
+**Decision condition**
+Decide before adding a second version to `SessionVersion` or `NodeFinderVersion`.
+If adding to `SessionVersion`, also change the wire format so Session's HelloMessage can carry the set of supported versions.
 
-## 6. 現状と残作業
+## 6. Current status and remaining work
 
-§5.1 の secure channel を実装している。
-connection は TCP stream を返し、SessionConnector と SessionAccepter が `OmniSecureStream` と FramedStream を順に重ねる。
-双方は相手の署名を必須とし、作成時刻の許容幅を 5 分として handshake を行い、検証済みの相手の cert を Session に渡す。
-version と用途選択の message は、暗号化された stream で交換する。
-確立後に送った message の平文が TCP の byte 列に現れないことを、両方向の byte 列を記録する test で確認している。
-相手の切断を受信のエラーとして検出することを、loopback の TCP を使う test で確認している。
-SessionOption の期限、同時数、frame 上限を SessionAccepter と SessionConnector に渡し、handshake の入力境界で強制する。
-受理側は TCP の受理と接続ごとの handshake task を分け、shutdown は cancel 後にすべての task の終了を待つ。
-用途選択後の frame 上限の切り替えも実装している。
-FileExchanger の frame 上限は 64 MiB のままであり、§5.1 の値への引き下げは block 交換の実装で行う。
-NodeFinder の Hello/Profile 交換時と確立後の受信期限は、通信周期の 3 倍として実装している。
-DataMessage と NodeProfile の wire decode で、確保前に要素数の上限を検査する。
-上限を超えた Session の切断と、送信側が上限以下へ絞った情報の往復を test で確認している。
-NodeFinder の frame 上限は 256 KiB とし、上限ちょうどの送受信と上限超過の拒否を test で確認している。
-複数 version の選択規則を定めるまで、信頼できない network での FileExchanger と Profile 交換は有効にしない。
+The secure channel of §5.1 is implemented.
+connection returns a TCP stream, and SessionConnector and SessionAccepter stack `OmniSecureStream` and FramedStream in order.
+Both sides require the peer's signature, handshake with a 5-minute tolerated clock difference, and pass the verified peer cert to the Session.
+The version and use selection messages are exchanged on the encrypted stream.
+A test that records both directions' byte streams confirms that the plaintext of messages sent after establishment does not appear in the TCP byte stream.
+A test using loopback TCP confirms that a peer's disconnect is detected as a receive error.
+SessionOption's deadline, concurrency, and frame limits are passed to SessionAccepter and SessionConnector and enforced at the handshake input boundary.
+The accepting side separates TCP acceptance from per-connection handshake tasks, and shutdown cancels and then waits for all tasks.
+The frame limit switch after use selection is also implemented.
+FileExchanger's frame limit remains 64 MiB; lowering it to the §5.1 value happens with the block exchange implementation.
+The receive deadlines for NodeFinder's Hello/Profile exchange and after establishment are implemented as 3 times the communication cycle.
+The wire decode of DataMessage and NodeProfile checks the element count limits before allocation.
+Tests confirm closing Sessions that exceed limits and the round trip of sending-side information narrowed within limits.
+NodeFinder's frame limit is 256 KiB, confirmed by tests sending and receiving at exactly the limit and rejecting over-limit frames.
+Until multiple-version selection is decided, FileExchanger and Profile exchange on an untrusted network are not enabled.
 
-確認済みの不具合は [issues.md](../issues.md) を参照する。
+For confirmed bugs, see [issues.md](../issues.md).

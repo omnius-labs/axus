@@ -1,34 +1,34 @@
-# file の I/O 完了だけでは内容と directory entry の永続化は揃わない
+# File I/O completion alone does not align content and directory entry persistence
 
-**出所: 文献と動作確認**（Tokio 1.52.3 / Rust std 1.96.0 ソース / Linux man-pages 6.19 / Apple fsync(2) archived manual / 2026-10-04、2026-10-07）
+**Source: literature and runtime verification** (Tokio 1.52.3 / Rust std 1.96.0 source / Linux man-pages 6.19 / Apple fsync(2) archived manual / 2026-10-04, 2026-10-07)
 
-[knowledges.md](../knowledges.md) の 1 項目。
+One item of [knowledges.md](../knowledges.md).
 
-## 事実
+## Facts
 
-Tokio の File の `flush` は buffered I/O の完了を待つが、file 内容の永続化を保証しない。
-Tokio の `sync_all` は blocking thread で std の `sync_all` を呼ぶ。
-std の `sync_all` は、Linux では `fsync`、macOS などの Apple 製 OS では `fcntl(F_FULLFSYNC)`、Windows では `FlushFileBuffers` を呼ぶ。
+Tokio's File `flush` waits for buffered I/O to complete but does not guarantee the file content is persisted.
+Tokio's `sync_all` calls std's `sync_all` on a blocking thread.
+std's `sync_all` calls `fsync` on Linux, `fcntl(F_FULLFSYNC)` on Apple-made OSes such as macOS, and `FlushFileBuffers` on Windows.
 
-Linux の `fsync(file)` は file の内容と metadata を同期するが、親 directory の entry の同期まで必ず行うわけではない。
-entry の保持には directory の file descriptor に対する `fsync` が必要である。
-Unix では directory を std の `File` として開き、`sync_all` を呼べる。
+Linux's `fsync(file)` syncs the file's content and metadata but does not always sync the parent directory's entry.
+Retaining the entry requires `fsync` on the directory's file descriptor.
+On Unix, a directory can be opened as a std `File` and `sync_all` called on it.
 
-Apple の fsync(2) manual は、`fsync` 後も device の cache に書き込みが残り得るとし、厳しい保持・順序保証には `F_FULLFSYNC` を示す。
-API の成功が device の故障まで保証するものではない。
-OS と保存先が要求する同期を守ることが前提である。
+Apple's fsync(2) manual states that writes can remain in the device cache after `fsync` and points to `F_FULLFSYNC` for strict retention and ordering guarantees.
+An API success does not guarantee durability up to device failure.
+The OS and the destination honoring the requested sync is the premise.
 
-macOS 26.6.2 の `/private/tmp` の一時 directory を読み出し用に開き、`fcntl(F_FULLFSYNC)` が成功することを確認した。
+For an open temporary directory at `/private/tmp` on macOS 26.6.2, `fcntl(F_FULLFSYNC)` was confirmed to succeed.
 
-## 根拠
+## Evidence
 
-[Tokio 1.52.3 File](https://docs.rs/tokio/1.52.3/tokio/fs/struct.File.html#method.sync_all) と同版の配布ソース `src/fs/file.rs` の `sync_all`、[Linux man-pages 6.19 fsync(2)](https://man7.org/linux/man-pages/man2/fsync.2.html)、[Apple fsync(2)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html) を 2026-10-04 に参照した。
-std の呼び出し先は、`daemon/rust-toolchain.toml` が固定する Rust 1.96.0 の配布ソース `library/std/src/sys/fs/unix.rs` の `fsync` と `library/std/src/sys/fs/windows.rs` の `fsync` で確認した。
-Apple の資料は archived manual であり、対象の macOS/filesystem での同期可否は別途確認が必要である。
-2026-10-07 に Python の `fcntl` から一時 directory の descriptor に `F_FULLFSYNC` を指定し、呼び出しの成功を確認した。
-device cache や電源断の実機試験は行っていない。
+Consulted [Tokio 1.52.3 File](https://docs.rs/tokio/1.52.3/tokio/fs/struct.File.html#method.sync_all) and `sync_all` in the same version's distributed source `src/fs/file.rs`, [Linux man-pages 6.19 fsync(2)](https://man7.org/linux/man-pages/man2/fsync.2.html), and [Apple fsync(2)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html) on 2026-10-04.
+The std callees were confirmed in the distributed source of the Rust 1.96.0 fixed by `daemon/rust-toolchain.toml`: `fsync` in `library/std/src/sys/fs/unix.rs` and `fsync` in `library/std/src/sys/fs/windows.rs`.
+The Apple material is an archived manual, and whether the target macOS/filesystem supports the sync must be confirmed separately.
+On 2026-10-07, `F_FULLFSYNC` was specified for a temporary directory descriptor with Python's `fcntl`, and the call's success was confirmed.
+No device-cache or power-loss hardware tests were run.
 
-## 含意
+## Implications
 
-[storage.md §4.2](../design/storage.md#42-永続化の保証と境界) と [§4.5](../design/storage.md#45-出力の確定と回復) は、一時出力の `sync_all` と、Linux と macOS での親 directory の `sync_all` を Completed の前提にする。
-Windows の directory entry は、std の `sync_all` ではなく [置換しない rename](./filesystem-output-publication.md) の `MOVEFILE_WRITE_THROUGH` で永続化する。
+[storage.md §4.2](../design/storage.md#42-durability-guarantees-and-boundaries) and [§4.5](../design/storage.md#45-output-finalization-and-recovery) make the `sync_all` of the temporary output and the `sync_all` of the parent directory on Linux and macOS a prerequisite of Completed.
+On Windows, the directory entry is persisted with the `MOVEFILE_WRITE_THROUGH` of the [non-replacing rename](./filesystem-output-publication.md), not with std's `sync_all`.

@@ -1,176 +1,176 @@
-# trust と security の設計
+# Design of trust and security
 
-## 1. このドキュメントについて
+## 1. About this document
 
-本書は Session、Merkle hash、Web of Trust がそれぞれ保証する範囲と、node identity および脅威への境界を扱う。
-語の定義は [terms.md](../terms.md) が正とする。
+This document covers what the Session, Merkle hash, and Web of Trust each guarantee, and the boundaries of node identity and threats.
+Term definitions are the source of [terms.md](../terms.md).
 
-### 1.1 文書間の責務分担
+### 1.1 Division of responsibilities among documents
 
-| 文書または正本 | 受け持つもの |
+| Document or source of truth | Owns |
 | --- | --- |
-| [design.md](../design.md#11-文書間の責務分担) | 全体構成、他の関心事との境界、横断的な依存関係 |
-| 本書 | security の保証範囲、脅威、identity、Web of Trust の設計判断 |
-| [session.md](./session.md#2-責務と境界) | Session の確立と用途分離 |
-| [file-transfer.md](./file-transfer.md#5-block-交換) | block の内容 hash 検証 |
-| [profile-memo.md](./profile-memo.md#2-責務と境界) | Profile の payload と memo の責務境界 |
+| [design.md](../design.md#11-division-of-responsibilities-among-documents) | Overall structure, boundaries with other concerns, cross-cutting dependencies |
+| This document | Scale of security guarantees, threats, identity, and the Web of Trust design decisions |
+| [session.md](./session.md#2-responsibilities-and-boundaries) | Session establishment and use separation |
+| [file-transfer.md](./file-transfer.md#5-block-exchange) | Content hash verification of blocks |
+| [profile-memo.md](./profile-memo.md#2-responsibilities-and-boundaries) | Profile payload and memo responsibility boundary |
 
-### 1.2 本書の時制について
+### 1.2 Tenses used in this document
 
-本文は完成形の設計を記述する。
-実装状況と残作業は §5 に集約する。
+The body describes the completed design.
+The implementation status and remaining work are consolidated in §5.
 
-## 2. 責務と境界
+## 2. Responsibilities and boundaries
 
-認証、暗号化、内容 hash、信頼評価は別の保証であり、どれか 1 つで他を代替しない。
-本書は各保証の境界と、そこから導かれる identity および Web of Trust の保留を持つ。
-個別の Session protocol、file protocol、Profile の payload 構造は対応する設計文書が持つ。
+Authentication, encryption, content hashing, and trust evaluation are separate guarantees, and no single one replaces another.
+This document holds the boundary of each guarantee and the identity and Web of Trust decisions derived from it.
+The individual Session protocol, file protocol, and Profile payload structures belong to their corresponding design documents.
 
-## 3. 保証の分担と脅威
+## 3. Division of guarantees and threats
 
-| 機構 | 保証するもの | 保証しないもの |
+| Mechanism | Guarantees | Does not guarantee |
 | --- | --- | --- |
-| Session の secure channel | 通信の相手が署名者本人であること、確立後の通信の機密性と改竄検出 | 相手への信頼、相手が公開する内容の正しさ |
-| NodeFinder の handshake での公開鍵の照合 | 相手の NodeProfile と node ID が Session の署名者のものであること | 到達先が現在もその node のものであること |
-| NodeProfile の署名 | 公開鍵、到達先、更新時刻を node 本人が示したこと | node への信頼、到達先が現在もその node のものであること |
-| FramedStream | message 境界と frame の大きさの上限 | 通信内容の機密性と改竄検出 |
-| Merkle hash | 期待する hash に対する block 内容の一致 | 提供者の信頼性、検索結果の正当性 |
-| Web of Trust | §4 で決める信頼 policy | transport の暗号化と block の内容検証 |
+| Session secure channel | That the communication peer is the signer, and the confidentiality and tamper detection of post-establishment communication | Trust in the peer, correctness of the content the peer publishes |
+| Public key reconciliation at the NodeFinder handshake | That the peer's NodeProfile and node ID belong to the Session's signer | That the reachable address still belongs to that node |
+| NodeProfile signature | That the owner showed the public key, reachable addresses, and update time | Trust in the node, that the reachable address still belongs to that node |
+| FramedStream | Message boundaries and the frame size limits | Confidentiality and tamper detection of the communication content |
+| Merkle hash | That a block's content matches the expected hash | Reliability of the provider, soundness of search results |
+| Web of Trust | The trust policy decided in §4 | Transport encryption and block content verification |
 
-Session 認証が成功しても、相手の NodeProfile と公開内容を信頼できるとは限らない。
-この前提により、identity、暗号化、内容検証、信頼評価を別々に実装できる。
+Even when Session authentication succeeds, the peer's NodeProfile and public content are not necessarily trustworthy.
+Under this premise, identity, encryption, content verification, and trust evaluation can be implemented separately.
 
-node ID は公開鍵から導出するが、鍵は低コストで生成できるため、攻撃者は AssetKey に近い ID を集める Sybil 攻撃と Eclipse 攻撃を行える。
-既知 node と伝播情報の件数上限は資源消費を抑えるが、攻撃者の情報だけが残ることは防がない。
-Web of Trust はこの信頼選別を担い、transport の盗聴と改竄は Session の secure channel（[session.md](./session.md#session-の-secure-channel)）が防ぐ。
+The node ID is derived from the public key, but because keys can be generated at low cost, an attacker can gather IDs close to an AssetKey in Sybil and Eclipse attacks.
+The count limits on known nodes and propagated information curb resource consumption but do not prevent only the attacker's information from remaining.
+Web of Trust takes on this trust selection, and wiretap and tampering of the transport are prevented by the Session secure channel ([session.md](./session.md#secure-channel-of-the-session)).
 
-NodeFinder の中継は情報を増幅し得るため、TTL、件数、接続数、message size の上限と、handshake と受信の期限を protocol の入力境界で強制する。
-Session の認証と用途選択までの handshake は、TCP 接続後から全体で 10 秒、受理側の同時数は 64 本以下とする。
-上限を超えた接続は読み書きせずに閉じ、期限を超えた接続も閉じる。
-frame の上限は handshake 中が 16 KiB、用途選択後は NodeFinder が 256 KiB、FileExchanger が block の最大長 1 MiB を基準にした値であり、受信時に上限を超えた Session は閉じる。
-これらは認証前後の相手による受信側の資源消費を抑えるための制約であり、詳細と採用理由は [session.md](./session.md#51-決定済み) が正とする。
-NodeFinder は Hello/Profile 交換中も、確立後も、通信周期の 3 倍の間受信がなければ Session を閉じる。
-既定の通信周期は 20 秒なので受信期限は 60 秒であり、内容が空でも相手は毎周期 DataMessage を送る。
-この送信の約束を根拠に無応答の相手による接続資源の占有を制限し、期限は周期の設定値から導く（[node-finder.md](./node-finder.md#61-決定済み)）。
+NodeFinder relay can amplify information, so TTL, count, connection count, and message-size limits and the handshake and receive deadlines are enforced at protocol input boundaries.
+The handshake from Session authentication through use selection spans 10 seconds in total after the TCP connection, and the accepting side runs at most 64 concurrently.
+Connections over the limit are closed without reading or writing, and connections past the deadline are also closed.
+The frame limits are 16 KiB during the handshake, 256 KiB for NodeFinder after use selection, and a value based on FileExchanger's maximum block length of 1 MiB; a Session whose reception exceeds the limit is closed.
+These are constraints for curbing the receiving side's resource consumption by pre- and post-authentication peers, and the details and rationale are the source of [session.md](./session.md#51-decided).
+NodeFinder closes a Session that receives nothing, both during the Hello/Profile exchange and after establishment, for 3 times the communication cycle.
+With the default communication cycle of 20 seconds the receive deadline is 60 seconds, and the peer sends a DataMessage every cycle even when empty.
+This send promise is the basis for limiting connection-resource occupation by an unresponsive peer, and the deadline is derived from the cycle setting ([node-finder.md](./node-finder.md#61-decided)).
 
-DataMessage と NodeProfile の wire decode では、次の要素数を collection の確保前に検査し、上限を超えた Session を閉じる。
+At the wire decode of DataMessage and NodeProfile, the following element counts are checked before allocating collections, and a Session over the limit is closed.
 
-| 対象 | 1 message の上限 |
+| Target | Limit per message |
 | --- | --- |
-| `push_node_profiles` | 32 件 |
-| `want_asset_keys` | 1024 件 |
-| `give_asset_key_locations` | 1024 件 |
-| `push_asset_key_locations` | 1024 件 |
-| 各 AssetKey に付ける NodeProfile | 8 件 |
-| NodeProfile の `addrs` | 8 件 |
+| `push_node_profiles` | 32 |
+| `want_asset_keys` | 1024 |
+| `give_asset_key_locations` | 1024 |
+| `push_asset_key_locations` | 1024 |
+| NodeProfiles per AssetKey | 8 |
+| NodeProfile `addrs` | 8 |
 
-NodeProfile のアドレス数と byte 長の検査は ProfileMessage と `axus:node/...` の URI にも適用する。
-自 node のアドレスが多い場合は、署名の前に起動時に 8 件へ切り詰めて警告を記録する。
-送信側は NodeProfile の件数を同じ上限以下へ無作為に絞るが、署名した NodeProfile の到達先は変えない。
-frame の byte 数と要素数の両方を制限することで、受信側の確保量と処理量、所在情報の中継に伴う資源消費を抑える。
-伝播の手順と件数上限の採用理由は [node-finder.md](./node-finder.md#61-決定済み)、byte 長と送信予算の判断は [rocketpack.md](./rocketpack.md#5-設計判断) が正とする。
+The NodeProfile address count and byte-length checks also apply to the ProfileMessage and `axus:node/...` URIs.
+When the local node has many addresses, they are truncated to 8 at startup before signing, with a warning logged.
+The sending side randomly narrows the NodeProfile count within the same limits but does not change the reachable addresses of a signed NodeProfile.
+Limiting both the frame byte count and the element count curbs the receiving side's allocations, processing, and the resource consumption of relaying location info.
+The propagation procedure and the rationale for the count limits are the source of [node-finder.md](./node-finder.md#61-decided), and the byte lengths and send budget judgments are the source of [rocketpack.md](./rocketpack.md#5-design-decisions).
 
-FileExchanger は受信 block を hash 検証し、NodeProfile は署名を、Profile 交換は署名と version を検証する。
-FileExchanger は検証に失敗した block を送った node ID を一定時間除外するが、鍵を作り直した相手には除外が及ばない（[file-transfer.md](./file-transfer.md#57-検証と違反)）。
+FileExchanger hash-verifies received blocks, NodeProfile verifies signatures, and the Profile exchange verifies signatures and versions.
+FileExchanger excludes for a period the node ID that sent a block failing verification, but the exclusion does not reach a peer that regenerated its key (see [file-transfer.md](./file-transfer.md#57-verification-and-violations)).
 
-## 4. 設計判断
+## 4. Design decisions
 
-### 4.1 決定済み
+### 4.1 Decided
 
-Session、block、Profile の個別の決定は各設計文書が正とする。
+The Session, block, and Profile individual decisions are the source of each design document.
 
-#### node ID は公開鍵から導出する
+#### node ID is derived from the public key
 
-**決定**
-NodeProfile は node ID ではなく公開鍵を持ち、node ID は公開鍵の SHA3-256 hash として導出する。
-署名鍵は state directory に保存し、再起動後も同じ鍵と node ID を使う。
-NodeFinder の handshake は、相手の NodeProfile の公開鍵が Session の cert の公開鍵と一致しない場合に接続を拒否する。
+**Decision**
+A NodeProfile carries the public key, not the node ID, and the node ID is derived as the SHA3-256 hash of the public key.
+The signing key is stored in the state directory, and the same key and node ID are used after a restart.
+NodeFinder's handshake rejects the connection when the public key of the peer's NodeProfile does not match the public key of the Session's cert.
 
-**理由**
-node ID を公開鍵から導出すると、ID と鍵の対応を別に証明しなくても、Session の署名検証だけで署名者の ID が確定する。
-ID を保持せずに導出するため、ID と鍵が食い違う NodeProfile を表現できない。
-鍵を rotation すると node ID も変わるが、ID を引き継ぐ要件は現時点でない。
+**Rationale**
+Deriving the node ID from the public key settles the signer's ID with only the Session signature verification, without separately proving the ID-to-key correspondence.
+Because the ID is derived and not stored, a NodeProfile whose ID and key disagree cannot be expressed.
+Rotating the key changes the node ID, but there is no requirement to carry the ID over at this point.
 
-**却下案**
-安定した ID と鍵の対応を署名で示す案は、鍵の rotation を表現できるが、証明 chain と失効処理が必要になるため採らない。
-ID と鍵を分離して trust graph で対応を表す案は、Web of Trust の設計が先に必要になり、すべての照合が複雑になるため採らない。
+**Rejected**
+A design that proves a stable ID-to-key correspondence with a signature can express key rotation, but requires a proof chain and revocation, so it is not taken.
+A design that separates the ID and the key and ties them in a trust graph requires the Web of Trust design first and complicates every reconciliation, so it is not taken.
 
-#### NodeProfile は node 本人の署名で到達先を結ぶ
+#### NodeProfile binds reachable addresses with the node's own signature
 
-**決定**
-NodeProfile は公開鍵、到達先、更新時刻、署名で構成し、署名は node 本人の鍵で作る。
-署名の対象は、署名を除いた値を RocketPack で符号化した bytes の先頭に、用途と version を示す固定の接頭辞を付けたものである。
-署名を作るのは起動時の 1 回だけであり、接続のたびには作らない。
+**Decision**
+A NodeProfile consists of the public key, reachable addresses, update time, and a signature, and the signature is made with the owner's key.
+The signed target is a fixed prefix indicating the use and version prepended to the bytes of the value without the signature encoded with RocketPack.
+The signature is made once at startup, not on every connection.
 
-NodeProfile 型は、自 node の鍵で署名して作る経路と、wire または URI から署名を検証して作る経路でしか作れない。
-署名の不一致と形式の不正は decode の失敗となり、Session を閉じる。
-DataMessage で受信した NodeProfile のうち、更新時刻が受信時刻より 5 分を超えて進んでいるものは、その NodeProfile だけを捨てて Session を保つ。
-handshake の ProfileMessage の NodeProfile には時刻の検査を課さない。
-更新時刻の古さによる拒否はしない。
-設定の bootstrap node には、署名付きの URI だけを指定できる。
+The NodeProfile type can only be created through the path that signs with the local node's key, or the path that verifies the signature from the wire or a URI.
+A signature mismatch and malformed format become a decode failure and close the Session.
+Of the NodeProfiles received in a DataMessage, one whose update time is more than 5 minutes ahead of the receive time is discarded on its own, keeping the Session.
+The NodeProfile in the handshake ProfileMessage is not subject to the time check.
+Refusal for being too old is not done.
+Only signed URIs can be specified as configured bootstrap nodes.
 
-同じ node ID の NodeProfile は、更新時刻の大きいほうを新しいものとして扱い、既知 node には node ID ごとに 1 件だけを保持する（[node-finder.md](./node-finder.md#既知-node-は-node-id-ごとに更新時刻の新しい-nodeprofile-を保持する)）。
+For the same node ID, the NodeProfile with the larger update time is treated as newer, and known nodes keep only one entry per node ID (see [node-finder.md](./node-finder.md#known-nodes-keep-the-newest-nodeprofile-per-node-id)).
 
-**理由**
-署名がなければ、第三者がある node の公開鍵に偽の到達先を付けて配布できる。
-署名を付けると、中継する node は到達先を書き換えられず、受信側は配布の経路によらず、到達先をその node 本人が示したことを検証できる。
-更新時刻は、古い署名付き NodeProfile の再配布で到達先が古い値へ戻ることを防ぐ。
+**Rationale**
+Without a signature, a third party can attach fake reachable addresses to a node's public key and distribute them.
+With a signature, a relaying node cannot rewrite the reachable addresses, and the receiver can verify, regardless of the distribution path, that the owner showed them.
+The update time prevents redelivered old signed NodeProfiles from rolling the reachable addresses back.
 
-署名の対象を再符号化で作るのは、wire の形を平坦に保ち、署名の検証より前にも公開鍵と到達先を読めるようにするためである。
-RocketPack の符号化は値だけで決まるため、署名者と検証者は同じ bytes を得る。
-同じ鍵が Session の handshake でも署名を作るため、接頭辞で用途を分け、ほかの署名を NodeProfile の署名として使えないようにする。
+Building the signed target by re-encoding keeps the wire shape flat and lets the public key and reachable addresses be read before signature verification.
+Because RocketPack encoding is a pure function of the values, the signer and the verifier get the same bytes.
+Since the same key also signs in the Session handshake, the prefix separates the uses so another signature cannot be used as a NodeProfile signature.
 
-更新時刻の許容を 5 分にするのは、Session の handshake が許す時計の差と同じにして、時計に関する前提を 1 つにするためである。
-許容を超えた NodeProfile で Session を閉じないのは、中継する node と受信する node の時計の差によって、正直な相手も送り得るためである。
-ProfileMessage を検査しないのは、相手自身の NodeProfile であり、Session の cert の公開鍵と照合した後は Session の識別にだけ使い、既知 node の更新順序には入らないためである。
-古さで拒否しないのは、拒否すると長期間稼働する node が定期的に署名し直して広告し直す必要が生じ、起動時に発行した bootstrap 用の URI も期限で使えなくなるためである。
-古い署名の再配布で起きるのは古い到達先への接続の試行であり、その到達先が別の node のものになっていても、接続側が接続候補の公開鍵を Session の cert と照合すれば区別できる。
-この照合は [dialer-does-not-match-candidate-public-key](../issues/dialer-does-not-match-candidate-public-key.md) が扱う。
+The 5-minute update tolerance is set equal to the clock difference the Session handshake allows, keeping the clock premise to one.
+The Session is not closed over a NodeProfile past the tolerance because even an honest peer can send one depending on the clock difference between the relaying and receiving nodes.
+The ProfileMessage is not checked because it is the peer's own NodeProfile and, after reconciliation with the Session cert's public key, is used only for identifying the Session and does not enter the known-node update order.
+Refusing by age is not done because refusing would force long-running nodes to re-sign and re-advertise periodically, and URIs issued at startup for bootstrap would expire.
+What redelivering an old signature causes is a connection attempt to an old reachable address, and even if that address now belongs to another node, the dialing side can distinguish it by reconciling the connection candidate's public key with the Session's cert.
+This reconciliation is handled by [dialer-does-not-match-candidate-public-key](../issues/dialer-does-not-match-candidate-public-key.md).
 
-署名が示すのは、到達先を node 本人が示したことだけである。
-その node への信頼と、到達先が現在もその node のものであることは示さない。
-第三者は、接続の失敗を誘って特定の node を探索から外せる。
-この選別は Web of Trust が担う。
-代償として、NodeProfile は署名と更新時刻の分だけ大きくなる。
-また、時計の巻き戻りで前回以下の更新時刻を付けて署名した NodeProfile は、前回の値を保持する受信側では置き換えに使われず、前回より大きい更新時刻で署名し直す必要がある。
+The signature shows only that the owner showed the reachable addresses.
+It does not show trust in the node or that the reachable address still belongs to it.
+A third party can provoke connection failures and push a specific node out of lookup.
+This selection is taken on by the Web of Trust.
+The cost is that a NodeProfile grows by the signature and update time.
+Also, a NodeProfile re-signed with an update time no greater than the previous one due to a clock rollback is not used for replacement by the receiving side holding the previous value, and the owner must re-sign with a larger update time.
 
-**却下案**
-接続に成功した到達先だけを保存して配布する案は、wire の形を変えずに済むが、受信した到達先を最初に試す段階が残り、配布の途中での書き換えも検出できない。
-署名者の名前を持つ `OmniCert` をそのまま載せる案は、公開鍵が NodeProfile の公開鍵と重複し、署名に使わない field も増えるため採らない。
-署名の対象を受信した bytes にし、wire に符号化済みの body と署名を載せる案は、再符号化に依存しないが、公開鍵を取り出すたびに body の decode が要り、URI と送信予算の計算の形も変わるため採らない。
-署名の対象を RocketPack と別の連結規則で定める案は、符号化から独立するが、第二の符号化規約を保守する必要があるため採らない。
-更新順序に単調増加の counter を使う案は、時計に依存しないが、再起動をまたぐ保存と、保存に失敗したときの巻き戻りの扱いが要るため採らない。
-古い NodeProfile を年齢で拒否し、定期的に署名し直す案は、古い情報が自然に消えるが、定期的な署名と広告の仕組みが要るため採らない。
+**Rejected**
+Saving and distributing only the reachable addresses that connected successfully keeps the wire shape, but it leaves the stage of first trying the received addresses and cannot detect rewriting during distribution, so it is not taken.
+Carrying `OmniCert` with the signer's name duplicates the public key on the NodeProfile and adds fields not used for signing, so it is not taken.
+A design that signs the received bytes and carries an encoded body and signature on the wire avoids re-encoding, but extracting the public key requires decoding the body each time, and the shapes of the URI and the send budget calculation change, so it is not taken.
+Defining the signed target with a concatenation rule separate from RocketPack is independent of encoding, but requires maintaining a second encoding convention, so it is not taken.
+A monotonic counter for the update order does not depend on the clock, but needs persistence across restarts and handling of rollback when persistence fails, so it is not taken.
+Refusing old NodeProfiles by age and re-signing periodically lets old information die naturally, but needs a periodic signing and advertising mechanism, so it is not taken.
 
-### 4.2 保留
+### 4.2 Deferred
 
-#### Web of Trust の単位と伝播
+#### Unit and propagation of Web of Trust
 
-**現状**
-README は Web of Trust による検索と公開の保護を掲げるが、信頼対象と score の計算規則を定めていない。
+**Current state**
+The README advertises search and publish protection via Web of Trust, but the trust target and score calculation rules are not defined.
 
-候補は次の 2 つである。
+The candidates are the following two.
 
-1. 直接署名だけを使うと説明と失効が単純だが、未知の主体を評価できない。
-2. 推移的な trust を使うと discovery 範囲が広がるが、深さ、減衰、循環、Sybil 耐性を規定する必要がある。
+1. Using only direct signatures keeps explanation and revocation simple, but cannot evaluate unknown subjects.
+2. Using transitive trust widens discovery, but requires defining depth, decay, cycles, and Sybil resistance.
 
-**なぜ今決めないか**
-信頼を適用する API が確定していないためである。
+**Why not decided yet**
+Because the API that applies trust is not fixed.
 
-**決める条件**
-検索結果または Profile を trust score で選別する最初の API を定義する前に決める。
+**Decision condition**
+Decide before defining the first API that selects search results or Profiles by trust score.
 
-## 5. 現状と残作業
+## 5. Current status and remaining work
 
-Session は secure channel で相手の署名と鍵を検証し、確立後の通信を暗号化している。
-署名鍵は state directory に保存し、node ID は公開鍵から導出して NodeFinder の handshake で照合する。
-Session の handshake の期限と同時数、handshake 中と用途選択後の frame 上限を実装している。
-NodeFinder の Hello/Profile 交換時と確立後の受信期限を、通信周期の 3 倍として実装している。
-DataMessage と NodeProfile の wire decode で要素数の上限を検査し、送信側も同じ上限へ収める。
-NodeFinder の frame と DataMessage を 256 KiB 以下に制限し、可変長 field の制約と送信候補の予算選別を実装している。
-各上限の超過による切断、上限ちょうどの受理、大量情報の往復を test で確認している。
-NodeProfile は署名を付けて生成し、wire と URI から作る経路で検証する。
-起動時に自 node の鍵で署名し、DataMessage で受信した NodeProfile のうち更新時刻が許容を超えて進んでいるものは捨てる。
-署名の検証、改ざんの拒否、固定した署名の bytes、更新時刻による置き換えを test で確認している。
-Web of Trust の policy は未決である。
-接続側が接続候補の公開鍵を Session の cert と照合する処理は、既知の不具合として [issues.md](../issues.md) に載せている。
+Session verifies the peer's signature and key through the secure channel and encrypts post-establishment communication.
+The signing key is stored in the state directory, the node ID is derived from the public key, and the NodeFinder handshake reconciles it.
+The handshake deadline and concurrency and the frame limits during the handshake and after use selection are implemented.
+The receive deadlines for NodeFinder's Hello/Profile exchange and after establishment are implemented as 3 times the communication cycle.
+The wire decode of DataMessage and NodeProfile checks the element count limits, and the sending side stays within the same limits.
+NodeFinder's frame and DataMessage are limited to 256 KiB or less, and the variable-length field constraints and the send candidate budget selection are implemented.
+Tests confirm disconnection on each over-limit, acceptance exactly at limits, and round trips of large information.
+NodeProfile is generated with a signature and verified through the paths built from the wire and a URI.
+It is signed at startup with the local node's key, and of the NodeProfiles received in a DataMessage, those whose update time is ahead by more than the tolerance are discarded.
+Tests confirm signature verification, rejection of tampering, fixed signed bytes, and replacement by update time.
+The Web of Trust policy is undecided.
+The process in which the dialing side reconciles a connection candidate's public key with the Session's cert is listed as a known bug in [issues.md](../issues.md).

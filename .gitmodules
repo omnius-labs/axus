@@ -1,4 +1,4 @@
 [submodule "daemon/refs/core-rs"]
 	path = daemon/refs/core-rs
-	url = git@github.com:omnius-labs/core-rs
+	url = https://github.com/omnius-labs/core-rs.git
     branch = main

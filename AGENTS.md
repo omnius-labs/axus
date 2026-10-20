@@ -1,9 +1,11 @@
 # AGENTS.md
 
-Read [docs/coding/rust.md](./docs/coding/rust.md) before changing Rust.
-The canonical of this document is in core-rs; when changing chapters 2 to 4, update the core-rs canonical at the same time.
+This repository is English-based. Write documentation, comments, and commit messages in English.
 
-Run the following command for verification.
+Read [docs/coding/rust.md](./docs/coding/rust.md) before changing Rust.
+The canonical copy of that document lives in core-rs. If you change chapters 2 to 4, update core-rs at the same time.
+
+Verify with the following commands.
 
 ```sh
 cd daemon

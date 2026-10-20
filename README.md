@@ -59,8 +59,7 @@ Add that URI to `bootstrap_nodes` of another daemon to connect the two.
 ### Linting
 
 ```sh
-cd daemon
-cargo make lint
+(cd daemon && cargo make lint)
 ```
 
 ## Contributing

@@ -56,14 +56,21 @@ The `[p2p]` section accepts the following keys.
 At startup the daemon logs its own URI as `node_profile` in the `node profile` message.
 Add that URI to `bootstrap_nodes` of another daemon to connect the two.
 
-## Links
+### Linting
 
-- Official Documentation: https://docs.omnius-labs.com/
+```sh
+cd daemon
+cargo make lint
+```
+
+## Contributing
+
+If you would like to contribute to this project, please contact us through [Issues](https://github.com/omnius-labs/axus/issues) or [Pull Requests](https://github.com/omnius-labs/axus/pulls) on GitHub.
 
 ## License
 
-This project is released under the MIT License. For more details, please refer to the [LICENSE](LICENSE.txt) file.
+Axus is licensed under the [MIT License](LICENSE.txt).
 
-## Contribution
+## Links
 
-If you would like to contribute to this project, please contact us through [Issues](https://github.com/omnius-labs/axus/issues) or [Pull Requests](https://github.com/omnius-labs/axus/pulls) on GitHub.
+- Official Documentation: https://docs.omnius-labs.com/

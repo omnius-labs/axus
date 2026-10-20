@@ -1,39 +1,39 @@
-# SessionConnector が用途選択の結果 Unknown を受理する
+# SessionConnector accepts the Unknown use-selection result
 
-**深刻度: 低**（受理側が `Unknown` を返す場合に限る。現在の SessionAccepter は `Accept` と `Reject` だけを返す）
+**Severity: Low** (only when the accepting side returns `Unknown`; the current SessionAccepter returns only `Accept` and `Reject`)
 
-調査日 2026-10-11 / 対象コミット `794035e`
+Investigated on 2026-10-11 / Target commit `794035e`
 
-[issues.md](../issues.md) の 1 項目。
+One item of [issues.md](../issues.md).
 
-## 症状
+## Symptoms
 
-接続側は、用途の要求に対して受理側が `V1ResultType::Unknown` を返すと、Session が受理されたものとして上位へ渡す。
+When the accepting side returns `V1ResultType::Unknown` for a use request, the dialing side passes the Session up as accepted.
 
-## 該当箇所
+## Location
 
-[connector.rs:94](../../daemon/modules/engine/src/core/session/connector.rs#L94) は、結果が `Reject` の場合だけエラーを返す。
+[connector.rs:94](../../daemon/modules/engine/src/core/session/connector.rs#L94) returns an error only when the result is `Reject`.
 
 ```rust
 if received_session_result_message.result_type == V1ResultType::Reject {
 ```
 
-[message.rs:28](../../daemon/modules/engine/src/core/session/message.rs#L28) の `V1ResultType` は `Unknown`、`Accept`、`Reject` の 3 値を持つ。
+`V1ResultType` at [message.rs:28](../../daemon/modules/engine/src/core/session/message.rs#L28) has the three values `Unknown`, `Accept`, and `Reject`.
 
-## 原因
+## Cause
 
-受理の条件を「`Accept` である」ではなく「`Reject` でない」として書いている。
+The acceptance condition is written as "not `Reject`" instead of "is `Accept`".
 
-## 影響
+## Impact
 
-受理側が `Unknown` を返した Session を、接続側だけが確立済みとして扱う。
-[accepter.rs:277](../../daemon/modules/engine/src/core/session/accepter.rs#L277) の SessionAccepter は、受理しない要求に `Reject` を返すため、Axus の node どうしでは起きない。
-`Unknown` を返すのは、別の実装か、意図して値を変えた相手に限られる。
-相手は secure channel で認証済みである。
-NodeFinder の Session は、相手が応答しなければ [task_communicator.rs:177](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L177) の受信期限で閉じる。
-FileExchanger の Session には確立後の送受信の loop と期限がなく（[session-accept-and-message-without-deadline](./session-accept-and-message-without-deadline.md)）、[task_connector.rs:214](../../daemon/modules/engine/src/core/negotiator/file/task_connector.rs#L214) で channel に渡されたまま残る。
+A Session the accepting side answered `Unknown` is treated as established only by the dialing side.
+Because SessionAccepter at [accepter.rs:277](../../daemon/modules/engine/src/core/session/accepter.rs#L277) returns `Reject` for a request it does not accept, this does not happen between Axus nodes.
+The side returning `Unknown` is limited to a different implementation or a peer that changed the value intentionally.
+The peer is authenticated through the secure channel.
+A NodeFinder Session whose peer does not respond is closed by the receive deadline at [task_communicator.rs:177](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L177).
+A FileExchanger Session has no post-establishment send/receive loop and deadline ([session-accept-and-message-without-deadline](./session-accept-and-message-without-deadline.md)) and remains handed to the channel at [task_connector.rs:214](../../daemon/modules/engine/src/core/negotiator/file/task_connector.rs#L214).
 
-## 対応方針
+## Proposed fix
 
-結果が `Accept` の場合だけ Session を返し、それ以外はエラーにする。
-受理側が `Unknown` を返したときに接続がエラーになることを test で守る。
+Return the Session only when the result is `Accept`, and error otherwise.
+Guard with a test that the connection errors when the accepting side returns `Unknown`.

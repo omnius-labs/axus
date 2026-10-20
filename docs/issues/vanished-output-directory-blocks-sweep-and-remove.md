@@ -1,21 +1,21 @@
-# Failed や Canceled の行の出力先 directory が消えると、sweep の再試行が続き remove もできなくなる
+# A vanished destination directory of Failed or Canceled rows makes sweep retries continue and remove impossible
 
-**深刻度: 中**（出力先の directory を消したあとに限る）
+**Severity: Medium** (only after the destination directory is deleted)
 
-調査日 2026-10-07 / 対象コミット `9bbbcbd`
+Investigated on 2026-10-07 / Target commit `9bbbcbd`
 
-[issues.md](../issues.md) の 1 項目。
+One item of [issues.md](../issues.md).
 
-## 症状
+## Symptoms
 
-Failed または Canceled の行の出力先 directory が消えている（外付け disk の取り外しなど）と、次の 2 つが続く。
+When the destination directory of a Failed or Canceled row is gone (such as when an external disk is removed), the following two continue.
 
-- sweep が毎回失敗し、再試行が終わらない
-- `remove` が失敗し、行を削除できない
+- The sweep fails each run, and the retries never end
+- `remove` fails, and the row cannot be deleted
 
-## 該当箇所
+## Location
 
-[store.rs:371](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L371) の `delete_temporary_output` は、一時出力の `NotFound` を「ない」と扱ったあと、出力先 directory の存在を `metadata` で確かめる。directory が消えていると `metadata` が error になり、`delete_temporary_output` は error を返す。
+`delete_temporary_output` at [store.rs:371](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L371) treats a temporary output's `NotFound` as "absent" and then checks the destination directory's existence with `metadata`. When the directory is gone, `metadata` errors, and `delete_temporary_output` returns the error.
 
 ```rust
 if !tokio::fs::metadata(&file.output_directory).await?.is_dir() {
@@ -23,22 +23,22 @@ if !tokio::fs::metadata(&file.output_directory).await?.is_dir() {
 }
 ```
 
-[store.rs:431](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L431) の `sweep_outputs_locked` は Canceled と Failed の行に対して `delete_temporary_output` を呼び、error を返すと `request_sweep` で再試行を予約する。次の sweep でも同じ error になる。
-[store.rs:143](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L143) の `remove` は `discard_output`（[同ファイル:356](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L356)）を呼ぶため、同じ error で行を消せない。
+`sweep_outputs_locked` at [store.rs:431](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L431) calls `delete_temporary_output` for the Canceled and Failed rows, and when it returns an error, schedules a retry with `request_sweep`. The next sweep hits the same error.
+`remove` at [store.rs:143](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L143) calls `discard_output` (at [the same file:356](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L356)), so the same error prevents row deletion.
 
-## 原因
+## Cause
 
-一時出力の削除と出力先 directory の存在確認を同じ関数で行い、directory の消失を回復可能な error として返している。
-PR #120 で、Completed の行の cancel と remove、および名前が長すぎて一時出力を作れない行は直したが、Failed と Canceled の行は sweep と remove のどちらでも同じ失敗に当たる。
+The temporary output deletion and the destination directory existence check happen in the same function, and a vanished directory is returned as a recoverable error.
+PR #120 fixed cancel and remove of Completed rows and rows whose temporary output cannot be created because the name is too long, but both sweep and remove of Failed and Canceled rows hit the same failure.
 
-## 影響
+## Impact
 
-出力先 directory を消したままだと、daemon の log に error が繰り返し出て、該当の行は操作から削除できない。
-disk を戻せば回復する。
-コードを読んで確認した。実行による再現は行っていない。
+While the destination directory is kept deleted, the daemon repeatedly logs the error and the row cannot be removed by any operation.
+Restoring the disk recovers.
+Confirmed by reading the code. Not reproduced by execution.
 
-## 対応方針
+## Proposed fix
 
-Failed と Canceled の行は、出力先 directory が消えている場合の一時出力の不在を「削除済み」として扱う（directory ごと消えているなら、一時出力も消えている）。
-出力先 directory の存在確認は、既存の出力の保護が必要な操作（書き出しと確定）に限定する。
-出力先 directory が消えた状態で `remove` が成功し、sweep が再試行を続けないことを test する。
+For Failed and Canceled rows, treat a temporary output's absence when the destination directory is vanished as "already deleted" (if the whole directory is gone, the temporary output is gone too).
+Limit the destination directory existence check to the operations that need to protect an existing output (writing and finalizing).
+Test that `remove` succeeds with the destination directory gone and that the sweep stops retrying.

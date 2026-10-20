@@ -1,41 +1,41 @@
-# 接続側が接続候補の公開鍵を Session の cert と照合しない
+# The dialing side does not reconcile a candidate's public key with the Session cert
 
-**深刻度: 中**（署名付き NodeProfile の到達先が別の node のものになった場合に顕在）
+**Severity: Medium** (visible when a signed NodeProfile's reachable address becomes another node's)
 
-調査日 2026-10-12 / 対象コミット `4bb0571`
+Investigated on 2026-10-12 / Target commit `4bb0571`
 
-[issues.md](../issues.md) の 1 項目。
+One item of [issues.md](../issues.md).
 
-## 症状
+## Symptoms
 
-NodeFinder と FileExchanger の接続側は、ある NodeProfile の到達先へ接続して Session を確立すると、相手の公開鍵を確かめずに、その NodeProfile の node へ接続したものとして記録する。
-到達先が別の node のものであっても、その node が自分の鍵で Session を確立すれば、接続は成功として扱われる。
+When connecting to a NodeProfile's reachable address and establishing a Session, the dialing sides of NodeFinder and FileExchanger record the connection as being to the NodeProfile's node without checking the peer's public key.
+Even if the address now belongs to another node, the connection is handled as success as long as that node establishes the Session with its own key.
 
-## 該当箇所
+## Location
 
-[node/task_connector.rs:157](../../daemon/modules/engine/src/core/negotiator/node/task_connector.rs#L157) は、接続候補の到達先へ接続し、成功すると [node/task_connector.rs:166](../../daemon/modules/engine/src/core/negotiator/node/task_connector.rs#L166) で候補の NodeProfile を接続済みに加える。
+[node/task_connector.rs:157](../../daemon/modules/engine/src/core/negotiator/node/task_connector.rs#L157) connects to the candidate's reachable address, and on success [node/task_connector.rs:166](../../daemon/modules/engine/src/core/negotiator/node/task_connector.rs#L166) adds the candidate's NodeProfile as connected.
 
 ```rust
 if let Ok(session) = self.session_connector.connect(addr, &SessionType::NodeFinder).await {
 ```
 
-[file/task_connector.rs:214](../../daemon/modules/engine/src/core/negotiator/file/task_connector.rs#L214) と [file/task_connector.rs:222](../../daemon/modules/engine/src/core/negotiator/file/task_connector.rs#L222) も同じ形である。
-どちらも、`session.cert` の公開鍵を接続候補の NodeProfile の公開鍵と比べない。
+[file/task_connector.rs:214](../../daemon/modules/engine/src/core/negotiator/file/task_connector.rs#L214) and [file/task_connector.rs:222](../../daemon/modules/engine/src/core/negotiator/file/task_connector.rs#L222) have the same shape.
+Neither compares the public key of `session.cert` with the public key of the candidate's NodeProfile.
 
-## 原因
+## Cause
 
-Session は相手の署名と鍵を検証するが、接続側が期待する相手の公開鍵を受け取らない。
-[node/task_communicator.rs:172](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L172) の照合は、相手が送った NodeProfile の公開鍵と、その相手自身の cert を比べるものであり、接続候補の公開鍵とは比べない。
+The Session verifies the peer's signature and key, but the dialing side does not receive the public key it expected from the peer.
+The reconciliation at [node/task_communicator.rs:172](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L172) compares the public key of the NodeProfile the peer sent with the peer's own cert, not with the candidate's public key.
 
-## 影響
+## Impact
 
-NodeProfile の署名により、第三者はある node の公開鍵に自分の到達先を付けて配布できない（[trust-security.md](../design/trust-security.md#nodeprofile-は-node-本人の署名で到達先を結ぶ)）。
-ただし、署名付き NodeProfile の到達先は古くなり得る。
-node がアドレスを変えた後、そのアドレスを別の node が使うと、接続側はその到達先で別の node と Session を確立し、元の node を接続済みとして接続候補から外す。
-別の node は、本物の node の署名を作れないため、本物の node として認証されることはない。
-NodeFinder の Session は、[node/task_communicator.rs:133](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L133) で相手が送った NodeProfile の node ID で登録されるため、第三者の node 自身の Session として扱われる。
+The NodeProfile signature keeps a third party from attaching its own reachable addresses to a node's public key and distributing them ([trust-security.md](../design/trust-security.md#nodeprofile-binds-reachable-addresses-with-the-nodes-own-signature)).
+However, the reachable addresses of a signed NodeProfile can become stale.
+After a node changes its address, if another node uses that address, the dialing side establishes a Session with the other node at that address and removes the original node from the connection candidates as connected.
+The other node cannot be authenticated as the genuine node, because it cannot produce the genuine node's signature.
+Because the NodeFinder Session is registered with the node ID of the NodeProfile the peer sent ([node/task_communicator.rs:133](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L133)), it is handled as the third-party node's own Session.
 
-## 対応方針
+## Proposed fix
 
-接続の成功後に、`session.cert` の公開鍵が接続候補の NodeProfile の公開鍵と一致することを確かめ、一致しなければ Session を閉じて次の到達先を試す。
-公開鍵の異なる node が候補の到達先で応答したときに、候補を接続済みに加えないことを test で守る。
+After a successful connection, confirm that `session.cert`'s public key matches the candidate's NodeProfile public key, and on a mismatch close the Session and try the next reachable address.
+Guard with a test that a node with a different public key answering at the candidate's address is not added to the connected candidates.

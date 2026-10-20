@@ -1,29 +1,29 @@
-# Axus レビューの履歴
+# Axus Review History
 
-## 1. このドキュメントについて
+## 1. About this document
 
-本書は、レビューの履歴と、各レビューの指摘がどこまで転記されたかを扱う。
-各レビューの内容は子文書が持ち、指摘の本体は転記先の文書が持つ。
+This document covers the review history and how far each review's findings were transcribed.
+The content of each review lives in the child documents, and the body of a finding in the document it was transcribed to.
 
-### 1.1 文書間の責務分担
+### 1.1 Division of responsibilities among documents
 
-| 文書 | 受け持つもの |
+| Document | Owns |
 | --- | --- |
-| 本書 | レビューの一覧と転記の状態 |
-| [design.md](./design.md#11-文書間の責務分担) | 設計判断と保留 |
-| [issues.md](./issues.md) | 転記された不具合 |
-| [terms.md](./terms.md) | 転記された用語の指摘 |
+| This document | The list of reviews and the transcription state |
+| [design.md](./design.md#11-division-of-responsibilities-among-documents) | Design decisions and deferred |
+| [issues.md](./issues.md) | Transcribed bugs |
+| [terms.md](./terms.md) | Transcribed term findings |
 
-文書族の地図は [design.md](./design.md#11-文書間の責務分担) が持つ。
+The map of the document family is held by [design.md](./design.md#11-division-of-responsibilities-among-documents).
 
-### 1.2 使い方
+### 1.2 Usage
 
-- レビュー結果を発行したら、一覧表の先頭に行を足す。
-- 指摘を転記したら、転記の列を進める。
-- 行は消さない。
+- When a review result is published, add a row to the top of the list.
+- When a finding is transcribed, advance the transcription column.
+- Do not delete rows.
 
-## 2. 一覧
+## 2. List
 
-| レビュー | 型 | 指摘 | 転記 |
+| Review | Type | Findings | Transcription |
 | --- | --- | --- | --- |
-| [2026-09-25-design-audit](./reviews/2026-09-25-design-audit.md) | 監査 | 13 | 完了 |
+| [2026-09-25-design-audit](./reviews/2026-09-25-design-audit.md) | Audit | 13 | Complete |

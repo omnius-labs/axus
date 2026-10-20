@@ -1,41 +1,41 @@
-# output_lock が全購読で共通で、出力中の購読が他の購読の確定を止める
+# output_lock is common across all subscriptions and a writing subscription stops other subscriptions' finalization
 
-**深刻度: 中**（出力の長い購読があるときに他の購読の確定が遅れる）
+**Severity: Medium** (when a subscription with a long output exists, other subscriptions' finalization is delayed)
 
-調査日 2026-10-07 / 対象コミット `9bbbcbd`
+Investigated on 2026-10-07 / Target commit `9bbbcbd`
 
-[issues.md](../issues.md) の 1 項目。
+One item of [issues.md](../issues.md).
 
-## 症状
+## Symptoms
 
-1 つの購読の一時出力の書き出し中、他のすべての購読の出力操作（finalize、discard_output、sweep）が lock の解放を待つ。
-大きな file の購読が出力中だと、完了した他の購読の出力確定が長く止まる。
+While one subscription writes its temporary output, the output operations of all other subscriptions (finalize, discard_output, sweep) wait for the lock to be released.
+When a large file subscription is writing its output, the finalization of other completed subscriptions is stalled for a long time.
 
-## 該当箇所
+## Location
 
-[store.rs:26](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L26) のとおり、`FileSubscriberStore` は `state_dir` あたり 1 つで、`output_lock` も 1 つだけある。
+As [store.rs:26](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L26) shows, there is one `FileSubscriberStore` per `state_dir`, and only one `output_lock`.
 
 ```rust
 output_lock: Arc<TokioMutex<()>>,
 ```
 
-[store.rs:202](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L202) の `create_output` は lock の guard を `OutputWriter`（[同ファイル:469](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L469)）に渡し、出力の書き出しが終わるまで保持する。
-[store.rs:257](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L257) の `finalize`、[同ファイル:356](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L356) の `discard_output`、[同ファイル:431](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L431) の `sweep_outputs_locked` が同じ lock を待つ。
-[file_subscriber.rs:31](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber.rs#L31) のとおり、`FileSubscriber` が持つ store は 1 つで、すべての購読が共有する。
+`create_output` at [store.rs:202](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L202) hands the lock guard to the `OutputWriter` (at [the same file:469](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L469)), which holds it until the output write finishes.
+`finalize` at [store.rs:257](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L257), `discard_output` at [the same file:356](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L356), and `sweep_outputs_locked` at [the same file:431](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L431) wait on the same lock.
+As [file_subscriber.rs:31](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber.rs#L31) shows, `FileSubscriber` holds one store shared by all subscriptions.
 
-## 原因
+## Cause
 
-購読間の出力先の衝突（同じ出力先の保護）を、購読全体で 1 つの lock で守っている。
-lock の粒度が購読（行）より粗い。
+The destination conflict between subscriptions (protecting the same destination) is guarded by a single lock across all subscriptions.
+The lock granularity is coarser than the subscription (row).
 
-## 影響
+## Impact
 
-出力が止まることはないが、購読の完了から確定までの時間が、他の購読の出力時間に引っ張られる。
-出力の長い購読と短い購読が混在すると、短い購読の確定が長く遅れる。
-コードを読んで確認した。実行による再現は行っていない。
+Output never stalls, but the time from a subscription's completion to its finalization is dragged by other subscriptions' output time.
+When long-output and short-output subscriptions coexist, the short ones' finalization is delayed by a long time.
+Confirmed by reading the code. Not reproduced by execution.
 
-## 対応方針
+## Proposed fix
 
-lock を購読（出力先）ごとの粒度に替える。
-`OutputWriter` が持つ guard を出力先ごとの lock にし、`finalize` と `discard_output` は当該の購読の lock だけを取る。
-1 つの購読が出力中でも、別の購読の `finalize` が完了することを test する。
+Change the lock granularity to per-subscription (per-destination).
+Make the guard held by `OutputWriter` a per-destination lock, and make `finalize` and `discard_output` take only that subscription's lock.
+Test that one subscription's write does not block another subscription's `finalize` from completing.

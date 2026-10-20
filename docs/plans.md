@@ -1,20 +1,20 @@
-# Axus 実装計画
+# Axus Implementation Plans
 
-本書は進行中の作業と依存関係を扱う。各作業の手順は子文書、完了後の状態はコードと git の履歴が持つ。
-着手時に行を追加し、状態を進め、完了条件を満たして計画を畳んだら行と子文書を削除する。
+This document covers in-progress work and its dependencies. The procedures of each work live in the child documents, and the post-completion state in the code and the git history.
+Add a row when starting work, advance its state, and delete the row and child document once the completion conditions are met and the plan is folded.
 
-## 1. この文書について
+## 1. About this document
 
-### 1.1 文書間の責務分担
+### 1.1 Division of responsibilities among documents
 
-| 文書 | 受け持つもの |
+| Document | Owns |
 | --- | --- |
-| 本書 | 進行中の作業と依存関係 |
-| [design.md](./design.md#11-文書間の責務分担) | 文書族の地図と恒久的な設計判断 |
+| This document | In-progress work and dependencies |
+| [design.md](./design.md#11-division-of-responsibilities-among-documents) | The map of the document family and permanent design decisions |
 
-## 2. 一覧
+## 2. List
 
-| 計画 | 目的 | 状態 | 先行 |
+| Plan | Purpose | State | Prerequisite |
 | --- | --- | --- | --- |
 
-進行中の計画はない。
+There are no in-progress plans.

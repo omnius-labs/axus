@@ -1,47 +1,47 @@
-# Axus 既知の不具合
+# Axus Known Issues
 
-本書は、コードを読んで確認した明確な不具合を扱う。
-設計上の未決事項は対応する設計文書の「設計判断」に置く。
+This document covers clear bugs confirmed by reading the code.
+Deferred design decisions live in the "Design decisions" sections of the corresponding design documents.
 
-## 1. この文書について
+## 1. About this document
 
-### 1.1 文書間の責務分担
+### 1.1 Division of responsibilities among documents
 
-| 文書 | 受け持つもの |
+| Document | Owns |
 | --- | --- |
-| 本書 | コードで確認した不具合の一覧、項目間の関係、修正までの追跡 |
-| [design.md](./design.md#11-文書間の責務分担) | 設計判断と実装状況 |
-| [terms.md](./terms.md#11-文書間の責務分担) | 語の定義と表記 |
+| This document | The list of code-confirmed bugs, the relations between items, and tracking until fixed |
+| [design.md](./design.md#11-division-of-responsibilities-among-documents) | Design decisions and implementation status |
+| [terms.md](./terms.md#11-division-of-responsibilities-among-documents) | Term definitions and notation |
 
-文書族の地図は [design.md](./design.md#11-文書間の責務分担) が持つ。
+The map of the document family is held by [design.md](./design.md#11-division-of-responsibilities-among-documents).
 
-### 1.2 使い方
+### 1.2 Usage
 
-- GitHub Issue に起票したら、一覧表の Issue 列に番号を追記する。
-- 修正されたら、一覧表の行と子文書を削除する。
-- 行番号はコード変更でずれるため、修正時に該当箇所を再確認する。
+- When a GitHub Issue is filed, append the number to the Issue column of the list.
+- When fixed, remove the list row and the child document.
+- Line numbers drift with code changes, so re-check the relevant locations when fixing.
 
-## 2. 一覧
+## 2. List
 
-| 項目 | 深刻度 | 調査日 | Issue |
+| Item | Severity | Investigated on | Issue |
 | --- | --- | --- | --- |
-| [異常終了した daemon の lock file が残り、再起動できなくなる](./issues/daemon-lock-survives-abnormal-exit.md) | 中 | 2026-10-06 | - |
-| [確立後の send_message と受理待ちの Session に期限がない](./issues/session-accept-and-message-without-deadline.md) | 中 | 2026-10-07 | - |
-| [output_lock が全購読で共通で、出力中の購読が他の購読の確定を止める](./issues/output-lock-shared-across-subscriptions.md) | 中 | 2026-10-07 | - |
-| [Failed や Canceled の行の出力先 directory が消えると、sweep の再試行が続き remove もできなくなる](./issues/vanished-output-directory-blocks-sweep-and-remove.md) | 中 | 2026-10-07 | - |
-| [delete_bulk が存在しない key を含むと何も削除せずに成功する](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | 低 | 2026-10-06 | - |
-| [TaskCommunicator::start が受理 channel が閉じても loop を抜けない](./issues/task-communicator-spins-on-closed-session-channel.md) | 低 | 2026-10-07 | - |
-| [SessionConnector が用途選択の結果 Unknown を受理する](./issues/session-connector-accepts-unknown-result.md) | 低 | 2026-10-11 | - |
-| [接続側が接続候補の公開鍵を Session の cert と照合しない](./issues/dialer-does-not-match-candidate-public-key.md) | 中 | 2026-10-12 | - |
+| [Lock file of an abnormally terminated daemon remains and prevents restart](./issues/daemon-lock-survives-abnormal-exit.md) | Medium | 2026-10-06 | - |
+| [No deadline for send_message and an accept-waiting Session after establishment](./issues/session-accept-and-message-without-deadline.md) | Medium | 2026-10-07 | - |
+| [output_lock is common across all subscriptions and a writing subscription stops other subscriptions' finalization](./issues/output-lock-shared-across-subscriptions.md) | Medium | 2026-10-07 | - |
+| [A vanished destination directory of Failed or Canceled rows makes sweep retries continue and remove impossible](./issues/vanished-output-directory-blocks-sweep-and-remove.md) | Medium | 2026-10-07 | - |
+| [delete_bulk succeeds deleting nothing when it contains a missing key](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | Low | 2026-10-06 | - |
+| [TaskCommunicator::start does not exit its loop even when the accept channel is closed](./issues/task-communicator-spins-on-closed-session-channel.md) | Low | 2026-10-07 | - |
+| [SessionConnector accepts the Unknown use-selection result](./issues/session-connector-accepts-unknown-result.md) | Low | 2026-10-11 | - |
+| [The dialing side does not reconcile a candidate's public key with the Session cert](./issues/dialer-does-not-match-candidate-public-key.md) | Medium | 2026-10-12 | - |
 
-## 3. ここに含めていないもの
+## 3. Not included here
 
-| 項目 | 参照 |
+| Item | Reference |
 | --- | --- |
-| FileExchanger の block 交換 protocol がない | [file-transfer.md](./design/file-transfer.md#7-現状と残作業) |
-| 公開と購読を始める REST API がない | [file-transfer.md](./design/file-transfer.md#7-現状と残作業) |
-| NodeFinder の能動探索がない | [node-finder.md](./design/node-finder.md#6-設計判断) |
-| REST API の到達範囲と認証が未決である | [daemon-api.md](./design/daemon-api.md#rest-api-の到達範囲と認証) |
-| Web of Trust が未設計である | [trust-security.md](./design/trust-security.md#4-設計判断) |
-| Profile と memo が未実装である | [profile-memo.md](./design/profile-memo.md#5-現状と残作業) |
-| 長時間 REST 操作の表現が未決である | [daemon-api.md](./design/daemon-api.md#5-設計判断) |
+| No FileExchanger block exchange protocol | [file-transfer.md](./design/file-transfer.md#7-current-status-and-remaining-work) |
+| No REST API to start publishing and subscribing | [file-transfer.md](./design/file-transfer.md#7-current-status-and-remaining-work) |
+| No NodeFinder active lookup | [node-finder.md](./design/node-finder.md#6-design-decisions) |
+| REST API reach and authentication undecided | [daemon-api.md](./design/daemon-api.md#reach-and-authentication-of-the-rest-api) |
+| Web of Trust not designed | [trust-security.md](./design/trust-security.md#4-design-decisions) |
+| Profile and memo not implemented | [profile-memo.md](./design/profile-memo.md#5-current-status-and-remaining-work) |
+| Long-running REST operation representation undecided | [daemon-api.md](./design/daemon-api.md#5-design-decisions) |

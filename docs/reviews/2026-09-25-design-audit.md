@@ -1,374 +1,374 @@
-# 設計文書と daemon の監査レビュー
+# Design document and daemon audit review
 
-## 1. このレビューについて
+## 1. About this review
 
-設計文書群が daemon の実装と食い違っていないか、設計そのものに欠けている判断がないかを、実装を通しで読んで確かめた監査レビューである。
+This is an audit review that checked, by reading through the implementation, whether the design documents diverge from the daemon implementation and whether any judgment is missing from the design itself.
 
-### 1.1 文書間の責務分担
+### 1.1 Division of responsibilities among documents
 
-| 文書 | 受け持つもの |
+| Document | Owns |
 | --- | --- |
-| 本書 | このレビューの範囲、観点、指摘、確かめて問題がなかったこと |
-| [issues.md](../issues.md) | 種別 不具合と改善提案の転記先 |
-| [terms.md](../terms.md) | 種別 用語の転記先 |
-| [session.md](../design/session.md)、[trust-security.md](../design/trust-security.md)、[file-transfer.md](../design/file-transfer.md)、[daemon-api.md](../design/daemon-api.md)、[rocketpack.md](../design/rocketpack.md) | 種別 設計論点の転記先 |
+| This document | The scope, viewpoints, findings, and what was verified and found sound in this review |
+| [issues.md](../issues.md) | Transcription target for findings of type bug and improvement proposal |
+| [terms.md](../terms.md) | Transcription target for findings of type terminology |
+| [session.md](../design/session.md), [trust-security.md](../design/trust-security.md), [file-transfer.md](../design/file-transfer.md), [daemon-api.md](../design/daemon-api.md), [rocketpack.md](../design/rocketpack.md) | Transcription targets for findings of type design point |
 
-文書族の地図は [design.md](../design.md#11-文書間の責務分担) が持つ。
+The map of the document family is held by [design.md](../design.md#11-division-of-responsibilities-among-documents).
 
-### 1.2 レビュー日と対象
+### 1.2 Review date and targets
 
-1. レビュー日: 2026-09-25
-2. 型: 監査レビュー
-3. 対象コミット: `59054a2`（core-rs は `5a92929`）
-4. レビュアー: Claude Code（AI エージェント）
+1. Review date: 2026-09-25
+2. Type: audit review
+3. Target commits: `59054a2` (core-rs: `5a92929`)
+4. Reviewer: Claude Code (AI agent)
 
-## 2. 範囲と観点
+## 2. Scope and viewpoints
 
-### 2.1 見た範囲
+### 2.1 What was reviewed
 
-`docs/` の設計文書、用語集、不具合一覧のすべてと、`daemon/modules/engine/src` の Session、NodeFinder、FileExchanger、FilePublisher、FileSubscriber、block storage、`daemon/entrypoints/daemon/src` を読んだ。
-設計文書が前提にする core-rs の RocketPack compiler の設計文書、DESIGN.md の RocketPack と secure connection の節、`OmniSigner` と `OmniSecureStream` の署名処理も読んだ。
-範囲は、設計文書が責務を持つ関心事の実装で切った。
+All of the `docs/` design documents, terminology, and issue list, and `daemon/modules/engine/src`'s Session, NodeFinder, FileExchanger, FilePublisher, FileSubscriber, and block storage, and `daemon/entrypoints/daemon/src`.
+Also read the core-rs design document for the RocketPack compiler that the design documents assume, the RocketPack and secure connection sections of DESIGN.md, and the signing in `OmniSigner` and `OmniSecureStream`.
+The scope was cut at the implementation of the concerns the design documents own.
 
-指摘 R-1、R-5、R-8 は、一時的な test を追加して再現を確かめ、その test は取り除いた。
-engine の既存の test は 45 件すべてが通ることを確かめた。
+Findings R-1, R-5, and R-8 were reproduced with temporary tests, which were then removed.
+All 45 existing engine tests were confirmed to pass.
 
-### 2.2 見ていない範囲
+### 2.2 What was not reviewed
 
-- `daemon/entrypoints/interface` の生成物は、手で編集しない生成物であり範囲外とした
-- core-rs の実装は、Axus から使う署名と decoder の箇所以外を範囲外とした
-- `docs/coding/rust.md` への準拠は、lint が正本であり範囲外とした
-- UPnP と SOCKS5 の経路は、実機の router と proxy がなく確かめる時間がなかった
-- FileExchanger の `task_accepter.rs` と `session_status.rs` は、block 交換 protocol がなく処理の本体がないため読み流しに留めた
-- 性能と資源の消費量は測っていない
+- The `daemon/entrypoints/interface` artifacts are generated and not hand-edited, so they were out of scope
+- The core-rs implementation was out of scope except for the signing and decoder portions Axus uses
+- Compliance with `docs/coding/rust.md` was out of scope because the lint is the source of truth
+- The UPnP and SOCKS5 paths could not be checked in the time available because there are no physical router and proxy
+- FileExchanger's `task_accepter.rs` and `session_status.rs` were skimmed because there is no block exchange protocol and no processing body
+- Performance and resource consumption were not measured
 
-### 2.3 観点
+### 2.3 Viewpoints
 
-- 設計文書の記述が実装と一致しているか
-- 外部から入力を受ける境界に、期限と大きさの上限があるか
-- 認証が何を保証し、何を保証しないか
-- 2 つの storage をまたぐ処理が、途中で終了しても回復できるか
-- 設計文書が約束している流れに、実装上のデータの出所があるか
+- Does the description in the design documents match the implementation?
+- Do the boundaries that receive external input have deadlines and size limits?
+- What does the authentication guarantee, and what does it not?
+- Can a process spanning the two storages recover if it ends midway?
+- Does the flow the design documents promise have a data origin in the implementation?
 
-## 3. 総評
+## 3. Overall assessment
 
-NodeFinder の探索と Session の重複解消は設計どおりに動いており、既知の不具合を除けば現状のまま使える。
-一方、Session には接続確立の期限がなく（R-1）、認証が接続に束縛されていない（R-2）ため、信頼できない network へ出す前に直す必要がある。
-公開処理は 2 つの storage をまたぐ commit の回復手順を欠いており（R-5）、FileExchanger を結線する前に直す必要がある。
+NodeFinder lookup and Session duplicate resolution work as designed, and apart from the known bugs the current state is usable.
+On the other hand, Session has no connection deadline (R-1), and authentication is not bound to the connection (R-2), so both must be fixed before the daemon goes on an untrusted network.
+The publish path lacks the recovery procedure for a commit spanning the two storages (R-5) and must be fixed before wiring FileExchanger.
 
-## 4. 指摘
+## 4. Findings
 
-| ID | 概要 | 種別 | 確度 | 扱い |
+| ID | Summary | Type | Confidence | Handling |
 | --- | --- | --- | --- | --- |
-| [R-1](#r-1) | 応答しない接続が Session の受理と発信を止める | 不具合 | 高 | issues.md に起票 |
-| [R-2](#r-2) | Session の認証が接続に束縛されていない | 設計論点 | 高 | session.md の保留へ転記 |
-| [R-3](#r-3) | 到達先の真正性の保留が古い前提と誤った現状を持つ | 設計論点 | 高 | trust-security.md の保留へ転記 |
-| [R-4](#r-4) | 受信 message の大きさを frame の上限でしか制限していない | 不具合 | 高 | issues.md に起票 |
-| [R-5](#r-5) | commit の途中で終了した file を再び公開できない | 不具合 | 高 | issues.md に起票 |
-| [R-6](#r-6) | block の hash を照合する位置が決まっていない | 設計論点 | 高 | file-transfer.md の保留へ転記 |
-| [R-7](#r-7) | 公開側が接続先を探す手段がない | 設計論点 | 高 | file-transfer.md の保留へ転記 |
-| [R-8](#r-8) | Kadex::find が 2 件以上で近い node を取りこぼす | 不具合 | 高 | issues.md に起票 |
-| [R-9](#r-9) | REST API の到達範囲と認証が決まっていない | 設計論点 | 高 | daemon-api.md の保留へ転記 |
-| [R-10](#r-10) | rocketpack.md が core-rs の古い compiler の仕様を複写している | 設計論点 | 高 | rocketpack.md の保留へ転記 |
-| [R-11](#r-11) | 用語集の使わない別称に別の用語が入り、主要な語が欠けている | 用語 | 高 | terms.md の用語一覧へ転記 |
-| [R-12](#r-12) | FileExchanger の起動失敗が握り潰される | 改善提案 | 高 | issues.md に起票 |
-| [R-13](#r-13) | 多重起動の lock が state directory ではなく設定 directory にある | 改善提案 | 高 | issues.md に起票 |
+| [R-1](#r-1) | Non-responding connections stop Session acceptance and dialing | Bug | High | Filed in issues.md |
+| [R-2](#r-2) | Session authentication is not bound to the connection | Design point | High | Transcribed to session.md's deferred |
+| [R-3](#r-3) | The reachable-address authenticity deferred rests on an old premise and a wrong current state | Design point | High | Transcribed to trust-security.md's deferred |
+| [R-4](#r-4) | Received message size is limited only by the frame limit | Bug | High | Filed in issues.md |
+| [R-5](#r-5) | A file that ended mid-commit cannot be published again | Bug | High | Filed in issues.md |
+| [R-6](#r-6) | The location that checks a block's hash is undecided | Design point | High | Transcribed to file-transfer.md's deferred |
+| [R-7](#r-7) | The publisher side has no way to find a connect target | Design point | High | Transcribed to file-transfer.md's deferred |
+| [R-8](#r-8) | Kadex::find misses close nodes when 2 or more are requested | Bug | High | Filed in issues.md |
+| [R-9](#r-9) | REST API reach and authentication are undecided | Design point | High | Transcribed to daemon-api.md's deferred |
+| [R-10](#r-10) | rocketpack.md copies the old core-rs compiler specification | Design point | High | Transcribed to rocketpack.md's deferred |
+| [R-11](#r-11) | The deprecated aliases of the terminology contain other terms, and key terms are missing | Terminology | High | Transcribed to terms.md's term list |
+| [R-12](#r-12) | FileExchanger's startup failure is swallowed | Improvement proposal | High | Filed in issues.md |
+| [R-13](#r-13) | The multiple-startup lock lives in the configuration directory instead of the state directory | Improvement proposal | High | Filed in issues.md |
 
-R-1 と R-4 は、どちらも Session と NodeFinder の入力境界に期限と上限がないことから出ており、まとめて直すのが効率的である。
-R-2 と R-3 は同じ原因から出ており、R-3 の判断は R-2 の判断に依存する。
-R-6 と R-7 は、どちらも block 交換 protocol を定義する前に決める必要がある。
+R-1 and R-4 both come from the absence of deadlines and limits at the Session and NodeFinder input boundaries, and are most efficiently fixed together.
+R-2 and R-3 come from the same cause, and the R-3 judgment depends on the R-2 judgment.
+R-6 and R-7 must both be decided before defining the block exchange protocol.
 
 <a id="r-1"></a>
-### R-1. 応答しない接続が Session の受理と発信を止める
+### R-1. Non-responding connections stop Session acceptance and dialing
 
-**種別: 不具合** / **確度: 高**
+**Type: bug** / **Confidence: high**
 
-**該当箇所**
-[accepter.rs:76](../../daemon/modules/engine/src/core/session/accepter.rs#L76) が受理 worker を 3 つだけ起動し、各 worker は [accepter.rs:168](../../daemon/modules/engine/src/core/session/accepter.rs#L168) で受け取った接続の handshake を、[accepter.rs:172](../../daemon/modules/engine/src/core/session/accepter.rs#L172) 以降の期限のない受信で待つ。
-発信側の [connector.rs:35](../../daemon/modules/engine/src/core/session/connector.rs#L35) も期限を持たない。
+**Location**
+[accepter.rs:76](../../daemon/modules/engine/src/core/session/accepter.rs#L76) starts only three accept workers, and each worker waits for the handshake of a received connection with an unbounded reception from [accepter.rs:168](../../daemon/modules/engine/src/core/session/accepter.rs#L168) onward.
+The dialing side's [connector.rs:35](../../daemon/modules/engine/src/core/session/connector.rs#L35) also has no deadline.
 
-**何が問題か**
-認証前の相手が何も送らない接続を 3 本開くだけで、その node は新しい Session を受理しなくなる。
+**What is wrong**
+A pre-authentication peer only needs to open three connections that send nothing for that node to stop accepting new Sessions.
 
-**根拠**
-in-memory の接続で無応答の接続を 3 本開いたまま `SessionConnector::connect` を呼び、3 秒で完了しないことを一時的な test で確かめた。
-発信側が応答しない到達先で止まることは、コードを読んで確かめたが実行はしていない。
+**Evidence**
+With in-memory connections, three unresponsive connections were kept open and `SessionConnector::connect` was called; a temporary test confirmed it does not complete in 3 seconds.
+That the dialing side stalls at an unresponsive reachable address was confirmed by reading the code, not by execution.
 
-**影響**
-NodeFinder の受理が止まり、既知 node に応答しない到達先を混ぜられると発信も止まる。
+**Impact**
+NodeFinder acceptance stops, and dialing also stops when an unresponsive reachable address is mixed into the known nodes.
 
-**扱い**
-issues.md の session-handshake-without-deadline として起票した。
+**Handling**
+Filed in issues.md as session-handshake-without-deadline.
 
 <a id="r-2"></a>
-### R-2. Session の認証が接続に束縛されていない
+### R-2. Session authentication is not bound to the connection
 
-**種別: 設計論点** / **確度: 高**
+**Type: design point** / **Confidence: high**
 
-**該当箇所**
-[accepter.rs:182](../../daemon/modules/engine/src/core/session/accepter.rs#L182) と [connector.rs:45](../../daemon/modules/engine/src/core/session/connector.rs#L45) は、相手から受け取った 32 byte の nonce だけに署名する。
+**Location**
+[accepter.rs:182](../../daemon/modules/engine/src/core/session/accepter.rs#L182) and [connector.rs:45](../../daemon/modules/engine/src/core/session/connector.rs#L45) sign only a 32-byte nonce received from the peer.
 
 ```rust
 let send_signature = self.signer.sign(&receive_challenge_message.nonce)?;
 ```
 
-**何が問題か**
-署名が TCP 接続にも handshake の内容にも束縛されていないため、第三者が handshake を中継すると、両端は互いを認証したまま第三者を経由して通信する。
-また、認証前の相手がどの node にも任意の 32 byte への署名を作らせられる。
+**What is wrong**
+Because the signature is bound to neither the TCP connection nor the handshake content, when a third party relays the handshake, both ends authenticate each other and communicate through the third party.
+Also, a pre-authentication peer can make any node sign any 32 bytes.
 
-**根拠**
-`OmniSigner::sign` は受け取った byte 列をそのまま Ed25519 で署名し、V1 の handshake には鍵合意も用途の接頭辞もないことをコードで確かめた。
-core-rs の `OmniSecureStream` は自分の鍵合意の公開鍵を含む SHA3-256 の 32 byte に同じ種類の鍵で署名するため、同じ鍵で両方に応じると署名を流用できる。
-中継となりすましは手順を追って確かめたが、実行はしていない。
+**Evidence**
+Confirmed in the code that `OmniSigner::sign` signs a received byte string with Ed25519 as-is, and that the V1 handshake has no key agreement and no use prefix.
+Because core-rs's `OmniSecureStream` signs a 32-byte SHA3-256 of its own key-agreement public key with the same kind of key, answering both with the same key lets the signatures be reused.
+Relay and impersonation were confirmed by tracing the procedure, not by execution.
 
-**影響**
-NodeProfile の到達先に署名がないため、偽の到達先を配れる第三者は、いまの daemon でも NodeFinder の通信の間に入れる。
-secure channel の候補 1 を選んだ場合は、なりすましにつながる。
+**Impact**
+Because NodeProfile reachable addresses are unsigned, a third party that can distribute fake reachable addresses can get between NodeFinder communication today.
+Choosing secure channel candidate 1 leads to impersonation.
 
-**扱い**
-session.md の保留「Session の secure channel」へ転記した。
+**Handling**
+Transcribed to session.md's pending "Session secure channel".
 
 <a id="r-3"></a>
-### R-3. 到達先の真正性の保留が古い前提と誤った現状を持つ
+### R-3. The reachable-address authenticity pending has an old premise and a wrong current state
 
-**種別: 設計論点** / **確度: 高**
+**Type: design point** / **Confidence: high**
 
-**該当箇所**
-trust-security.md の保留「NodeProfile の到達先の真正性」。
-現状は偽の到達先ではなりすましが成立しないとし、今決めない理由は複数 hop の探索を daemon で動かしていないことだった。
+**Location**
+trust-security.md's pending "authenticity of the NodeProfile reachable address".
+It stated the current state as "impersonation cannot hold with a fake reachable address" and the reason for not deciding as "multi-hop lookup is not running in the daemon".
 
-**何が問題か**
-R-2 の中継により、偽の到達先から通信の間に入れるため、現状の記述が誤っている。
-複数 hop の探索は [service.rs:246](../../daemon/modules/engine/src/service.rs#L246) の 3 node の結合試験で動いており、今決めない理由が成り立たない。
+**What is wrong**
+With the R-2 relay, a fake reachable address can get between communication, so the current-state description is wrong.
+Multi-hop lookup runs in the three-node integration test at [service.rs:246](../../daemon/modules/engine/src/service.rs#L246), so the reason for not deciding no longer holds.
 
-**根拠**
-R-2 と同じ。
-結合試験が通ることは実行して確かめた。
+**Evidence**
+Same as R-2.
+The integration test passing was confirmed by running it.
 
-**影響**
-保留の決める条件が観測できない状態に留まり、判断の優先度を誤る。
+**Impact**
+The pending's decision condition stays unobservable, and the priority of the judgment is misjudged.
 
-**扱い**
-trust-security.md の保留「NodeProfile の到達先の真正性」へ転記した。
+**Handling**
+Transcribed to trust-security.md's pending "authenticity of the NodeProfile reachable address".
 
 <a id="r-4"></a>
-### R-4. 受信 message の大きさを frame の上限でしか制限していない
+### R-4. Received message size is limited only by the frame limit
 
-**種別: 不具合** / **確度: 高**
+**Type: bug** / **Confidence: high**
 
-**該当箇所**
-[framed.rs:9](../../daemon/modules/engine/src/base/connection/stream/framed.rs#L9) の 64 MiB がすべての message に共通の上限であり、[task_communicator.rs:454](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L454) などは要素数を上限なしで読む。
+**Location**
+The 64 MiB at [framed.rs:9](../../daemon/modules/engine/src/base/connection/stream/framed.rs#L9) is the common limit for all messages, and [task_communicator.rs:454](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L454) and others read the element count without a limit.
 
-**何が問題か**
-認証前の handshake の message も 64 MiB まで読まれ、所在情報 1 件に付ける NodeProfile の数にも上限がない。
+**What is wrong**
+Even a handshake message before authentication is read up to 64 MiB, and the number of NodeProfiles attached to one location entry has no limit.
 
-**根拠**
-コードで確かめた。
-core-rs の decoder は残りの byte 数を超える要素数を拒否するため、確保量は frame の大きさに比例する範囲に留まることも確かめた。
-実際の memory 消費量は測っていない。
+**Evidence**
+Confirmed in the code.
+Also confirmed that core-rs's decoder rejects an element count exceeding the remaining byte count, so the allocation stays proportional to the frame size.
+Actual memory consumption was not measured.
 
-**影響**
-trust-security.md の §3 が求める message size の上限が、frame の上限でしか満たされていない。
+**Impact**
+The message-size limit §3 of trust-security.md demands is satisfied only by the frame limit.
 
-**扱い**
-issues.md の unbounded-message-sizes として起票した。
+**Handling**
+Filed in issues.md as unbounded-message-sizes.
 
 <a id="r-5"></a>
-### R-5. commit の途中で終了した file を再び公開できない
+### R-5. A file that ended mid-commit cannot be published again
 
-**種別: 不具合** / **確度: 高**
+**Type: bug** / **Confidence: high**
 
-**該当箇所**
-[task_encoder.rs:305](../../daemon/modules/engine/src/core/negotiator/file/file_publisher/task_encoder.rs#L305) で block ごとに RocksDB の key を rename し、[task_encoder.rs:309](../../daemon/modules/engine/src/core/negotiator/file/file_publisher/task_encoder.rs#L309) で SQLite に commit する。
+**Location**
+[task_encoder.rs:305](../../daemon/modules/engine/src/core/negotiator/file/file_publisher/task_encoder.rs#L305) renames a RocksDB key per block, and [task_encoder.rs:309](../../daemon/modules/engine/src/core/negotiator/file/file_publisher/task_encoder.rs#L309) commits to SQLite.
 
-**何が問題か**
-その間で process が終了すると、再起動後の符号化が rename の `AlreadyExists` で失敗し、file は Failed のまま残る。
+**What is wrong**
+If the process exits between the two, the encoding after a restart fails with the rename's `AlreadyExists`, and the file stays Failed.
 
-**根拠**
-committed の key を先に置いた storage で同じ file を公開し、Failed になり理由が `AlreadyExists` であることを一時的な test で確かめた。
-process の終了そのものは起こしていない。
+**Evidence**
+With a storage in which a committed key was placed first, the same file was published, and a temporary test confirmed it becomes Failed with the reason `AlreadyExists`.
+The process exit itself was not performed.
 
-**影響**
-公開処理が途中で止まった file は利用者が消して入れ直すまで公開されず、参照されない block が残る。
+**Impact**
+A file whose publish processing stopped midway is not published until the user deletes and re-adds it, and unreferenced blocks remain.
 
-**扱い**
-issues.md の publisher-commit-not-crash-safe として起票した。
+**Handling**
+Filed in issues.md as publisher-commit-not-crash-safe.
 
 <a id="r-6"></a>
-### R-6. block の hash を照合する位置が決まっていない
+### R-6. The location that checks a block's hash is undecided
 
-**種別: 設計論点** / **確度: 高**
+**Type: design point** / **Confidence: high**
 
-**該当箇所**
-[subscriber.rs:123](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/subscriber.rs#L123) の `write_block` は、[subscriber.rs:130](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/subscriber.rs#L130) で受け取った値を照合せずに保存する。
+**Location**
+`write_block` at [subscriber.rs:123](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/subscriber.rs#L123) saves the received value at [subscriber.rs:130](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/subscriber.rs#L130) without checking it.
 
-**何が問題か**
-file-transfer.md は内容 hash の検証を commit より前に行うとするが、保存の入口で照合するか protocol 層で照合するかを決めていない。
+**What is wrong**
+file-transfer.md says the content hash is verified before the commit, but whether to check at the save entry or in the protocol layer is undecided.
 
-**根拠**
-コードで確かめた。
+**Evidence**
+Confirmed in the code.
 
-**影響**
-protocol 層だけで照合すると、`write_block` を呼ぶ経路が増えるたびに照合を忘れる余地が生まれる。
+**Impact**
+Checking only in the protocol layer leaves room for a path calling `write_block` to forget the check as the paths grow.
 
-**扱い**
-file-transfer.md の保留「block の hash を照合する位置」へ転記した。
+**Handling**
+Transcribed to file-transfer.md's pending "location that checks a block's hash".
 
 <a id="r-7"></a>
-### R-7. 公開側が接続先を探す手段がない
+### R-7. The publisher side has no way to find a connect target
 
-**種別: 設計論点** / **確度: 高**
+**Type: design point** / **Confidence: high**
 
-**該当箇所**
-[task_connector.rs:196](../../daemon/modules/engine/src/core/negotiator/file/task_connector.rs#L196) は公開用の接続でも `find_node_profile` を呼び、[node_finder.rs:215](../../daemon/modules/engine/src/core/negotiator/node/node_finder.rs#L215) は提供する node の所在情報だけを返す。
+**Location**
+[task_connector.rs:196](../../daemon/modules/engine/src/core/negotiator/file/task_connector.rs#L196) calls `find_node_profile` even for a publish connection, and [node_finder.rs:215](../../daemon/modules/engine/src/core/negotiator/node/node_finder.rs#L215) returns only the location info of providing nodes.
 
-**何が問題か**
-file-transfer.md は公開側が要求する node へ接続するとしていたが、NodeFinder の want は要求元の NodeProfile を運ばないため、公開側は要求する node を知る手段を持たない。
+**What is wrong**
+file-transfer.md said the publisher side connects to requesting nodes, but since NodeFinder's want does not carry the requester's NodeProfile, the publisher side has no way to know the requesting nodes.
 
-**根拠**
-DataMessage の want が `AssetKey` の列だけであることをコードで確かめた。
+**Evidence**
+Confirmed in the code that DataMessage's want is only a list of `AssetKey`s.
 
-**影響**
-公開用の接続 task は、同じ file を提供するほかの node へ接続する。
+**Impact**
+The publish connection task connects to other nodes providing the same file.
 
-**扱い**
-file-transfer.md の保留「公開側の接続先」へ転記した。
+**Handling**
+Transcribed to file-transfer.md's pending "connect target of the publisher side".
 
 <a id="r-8"></a>
-### R-8. Kadex::find が 2 件以上で近い node を取りこぼす
+### R-8. Kadex::find misses close nodes when 2 or more are requested
 
-**種別: 不具合** / **確度: 高**
+**Type: bug** / **Confidence: high**
 
-**該当箇所**
-[kadx.rs:42](../../daemon/modules/engine/src/core/negotiator/node/kadx.rs#L42) の繰り下げが末尾の 1 つ手前で止まる。
+**Location**
+The carry-down at [kadx.rs:42](../../daemon/modules/engine/src/core/negotiator/node/kadx.rs#L42) stops one before the last.
 
-**何が問題か**
-候補が近い順に並んでいないと、3 件を求めても 2 件しか返らない。
+**What is wrong**
+If the candidates are not sorted by closeness, requesting 3 returns only 2.
 
-**根拠**
-3 つの候補を遠い順に渡して 3 件を求め、2 件しか返らないことを一時的な test で確かめた。
+**Evidence**
+Confirmed with a temporary test that passes 3 candidates in far-to-close order and requests 3, receiving only 2.
 
-**影響**
-いまの呼び出し元は 1 件しか求めないため顕在化していない。
+**Impact**
+Not visible because the current callers request only 1.
 
-**扱い**
-issues.md の kadex-find-drops-candidates として起票した。
+**Handling**
+Filed in issues.md as kadex-find-drops-candidates.
 
 <a id="r-9"></a>
-### R-9. REST API の到達範囲と認証が決まっていない
+### R-9. REST API reach and authentication are undecided
 
-**種別: 設計論点** / **確度: 高**
+**Type: design point** / **Confidence: high**
 
-**該当箇所**
-[openapi.yaml:25](../../daemon/openapi.yaml#L25) の health は `security: []` であり、[server.rs:37](../../daemon/entrypoints/daemon/src/server.rs#L37) は設定された address でそのまま待ち受ける。
+**Location**
+The health at [openapi.yaml:25](../../daemon/openapi.yaml#L25) has `security: []`, and [server.rs:37](../../daemon/entrypoints/daemon/src/server.rs#L37) listens on the configured address as-is.
 
-**何が問題か**
-REST API は local client 向けとされるが、その前提を daemon が強制するのか、認証で守るのかが決まっていない。
+**What is wrong**
+The REST API is said to be for local clients, but whether the daemon enforces the premise or protects with authentication is undecided.
 
-**根拠**
-コードと OpenAPI で確かめた。
+**Evidence**
+Confirmed in the code and OpenAPI.
 
-**影響**
-状態を変える endpoint を追加した時点で、loopback 以外で待ち受けた daemon は誰からでも操作できる。
+**Impact**
+When a state-changing endpoint is added, a daemon listening on a non-loopback address can be operated by anyone.
 
-**扱い**
-daemon-api.md の保留「REST API の到達範囲と認証」へ転記した。
+**Handling**
+Transcribed to daemon-api.md's pending "REST API reach and authentication".
 
 <a id="r-10"></a>
-### R-10. rocketpack.md が core-rs の古い compiler の仕様を複写している
+### R-10. rocketpack.md copies the old core-rs compiler specification
 
-**種別: 設計論点** / **確度: 高**
+**Type: design point** / **Confidence: high**
 
-**該当箇所**
-rocketpack.md の §3 の `rocketpack.yaml` の説明と、保留「rpf から参照する core-rs 型の扱い」。
+**Location**
+The `rocketpack.yaml` explanation in rocketpack.md §3 and the pending "handling of core-rs types referenced from the rpf".
 
-**何が問題か**
-`targets` の `pattern` で生成対象を選び rpf 1 本から Rust file 1 本を作るという記述は、core-rs の rocketpack-compiler.md の §7 と食い違う。
-保留の選択肢も、`RocketPackStruct` を実装した Rust 型を外部型として参照する古い前提に立っていた。
+**What is wrong**
+The statement that `targets`' `pattern` selects the generation targets and creates one Rust file from one rpf diverges from core-rs's rocketpack-compiler.md §7.
+The pending's options also stood on the old premise of referencing Rust types that implement `RocketPackStruct` as external types.
 
-**根拠**
-core-rs `5a92929` の rocketpack-compiler.md の §7 と §9、omnikit の `rocketpack.yaml` と `omni_hash.rpf` で確かめた。
+**Evidence**
+Confirmed with core-rs `5a92929`'s rocketpack-compiler.md §7 and §9, and omnikit's `rocketpack.yaml` and `omni_hash.rpf`.
 
-**影響**
-保留を決めるときに、存在しない選択肢から選ぶことになる。
+**Impact**
+When deciding the pending, the options chosen from are ones that do not exist.
 
-**扱い**
-rocketpack.md の保留「rpf から参照する core-rs 型の扱い」へ転記した。
+**Handling**
+Transcribed to rocketpack.md's pending "handling of core-rs types referenced from the rpf".
 
 <a id="r-11"></a>
-### R-11. 用語集の使わない別称に別の用語が入り、主要な語が欠けている
+### R-11. The deprecated aliases of the terminology contain other terms, and key terms are missing
 
-**種別: 用語** / **確度: 高**
+**Type: terminology** / **Confidence: high**
 
-**該当箇所**
-terms.md の用語一覧。
-rank の別称に root hash、root hash の別称に FileRef、Profile の別称に memo が入っており、いずれも同じ表の用語である。
+**Location**
+The term list of terms.md.
+The aliases contain: root hash as rank's alias, FileRef as root hash's alias, and memo as Profile's alias, all of which are terms in the same table.
 
-**何が問題か**
-使わない別称に隣接語を入れると、その語自体を使うなと読める。
-設計文書で使う NodeFinder、FileExchanger、FilePublisher、FileSubscriber、MerkleLayer、既知 node、bootstrap node、所在情報、到達先が表にない。
+**What is wrong**
+Putting an adjacent term in the deprecated aliases reads as "do not use this term".
+NodeFinder, FileExchanger, FilePublisher, FileSubscriber, MerkleLayer, known node, bootstrap node, location info, and reachable address, which the design documents use, are not in the table.
 
-**根拠**
-terms.md と設計文書を照合して確かめた。
+**Evidence**
+Confirmed by reconciling terms.md against the design documents.
 
-**影響**
-語を引いても定義が見つからない。
+**Impact**
+Looking a term up finds no definition.
 
-**扱い**
-terms.md の用語一覧へ転記した（本レビューと同じ変更で修正）。
+**Handling**
+Transcribed to terms.md's term list (fixed in the same change as this review).
 
 <a id="r-12"></a>
-### R-12. FileExchanger の起動失敗が握り潰される
+### R-12. FileExchanger's startup failure is swallowed
 
-**種別: 改善提案** / **確度: 高**
+**Type: improvement proposal** / **Confidence: high**
 
-**該当箇所**
-[file_exchanger.rs:93](../../daemon/modules/engine/src/core/negotiator/file/file_exchanger.rs#L93) が `start` の `Result` を捨て、[file_exchanger.rs:57](../../daemon/modules/engine/src/core/negotiator/file/file_exchanger.rs#L57) の `#[allow(unused)]` がその警告を抑える。
+**Location**
+[file_exchanger.rs:93](../../daemon/modules/engine/src/core/negotiator/file/file_exchanger.rs#L93) discards the `Result` of `start`, and the `#[allow(unused)]` at [file_exchanger.rs:57](../../daemon/modules/engine/src/core/negotiator/file/file_exchanger.rs#L57) suppresses the warning.
 
-**何が問題か**
-storage を開けなくても FileExchanger が生成される。
+**What is wrong**
+FileExchanger is created even when its storage cannot be opened.
 
-**根拠**
-コードで確かめた。
+**Evidence**
+Confirmed in the code.
 
-**影響**
-FileExchanger が未結線のため顕在化していない。
+**Impact**
+Not visible because FileExchanger is not wired yet.
 
-**扱い**
-issues.md の file-exchanger-drops-start-error として起票した。
+**Handling**
+Filed in issues.md as file-exchanger-drops-start-error.
 
 <a id="r-13"></a>
-### R-13. 多重起動の lock が state directory ではなく設定 directory にある
+### R-13. The multiple-startup lock is in the configuration directory, not the state directory
 
-**種別: 改善提案** / **確度: 高**
+**Type: improvement proposal** / **Confidence: high**
 
-**該当箇所**
-[executor.rs:85](../../daemon/entrypoints/daemon/src/executor.rs#L85) は設定 directory の `axus.lock` を lock する。
+**Location**
+[executor.rs:85](../../daemon/entrypoints/daemon/src/executor.rs#L85) locks the `axus.lock` in the configuration directory.
 
-**何が問題か**
-同じ `state_dir` を指す別の設定 directory から、2 つ目の daemon を起動できる。
+**What is wrong**
+A second daemon can be started from another configuration directory pointing to the same `state_dir`.
 
-**根拠**
-コードで確かめた。
-2 つの daemon を実際に起動してはいない。
+**Evidence**
+Confirmed in the code.
+Two daemons were not actually started.
 
-**影響**
-同じ署名鍵を持つ 2 つの node が動き、既知 node の書き込みが混ざる。
+**Impact**
+Two nodes with the same signing key run, and the known-node writes mix.
 
-**扱い**
-issues.md の daemon-lock-not-on-state-dir として起票した。
+**Handling**
+Filed in issues.md as daemon-lock-not-on-state-dir.
 
-## 5. 確かめて問題がなかったこと
+## 5. Verified and found sound
 
-- 互いに接続し合った 2 node が別の Session を残す疑いは、[task_communicator.rs:159](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L159) の規則が両側で同じ Session を選ぶことと、結合試験が通ることで否定した。
-- 既知 node の NodeProfile が Session の相手と別人である疑いは、NodeFinder の handshake が cert の公開鍵と照合することで否定した。ただし R-2 の中継は別に残る。
-- decode 時の `Vec::with_capacity` が要素数だけで巨大な確保をする疑いは、core-rs の decoder が残りの byte 数を超える要素数を拒否することで frame の大きさまでに留まると確かめた。
-- RocksDB の rename が途中で壊れる疑いは、`rename_key` が 1 つの transaction で names を付け替えることで否定した。
-- MerkleLayer の rank の意味が符号化側と復号側で食い違う疑いは、多段の round-trip test が通ることで否定した。
-- 署名鍵の file が書き込み途中で読まれる疑いは、一時 file に書いてから rename していることで否定した。
+- The suspicion that two mutually connecting nodes keep different Sessions was dismissed because the rule at [task_communicator.rs:159](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L159) makes both sides choose the same Session and the integration test passes.
+- The suspicion that a known node's NodeProfile is a different person from the Session peer was dismissed because the NodeFinder handshake reconciles the cert's public key. The R-2 relay, however, remains separately.
+- The suspicion that `Vec::with_capacity` at decode allocates huge memory from the element count alone was confirmed to stay within the frame size because core-rs's decoder rejects an element count exceeding the remaining byte count.
+- The suspicion that a RocksDB rename breaks midway was dismissed because `rename_key` swaps a `names` entry in one transaction.
+- The suspicion that the rank meaning of MerkleLayer diverges between the encoding and decoding sides was dismissed because the multi-stage round-trip test passes.
+- The suspicion that the signing key file is read mid-write was dismissed because the key is written to a temporary file and then renamed.
 
-## 6. その後
+## 6. Follow-up
 
-- 2026-10-06: R-8 を修正し、`Kadex::find` の繰り下げを末尾まで広げた。
-- 2026-10-06: R-12 を修正し、`FileExchanger::new` が `start` の失敗を返し、そのとき起動済みの構成要素を停止するようにした。
-- 2026-10-06: R-13 を修正し、daemon の lock を設定 directory から `core.state_dir` 内の `axus.lock` へ移した。
+- 2026-10-06: Fixed R-8, extending `Kadex::find`'s carry-down to the end.
+- 2026-10-06: Fixed R-12 so `FileExchanger::new` returns the `start` failure and stops the started components then.
+- 2026-10-06: Fixed R-13 so the daemon's lock is moved from the configuration directory to `axus.lock` in `core.state_dir`.

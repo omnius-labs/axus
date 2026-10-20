@@ -1,19 +1,19 @@
-# TaskCommunicator::start が受理 channel が閉じても loop を抜けない
+# TaskCommunicator::start does not exit its loop even when the accept channel is closed
 
-**深刻度: 低**（受理 channel の sender が drop されたときに限る）
+**Severity: Low** (only when the accept channel's sender is dropped)
 
-調査日 2026-10-07 / 対象コミット `9bbbcbd`
+Investigated on 2026-10-07 / Target commit `9bbbcbd`
 
-[issues.md](../issues.md) の 1 項目。
+One item of [issues.md](../issues.md).
 
-## 症状
+## Symptoms
 
-NodeFinder の Session 受理 channel が閉じると、`recv` は即座に `None` を返し続ける。
-`TaskCommunicator::start` の loop は完了済み task の整理と受信を繰り返す busy loop になり、cancellation で止めない限り CPU を使い続ける。
+When the NodeFinder Session accept channel closes, `recv` immediately returns `None`, which repeats continuously.
+The `TaskCommunicator::start` loop becomes a busy loop alternating cleanup of finished tasks and reception, and keeps using CPU unless stopped by cancellation.
 
-## 該当箇所
+## Location
 
-[task_communicator.rs:87](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L87) の loop の中で、[同ファイル:91](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L91) の `select!` は `recv()` が `None` を返しても break せず、[同ファイル:95](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L95) の `if let Some(status)` を読み飛ばして loop の先頭に戻る。
+[task_communicator.rs:87](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L87) Inside the loop, the `select!` at [the same file:91](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L91) does not break when `recv()` returns `None`, skips the `if let Some(status)` at [the same file:95](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs#L95), and returns to the top of the loop.
 
 ```rust
 let status = select! {
@@ -23,18 +23,18 @@ let status = select! {
 if let Some(status) = status {
 ```
 
-## 原因
+## Cause
 
-`recv()` の `None`（channel 閉鎖）を「受信がなかった」と同じ扱いにしている。
-channel 閉鎖は恒久的な状態であり、受信の不在とは違って break する必要がある。
+A `recv()` `None` (channel closure) is treated the same as "nothing was received".
+Channel closure is a permanent condition and, unlike a missing reception, must break.
 
-## 影響
+## Impact
 
-現状の構成では、NodeFinder が生きている間は sender も生き続けるため顕在化しない。
-シャットダウン順序の変更や sender の drop が起きると、終了まで busy loop が続く。
-コードを読んで確認した。実行による再現は行っていない。
+In the current composition, the sender stays alive while NodeFinder is alive, so it is not visible.
+A change in shutdown order or a dropped sender starts a busy loop until exit.
+Confirmed by reading the code. Not reproduced by execution.
 
-## 対応方針
+## Proposed fix
 
-`recv()` が `None` を返したら loop を break する（channel 閉鎖は回復しない）。
-受理 channel が閉じた状態で start の task が終了することを test する。
+Break the loop when `recv()` returns `None` (a channel closure does not recover).
+Test that the start task exits with the accept channel closed.

@@ -1,40 +1,40 @@
-# NodeFinder の設計
+# NodeFinder design
 
-## 1. このドキュメントについて
+## 1. About this document
 
-本書は node の所在情報を交換し、AssetKey を広告した node を探す NodeFinder の設計を扱う。
-語の定義は [terms.md](../terms.md) が正とする。
+This document covers the design of NodeFinder, which exchanges the location information of nodes and finds the nodes that advertise an AssetKey.
+Term definitions are the source of [terms.md](../terms.md).
 
-### 1.1 文書間の責務分担
+### 1.1 Division of responsibilities among documents
 
-| 文書または正本 | 受け持つもの |
+| Document or source of truth | Owns |
 | --- | --- |
-| [design.md](../design.md#11-文書間の責務分担) | 全体構成、他の関心事との境界、横断的な依存関係 |
-| 本書 | NodeFinder の探索、情報伝播、距離計算、保存 |
-| [file-transfer.md](./file-transfer.md#2-責務と境界) | 探索結果を使う file の公開と購読 |
-| [node_finder.rs](../../daemon/modules/engine/src/core/negotiator/node/node_finder.rs) | NodeFinder の実装 |
-| [node_finder_repo.rs](../../daemon/modules/engine/src/core/negotiator/node/node_finder_repo.rs) | 既知 node の保存 |
+| [design.md](../design.md#11-division-of-responsibilities-among-documents) | Overall structure, boundaries with other concerns, cross-cutting dependencies |
+| This document | NodeFinder lookup, information propagation, distance calculation, persistence |
+| [file-transfer.md](./file-transfer.md#2-responsibilities-and-boundaries) | Publishing and subscribing to files using lookup results |
+| [node_finder.rs](../../daemon/modules/engine/src/core/negotiator/node/node_finder.rs) | NodeFinder implementation |
+| [node_finder_repo.rs](../../daemon/modules/engine/src/core/negotiator/node/node_finder_repo.rs) | Persistence of known nodes |
 
-### 1.2 本書の時制について
+### 1.2 Tenses used in this document
 
-本文は完成形の設計を記述する。
-実装状況と残作業は §7 に集約する。
+The body describes the completed design.
+The implementation status and remaining work are consolidated in §7.
 
-## 2. 責務と境界
+## 2. Responsibilities and boundaries
 
-NodeFinder は既知 node の交換と、AssetKey を広告した node の所在情報を扱う。
-要求は AssetKey だけで伝え、要求元の NodeProfile を載せないため、NodeFinder が返すのは、その AssetKey を広告した node だけである。
-何を広告するかは上位 component が決める。
-FileExchanger は取得途中の file も広告するため、file の所在情報には block を一部しか持たない node が含まれる（[file-transfer.md](./file-transfer.md#購読は開始時から所在として広告する)）。
-NodeFinder は asset の内容を解釈せず、AssetKey と NodeProfile の対応だけを返す。
-FileExchanger はこの境界を使うため、探索の message と file 転送の message を混在させない。
+NodeFinder handles the exchange of known nodes and the location information of nodes that advertise an AssetKey.
+A request is conveyed with only the AssetKey and does not carry the requester's NodeProfile, so NodeFinder returns only the nodes that advertise that AssetKey.
+Which assets to advertise is decided by the higher-level component.
+Because FileExchanger also advertises files being fetched, the location info of a file can include nodes that hold only some of the blocks (see [file-transfer.md](./file-transfer.md#subscriptions-are-advertised-as-locations-from-the-start)).
+NodeFinder does not interpret the content of an asset and returns only the AssetKey-to-NodeProfile mapping.
+FileExchanger uses this boundary, so lookup messages and file transfer messages are not mixed.
 
-[NodeProfileFetcher](../../daemon/modules/engine/src/core/negotiator/node/node_profile_fetcher.rs) は bootstrap 用の NodeProfile 群を外部から取得する。
-URI 変換の詳細と checksum は [protocol/uri.rs](../../daemon/modules/engine/src/protocol/uri.rs) が正である。
+[NodeProfileFetcher](../../daemon/modules/engine/src/core/negotiator/node/node_profile_fetcher.rs) fetches a set of NodeProfiles for bootstrap from outside.
+The URI conversion details and checksum are the source of [protocol/uri.rs](../../daemon/modules/engine/src/protocol/uri.rs).
 
-## 3. 情報の配布
+## 3. Information distribution
 
-NodeFinder は要求、回答、自発的な広告を分けて伝播させる。
+NodeFinder propagates requests, answers, and spontaneous advertisements separately.
 
 ```mermaid
 flowchart LR
@@ -42,9 +42,9 @@ flowchart LR
     Give[give_asset_key_locations]
     Push[push_asset_key_locations]
     Nodes[push_node_profiles]
-    Near[AssetKey に近い node]
-    Asker[要求元 node]
-    All[接続先]
+    Near[Nodes near the AssetKey]
+    Asker[Requester node]
+    All[Connected peers]
     Repo[(NodeFinderRepo)]
 
     Want --> Near
@@ -55,163 +55,163 @@ flowchart LR
     All --> Repo
 ```
 
-要求と広告を XOR 距離の近い node へ寄せる一方、回答は要求元へ戻す。
-受信情報には寿命と件数上限を設け、古い所在情報と無制限な中継を残さない。
+Requests and advertisements are edged toward nodes close in XOR distance, while answers return to the requester.
+Received information is given a lifetime and count limit so old location info and unbounded relay are not retained.
 
-## 4. 判断と通信の分離
+## 4. Separation of decision and communication
 
-[TaskComputer](../../daemon/modules/engine/src/core/negotiator/node/task_computer.rs) は、全 Session の受信状態と上位 component の要求を見て、次に送る DataMessage を計算する。
-[TaskCommunicator](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs) は、Session ごとの handshake と送受信だけを担当する。
-判断を 1 箇所へ集約することで、接続ごとの worker に routing policy が分散しない。
-送信は通信周期ごとに行い、受信も 1 件の処理ごとに通信周期の残りを待つ。
-待つのは処理の後であり、§6.1 の受信期限は message を受信した時点で更新するため、待ち時間が期限を延ばすことはない。
-周期より速く送る相手の message で、受信側が保存処理を繰り返さないようにする。
+[TaskComputer](../../daemon/modules/engine/src/core/negotiator/node/task_computer.rs) looks at the receive state of all Sessions and the requests of higher-level components and computes the next DataMessage to send.
+[TaskCommunicator](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs) handles only the per-Session handshake and send/receive.
+Consolidating the decision into one place keeps routing policy from scattering across per-connection workers.
+Sending happens every communication cycle, and reception also waits out the rest of the communication cycle after processing each item.
+The wait comes after processing, and since the §6.1 receive deadline is updated at message reception, the wait does not extend the deadline.
+A peer that sends faster than the cycle is prevented from making the receiving side repeat persistence work.
 
-FileExchanger から必要な AssetKey を受け取る境界には [FnHub](../../daemon/modules/engine/src/base/sync/fn_hub.rs) を使う。
-発火側と登録側を分けることで、NodeFinder は FileExchanger の具象型を参照しない。
+The boundary that receives the needed AssetKeys from FileExchanger uses [FnHub](../../daemon/modules/engine/src/base/sync/fn_hub.rs).
+Separating the firing side from the registration side lets NodeFinder avoid referencing FileExchanger's concrete type.
 
-## 5. 距離と永続化
+## 5. Distance and persistence
 
-[Kadex](../../daemon/modules/engine/src/core/negotiator/node/kadx.rs) は AssetKey の hash と NodeProfile の ID の XOR 距離を比較し、近い node を選ぶ。
-距離計算の byte order は protocol の相互運用性に関わるため、別実装を追加する場合は code 上の規則を外部仕様へ昇格させる。
+[Kadex](../../daemon/modules/engine/src/core/negotiator/node/kadx.rs) compares the XOR distance between an AssetKey's hash and a NodeProfile's ID and chooses the closer nodes.
+Because the byte order of the distance calculation affects protocol interoperability, a separate implementation must promote the rule in the code to an external specification.
 
-[NodeFinderRepo](../../daemon/modules/engine/src/core/negotiator/node/node_finder_repo.rs) は既知 node を URI 表現のまま SQLite に保存する。
-URI を opaque な値として保存することで形式追加のたびに table schema を変えずに済むが、address 単位の SQL 検索は行えない。
+[NodeFinderRepo](../../daemon/modules/engine/src/core/negotiator/node/node_finder_repo.rs) persists known nodes in SQLite as URI strings.
+Storing a URI as an opaque value avoids changing the table schema on every format addition, but address-level SQL search is not possible.
 
-## 6. 設計判断
+## 6. Design decisions
 
-### 6.1 決定済み
+### 6.1 Decided
 
-NodeFinder と FileExchanger の分離は [design.md](../design.md#51-決定済み) が正とする。
+The separation of NodeFinder and FileExchanger is the source of [design.md](../design.md#51-decided).
 
-#### 重複した Session は node ID が小さい側から張ったものを残す
+#### Keep the Session established by the smaller node ID when duplicates occur
 
-**決定**
-同じ相手との Session が重複したら、node ID が小さい側から張った Session を残す。
-残すべき Session が後から handshake を終えた場合は、先に登録した Session を閉じて入れ替える。
+**Decision**
+When a Session with the same peer is duplicated, the Session established by the side with the smaller node ID is kept.
+If the Session to keep finishes its handshake later, the earlier-registered Session is closed and swapped out.
 
-**理由**
-同じ node の TaskConnector どうしは接続中の相手を予約するため、重複は 2 つの node が互いへ同時に接続したときに起きる。
-handshake を終えた順に Session を残す規則では、両側が異なる Session を残し得る。
-一方が閉じた接続は他方が残した Session でもあるため、両方の Session が閉じ、接続元は相手を接続済みとして記録したまま再接続しない。
-node ID は Session の署名で確かめた公開鍵から導出するため、両側は追加の message なしに同じ規則で同じ Session を選べる。
+**Rationale**
+TaskConnectors of the same node reserve their connecting peer, so a duplicate happens when two nodes connect to each other simultaneously.
+A rule that keeps the Session that finished the handshake first can make both sides keep different Sessions.
+Because one side closing the connection is also the Session kept by the other, both Sessions close, and the dialer stays with the peer recorded as connected and does not reconnect.
+Since the node ID is derived from the public key verified in the Session's signature, both sides choose the same Session with the same rule without an extra message.
 
-**却下案**
-重複を検出した側が相手へ通知して残す Session を合意する案は、Session の上に新しい message と状態遷移が必要になるため採らない。
+**Rejected**
+A design where the side that detects the duplicate notifies the peer and agrees on which Session to keep needs new messages and state transitions on top of the Session, so it is not taken.
 
-#### 自 node の NodeProfile には起動時に決めたアドレスを載せる
+#### The local NodeProfile carries the addresses decided at startup
 
-**決定**
-自 node の NodeProfile には、設定 `p2p.advertise_addrs` があればそのアドレスを載せる。
-設定がなければ、特定のアドレスで待ち受けるときはそのアドレスを、不特定のアドレスで待ち受けるときは到達できる local IP と UPnP の外部 IP に待ち受けポートを付けて載せる。
-UPnP は設定 `p2p.use_upnp` で有効にしたときだけ使う。
-アドレスは起動時に 1 回だけ決め、IP が変わったときは再起動で反映する。
-8 件を超える場合は先頭の 8 件へ切り詰め、警告を記録して起動を続ける。
-NodeProfile への署名は、アドレスを決めて切り詰めた後に 1 回だけ作る。
+**Decision**
+The local NodeProfile carries the addresses of the setting `p2p.advertise_addrs` when present.
+Without the setting, it carries the listen address when listening on a specific address, and when listening on an unspecified address, the reachable local IPs and UPnP external IPs with the listen port appended.
+UPnP is used only when enabled by the setting `p2p.use_upnp`.
+The addresses are decided once at startup, and an IP change is reflected by restarting.
+If more than 8, they are truncated to the first 8 with a warning logged, and startup continues.
+The NodeProfile signature is made once, after the addresses are decided and truncated.
 
-**理由**
-node 自身が知っている情報だけで決まるため、handshake に message を足す必要がない。
-`0.0.0.0` で待ち受ける場合や UPnP のない NAT の内側では到達できるアドレスを自動では決められないため、利用者が明示できる設定を優先する。
-UPnP はルーターのポート開放の設定を変えるため、利用者が選んだときだけ行う。
+**Rationale**
+Because the decision uses only what the node knows itself, no message needs to be added to the handshake.
+When listening on `0.0.0.0` or behind a NAT without UPnP, a reachable address cannot be decided automatically, so the explicit setting is preferred.
+Because UPnP changes the router's port-forwarding configuration, it runs only when chosen by the user.
 
-**却下案**
-接続先から見えた接続元アドレスを handshake で返してもらう案は、NAT の外側のアドレスを知れるが、handshake の message が増え、相手の申告を検証する手段も必要になるため採らない。
+**Rejected**
+A design that has the connection target return the source address it saw through the handshake can learn the address outside the NAT, but it adds a handshake message and needs a way to verify the peer's report, so it is not taken.
 
-#### NodeFinder の受信期限
+#### NodeFinder receive deadline
 
-**決定**
-NodeFinder の Session は、Hello/Profile 交換を含め、相手の message を通信周期の 3 倍の間受信しなければ閉じる。
-通信周期は NodeFinderIntervals::communicate から取り、既定の 20 秒では受信期限は 60 秒となる。
-期限は Hello、Profile、DataMessage の各受信時に更新し、自 node の送信では延長しない。
-確立後は、内容が空でも通信周期ごとに必ず DataMessage を送る。
-shutdown は受信期限を待たずに cancellation token で送受信 task を終了させ、その終了を待つ。
+**Decision**
+NodeFinder closes a Session when it receives no message from the peer, including the Hello/Profile exchange, for 3 times the communication cycle.
+The communication cycle is taken from `NodeFinderIntervals::communicate`; with the default of 20 seconds the receive deadline is 60 seconds.
+The deadline is updated on each Hello, Profile, and DataMessage reception and is not extended by the local node's sends.
+After establishment, a DataMessage is always sent every communication cycle, even when empty.
+Shutdown ends the send/receive task with the cancellation token without waiting for the receive deadline, and waits for its termination.
 
-**理由**
-相手は毎周期 DataMessage を送るため、3 周期分の猶予を取ったうえで、無応答の Session が接続資源を占有し続けることを防げる。
-期限を通信周期から導くことで、周期の設定を変えても、送信頻度に対する猶予の比率を保てる。
-Hello/Profile 交換にも適用し、Session の認証と用途選択を終えたまま応答しない接続も閉じる。
+**Rationale**
+Since the peer sends a DataMessage every cycle, a 3-cycle grace period still prevents an unresponsive Session from permanently occupying connection resources.
+Deriving the deadline from the communication cycle keeps the ratio of grace to send frequency even when the cycle setting changes.
+Applying it to the Hello/Profile exchange also closes connections that finish Session authentication and use selection but then do not respond.
 
-#### DataMessage と NodeProfile の要素数
+#### Element counts of DataMessage and NodeProfile
 
-**決定**
-送受信する DataMessage の要素数を次の範囲に収める。
+**Decision**
+The element counts of DataMessages sent and received are kept within the following ranges.
 
-| 対象 | 1 message の上限 |
+| Target | Limit per message |
 | --- | --- |
-| `push_node_profiles` | 32 件 |
-| `want_asset_keys` | 1024 件 |
-| `give_asset_key_locations` | 1024 件 |
-| `push_asset_key_locations` | 1024 件 |
-| 各 AssetKey に付ける NodeProfile | 8 件 |
-| NodeProfile の `addrs` | 8 件 |
+| `push_node_profiles` | 32 |
+| `want_asset_keys` | 1024 |
+| `give_asset_key_locations` | 1024 |
+| `push_asset_key_locations` | 1024 |
+| NodeProfiles per AssetKey | 8 |
+| NodeProfile `addrs` | 8 |
 
-受信側は要素数を読んだ直後、Vec や HashMap を確保する前に上限を検査し、超過した message の Session を閉じる。
-NodeProfile のアドレス数は wire の decode で検査するため、Hello の後の ProfileMessage にも適用する。
-設定と保存に使う `axus:node/...` の URI も、同じ生成 NodeProfile の制約と署名の検証に従う。
-送信側は既存の rng で候補を無作為に選び、各件数を上限以下にする。
-件数で絞った後は、[rocketpack.md](./rocketpack.md#サイズ予算内で各種類の送信候補を交互に選ぶ) の byte 予算に収まる候補を選ぶ。
-複数 message 分を保持する受信状態は、TTL と集積件数の上限を別に持つ。
+The receiving side checks the limits right after reading the element count, before allocating a Vec or HashMap, and closes the Session of an over-limit message.
+The NodeProfile address count is checked at wire decode, so it also applies to the ProfileMessage after Hello.
+The `axus:node/...` URIs used for configuration and persistence also follow the same generated NodeProfile constraints and signature verification.
+The sending side randomly narrows candidates with the existing rng and stays within each limit.
+After the count narrowing, candidates that fit the byte budget of [rocketpack.md](./rocketpack.md#alternating-candidate-types-within-the-size-budget) are chosen.
+The receive state holding multiple messages' worth has its own TTL and aggregation count limits.
 
-**理由**
-frame の byte 数だけでなく、要素数と所在情報の広がりも制限し、受信側の確保量と処理量、中継で消費する資源を抑えるためである。
-既知 node の 32 件は従来の受信後の切り詰めと同じ値であり、ほかの上限とともに decode の入力境界へ移す。
-送信側も同じ上限を守ることで、相手に拒否される message を組み立てずに済む。
-件数を絞るときに無作為に選ぶと、毎回同じ候補だけが伝播する偏りを抑えられる。
+**Rationale**
+Not only the byte count of a frame but also the element counts and the spread of location info are limited, curbing the receiving side's allocations, processing, and the resources consumed by relay.
+The 32 known nodes are the same value as the old post-reception truncation, and along with the other limits they are moved to the decode input boundary.
+Keeping the sending side within the same limits avoids assembling messages the peer would reject.
+Random selection when narrowing the count reduces the bias of always propagating the same candidates.
 
-#### 既知 node は node ID ごとに更新時刻の新しい NodeProfile を保持する
+#### Known nodes keep the newest NodeProfile per node ID
 
-**決定**
-NodeFinderRepo は node ID ごとに 1 件の NodeProfile を保持する。
-同じ node ID の NodeProfile を受け取ったときは、更新時刻が保持している値より大きい場合だけ置き換え、等しいか小さい場合は無視する。
-置き換えても、行の weight は変えない。
-署名の仕組みは [trust-security.md](./trust-security.md#nodeprofile-は-node-本人の署名で到達先を結ぶ) が正とする。
+**Decision**
+NodeFinderRepo keeps one NodeProfile per node ID.
+When a NodeProfile of the same node ID is received, it replaces the held value only when its update time is greater; an equal or smaller value is ignored.
+Replacement does not change the row's weight.
+The signature mechanism is the source of [trust-security.md](./trust-security.md#nodeprofile-binds-reachable-addresses-with-the-nodes-own-signature).
 
-**理由**
-URI 全体を key にすると、同じ node のアドレスが変わるたびに別の行が残り、到達できないアドレスへの接続の試行が増える。
-署名付きの NodeProfile では、更新時刻の大きいものが本人の新しい到達先であると検証できるため、node ID を key にして新しいほうだけを残せる。
-weight は NodeProfile の出所に付ける優先度であり、到達先の更新によって変えない。
+**Rationale**
+Using the whole URI as a key leaves a separate row every time the same node's addresses change, increasing connection attempts to unreachable addresses.
+With a signed NodeProfile, a larger update time can be verified as the owner's newer reachable addresses, so the node ID can be the key and only the newer value kept.
+The weight is the priority attached to a NodeProfile's origin and does not change as reachable addresses update.
 
-**却下案**
-URI を key のままにして、読み出し時に node ID ごとの新しい値だけを返す案は、保存形式を変えずに済むが、古い行が件数上限を消費し続ける。
+**Rejected**
+Keeping the URI as the key and returning only the newest value per node ID at read time avoids changing the storage format, but the old rows keep consuming the count limit.
 
-### 6.2 保留
+### 6.2 Deferred
 
-#### NodeFinder の能動探索と冗長度
+#### NodeFinder active lookup and redundancy
 
-**現状**
-所在情報は定期的な伝播で集め、lookup は接続中 Session の受信状態を走査する形である。
+**Current state**
+Location info is gathered by periodic propagation, and lookup scans the receive state of connected Sessions.
 
-候補は次の 2 つである。
+The candidates are the following two.
 
-1. Kademlia 型の反復 query を加えると到達率と遅延を制御できるが、query state、timeout、並列度が増える。
-2. 伝播だけを維持すると protocol は単純だが、情報が届くまでの時間と未到達を制御しにくい。
+1. Adding Kademlia-style iterative queries controls reachability and latency, but adds query state, timeouts, and concurrency.
+2. Keeping only propagation keeps the protocol simple, but the time until information arrives and non-delivery are harder to control.
 
-**なぜ今決めないか**
-実運用規模における lookup の到達率と遅延を測定していないためである。
+**Why not decided yet**
+Because lookup reachability and latency at real operating scale have not been measured.
 
-**決める条件**
-複数 hop の結合試験で、購読開始に必要な所在情報の到達率と遅延を測定した時点で決める。
+**Decision condition**
+Decide once the reachability and latency needed to start a subscription are measured in a multi-hop integration test.
 
-## 7. 現状と残作業
+## 7. Current status and remaining work
 
-接続、受理、計算、通信の task と SQLite repo があり、lookup は接続中 Session の受信状態だけを走査する。
-AxusService の起動経路から 2 node を起動し、Session の確立と AssetKey の lookup を結合試験で確認している。
-各 task の周期は NodeFinderOption で指定し、結合試験では短い周期を使う。
-Hello/Profile 交換と確立後の受信期限を通信周期から導き、無応答の Session を閉じる。
-空の DataMessage の定期送信、受信による期限の更新、受信待機中の shutdown を test で確認している。
-DataMessage と NodeProfile の要素数を確保前の decode で検査し、超過した Session を閉じる。
-TaskComputer は同じ上限で無作為に候補を絞り、自 node のアドレスは起動時に 8 件以下にする。
-上限ちょうどの受理、各上限の超過による切断、大量情報を持つ node 間の往復、上限以内の URI の互換性を test で確認している。
-DataMessage の符号化結果を 256 KiB 以下に制限し、各種類の候補を交互に選別する。
-明示設定の byte 長違反を worker 開始前に拒否し、保存済みの不適合 URI は警告して読み飛ばす。DB の行を残すことも test で確認している。
-NodeProfile は署名付きで、DataMessage で受信した NodeProfile の更新時刻が許容を超えて進んでいるものは捨てる。
-既知 node は node ID ごとに 1 件を保持し、新しい NodeProfile だけで置き換える。署名が不正な URI も、不適合な URI として読み飛ばす。
+The connection, accept, computation, and communication tasks and the SQLite repo exist, and lookup scans only the receive state of connected Sessions.
+A two-node integration test starting from AxusService's startup path confirms Session establishment and AssetKey lookup.
+Each task's cycle is specified by NodeFinderOption, and the integration test uses short cycles.
+The Hello/Profile exchange and post-establishment receive deadlines are derived from the communication cycle and close unresponsive Sessions.
+Tests confirm the periodic send of empty DataMessages, deadline updates on reception, and shutdown during a receive wait.
+DataMessage and NodeProfile element counts are checked at decode before allocation, and over-limit Sessions are closed.
+TaskComputer narrows candidates randomly within the same limits, and the local node's addresses are kept at 8 or fewer at startup.
+Tests confirm accepting exactly at limits, disconnecting on each over-limit, round trips between nodes with large information, and URI compatibility within limits.
+DataMessage encoded results are limited to 256 KiB or less, and candidates of each kind are selected alternately.
+A byte-length violation of an explicit setting is rejected before the worker starts, and a stored non-conforming URI is skipped with a warning. Tests also confirm the DB rows are kept.
+NodeProfile is signed, and a NodeProfile received in a DataMessage whose update time is ahead by more than the tolerance is discarded.
+Known nodes keep one entry per node ID and replace it only with newer NodeProfiles. A URI with an invalid signature is also skipped as a non-conforming URI.
 
-重複した Session の解消は、互いを bootstrap に指定した 2 node の結合試験で確認している。
-lookup で得た NodeProfile には、相手が広告したアドレスが含まれることを結合試験で確認している。
-daemon は設定 `p2p.bootstrap_nodes` の NodeProfile を既知 node に加えて起動する。
-3 node の結合試験で、bootstrap に指定していない node を中継の node 経由で見つけ、広告されたアドレスで直接つながることを確認している。
+Duplicate Session resolution is confirmed by a two-node integration test that names each other as bootstrap.
+An integration test confirms that a NodeProfile obtained by lookup contains the addresses the peer advertised.
+The daemon starts with the NodeProfiles of the setting `p2p.bootstrap_nodes` added to the known nodes.
+A three-node integration test confirms finding a node that was not named as a bootstrap through a relay node and connecting to it directly at the advertised address.
 
-実運用規模での複数 hop の到達率と遅延を測定し、能動探索と冗長度を決める。
+The reachability and latency of multi-hop lookup at real operating scale are to be measured, and the active lookup and redundancy are to be decided.
 
-確認済みの不具合は [issues.md](../issues.md) を参照する。
+For confirmed bugs, see [issues.md](../issues.md).

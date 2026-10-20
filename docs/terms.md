@@ -1,118 +1,118 @@
-# Axus 用語集
+# Axus Terminology
 
-## 1. このドキュメントについて
+## 1. About this document
 
-本書は Axus 固有の語彙の唯一の正本である。
-語の定義、表記、別称、隣接語との境界を扱う。
+This document is the sole source of truth for the Axus-specific vocabulary.
+It covers definitions, notation, aliases, and the boundaries between adjacent terms.
 
-### 1.1 文書間の責務分担
+### 1.1 Division of responsibilities among documents
 
-| 文書 | 受け持つもの |
+| Document | Owns |
 | --- | --- |
-| 本書 | 語の定義、表記、別称、隣接語との境界、命名の理由 |
-| [design.md](./design.md#11-文書間の責務分担) | 設計の理由、不変条件、実装状況、保留 |
-| [issues.md](./issues.md) | コードで確認した不具合と対応方針 |
+| This document | Definitions of terms, notation, aliases, boundaries between adjacent terms, and the reasons for naming |
+| [design.md](./design.md#11-division-of-responsibilities-among-documents) | Design rationale, invariants, implementation status, and deferred decisions |
+| [issues.md](./issues.md) | Confirmed bugs in the code and their handling |
 
-文書族の地図は [design.md](./design.md#11-文書間の責務分担) が持つ。
+The map of the document family is held by [design.md](./design.md#11-division-of-responsibilities-among-documents).
 
-## 2. 用語一覧
+## 2. Terminology
 
-| 用語 | スコープ | 識別子 | 外部表現 | 指すもの | 使わない別称 |
+| Term | Scope | Identifier | External form | Refers to | Deprecated aliases |
 | --- | --- | --- | --- | --- | --- |
-| FileExchanger | file-transfer | `FileExchanger` | - | NodeFinder の探索結果を使って相手と Session を張り、block を運ぶ component | - |
-| FilePublisher | file-transfer | `FilePublisher` | - | local file を block と MerkleLayer に変換して公開する component | - |
-| 公開 commit | file-transfer | `FilePublisherStore::commit` | - | uncommitted file の root hash と保存済み block を committed file として確定する操作 | - |
-| Store | file-transfer | `FilePublisherStore`、`FileSubscriberStore` | - | metadata と block 実体を変更し、出力 file の作成・確定・削除と永続化の整合性を管理する component | - |
-| FileSubscriber | file-transfer | `FileSubscriber` | - | root hash から block を集めて file を復号する component | - |
-| 出力確定 | file-transfer | `Finalizing` → `Completed` | - | 復号済み一時出力を置換しない rename で利用者の出力先へ配置・永続化し、Completed を記録する操作 | - |
-| MerkleLayer | file-transfer | `MerkleLayer` | - | 下位 block の hash 列と、その block の rank を格納する block の内容 | - |
-| rank | file-transfer | `MerkleLayer.rank` | - | Merkle 構造における block の階層。file 本体の block を 0 とする | - |
-| root hash | file-transfer | `OmniHash` | - | 最上位 block の hash である内容識別子 | - |
-| 出力先予約 | file-transfer | - | - | 進行中の購読の出力先を、ほかの購読が出力先にできないようにする購読の行の一意制約 | - |
-| choke | file-transfer | - | - | 相手 node からの block の要求に応じない状態。node 単位で判定し、解除を unchoke と呼ぶ | - |
-| 状態 message | file-transfer | - | - | 相手の block を欲しいかどうかと、相手を choke しているかどうかを伝える FileExchanger の message | - |
-| 不保持の応答 | file-transfer | - | - | 要求された hash の block を保持していないことを伝える FileExchanger の message | - |
-| committed file | file-transfer | `PublishedCommittedFile` | - | root hash を確定し、network へ広告できる公開側の file。root hash と file 名の組で識別する | - |
-| uncommitted file | file-transfer | `PublishedUncommittedFile` | - | import してから root hash を確定するまでの公開側の file。一時 ID で識別する | - |
-| 一時出力 | file-transfer | - | `.<entry 名>.axus-<購読 ID>.part` | 購読ごとに出力先と同じ directory へ規約の名前で作り、復号結果を書き込む file | - |
-| Finalizing | file-transfer | `SubscribedFileStatus::Finalizing` | - | 一時出力を永続化して確定を開始し、Completed または Failed へ至るまでの購読状態 | - |
-| Task | file-transfer | `TaskDecoder`、`TaskEncoder` | - | 符号化・復号、確定前の取り消し、sweep と出力配置の再試行を制御する component。FileExchanger の接続用 task とは別である | - |
-| AssetKey | node-finder | `AssetKey` | - | NodeFinder が所在を探索する対象の識別子 | ファイル参照 |
-| bootstrap node | node-finder | `bootstrap_node_profiles` | `p2p.bootstrap_nodes` | 起動時に既知 node へ加える、設定で与えた NodeProfile | - |
-| 所在情報 | node-finder | `give_asset_key_locations` | - | AssetKey と、それを広告した node の NodeProfile 群の対応 | - |
-| NodeFinder | node-finder | `NodeFinder` | - | 既知 node を交換し、AssetKey の所在情報を探す component | - |
-| 既知 node | node-finder | `NodeFinderRepo` | - | 接続の候補として保存した NodeProfile の集合 | - |
-| NodeProfile | node-finder | `NodeProfile` | `axus:node/` URI | P2P network 上の node の公開鍵、到達先、更新時刻を、その node 本人の署名で結んだ値 | - |
-| 到達先 | node-finder | `NodeProfile.addrs` | - | NodeProfile に載せる、その node へ接続できるアドレスの列 | - |
-| node ID | node-finder | `NodeProfile::id()` | - | node の公開鍵の SHA3-256 hash。Kadex の距離計算と Session の重複判定に使う | NodeProfile.id |
-| 更新時刻 | node-finder | `NodeProfile::updated_time` | - | NodeProfile に署名した時刻（unix 秒）。同じ node ID の NodeProfile の新旧を決める | - |
-| FileRef | profile-memo | `FileRef` | - | 上位データが公開済み file を参照する名前と hash の組 | ファイル本体 |
-| memo | profile-memo | `MemoExchanger` | - | Profile を探索、交換、配布する下位機構 | 投稿本文 |
-| Profile | profile-memo | `Profile` | - | 主体の公開情報と公開データへの FileRef 群を表す上位データ | - |
-| rpf | rocketpack | `.rpf` | `.rpf` file | RocketPack 型と field 番号を定義する schema file | Rust 型定義 |
-| Session | session | `Session` | - | 相手の証明、接続方向、用途を伴う通信路 | TCP 接続 |
-| sweep | storage | - | - | RocksDB の key と一時出力を SQLite の行と照合し、参照のないものを消す回収処理 | - |
+| FileExchanger | file-transfer | `FileExchanger` | - | Component that uses NodeFinder's lookup results to establish a Session with a peer and carries blocks | - |
+| FilePublisher | file-transfer | `FilePublisher` | - | Component that converts a local file into blocks and Merkle layers and publishes it | - |
+| publish commit | file-transfer | `FilePublisherStore::commit` | - | Operation that finalizes the root hash of an uncommitted file and its stored blocks as a committed file | - |
+| Store | file-transfer | `FilePublisherStore`, `FileSubscriberStore` | - | Component that mutates metadata and block bodies and manages the consistency of creating, finalizing, and deleting output files and their persistence | - |
+| FileSubscriber | file-transfer | `FileSubscriber` | - | Component that gathers blocks from a root hash and decodes the file | - |
+| output finalization | file-transfer | `Finalizing` → `Completed` | - | Operation that places and persists the decoded temporary output at the user's destination with a non-replacing rename and records Completed | - |
+| MerkleLayer | file-transfer | `MerkleLayer` | - | Block content that stores the hash list of child blocks and the rank of those blocks | - |
+| rank | file-transfer | `MerkleLayer.rank` | - | Level of a block in the Merkle structure; the file body blocks are rank 0 | - |
+| root hash | file-transfer | `OmniHash` | - | Content identifier that is the hash of the topmost block | - |
+| output reservation | file-transfer | - | - | Unique constraint on the subscription row that prevents other in-progress subscriptions from using the same output destination | - |
+| choke | file-transfer | - | - | State of not responding to a peer's block requests; judged per node, and lifting it is called unchoke | - |
+| status message | file-transfer | - | - | FileExchanger message that tells whether the remote's blocks are wanted and whether the remote is choked | - |
+| do-not-have response | file-transfer | - | - | FileExchanger message that tells the requested hash's block is not held | - |
+| committed file | file-transfer | `PublishedCommittedFile` | - | Publisher-side file whose root hash is finalized and which can be advertised to the network; identified by the pair of root hash and file name | - |
+| uncommitted file | file-transfer | `PublishedUncommittedFile` | - | Publisher-side file from import until its root hash is finalized; identified by a temporary ID | - |
+| temporary output | file-transfer | - | `.<entry name>.axus-<subscription ID>.part` | File created in the same directory as the output destination with a conventional name per subscription, into which the decoded result is written | - |
+| Finalizing | file-transfer | `SubscribedFileStatus::Finalizing` | - | Subscription state from persisting the temporary output to begin finalization until reaching Completed or Failed | - |
+| Task | file-transfer | `TaskDecoder`, `TaskEncoder` | - | Component that controls encoding/decoding, cancellation before finalization, and retries of sweep and output placement; distinct from the FileExchanger connection task | - |
+| AssetKey | node-finder | `AssetKey` | - | Identifier whose location NodeFinder looks up | file reference |
+| bootstrap node | node-finder | `bootstrap_node_profiles` | `p2p.bootstrap_nodes` | NodeProfile given by configuration and added to the known nodes at startup | - |
+| location info | node-finder | `give_asset_key_locations` | - | Mapping of an AssetKey to the NodeProfiles of the nodes that advertise it | - |
+| NodeFinder | node-finder | `NodeFinder` | - | Component that exchanges known nodes and looks up the location info of AssetKeys | - |
+| known node | node-finder | `NodeFinderRepo` | - | Set of NodeProfiles saved as connection candidates | - |
+| NodeProfile | node-finder | `NodeProfile` | `axus:node/` URI | Value binding a node's public key, reachable addresses, and update time with the node's own signature | - |
+| reachable address | node-finder | `NodeProfile.addrs` | - | List of addresses carried in a NodeProfile at which the node can be reached | - |
+| node ID | node-finder | `NodeProfile::id()` | - | SHA3-256 hash of the node's public key; used for Kadex distance calculation and Session duplicate resolution | `NodeProfile.id` |
+| update time | node-finder | `NodeProfile::updated_time` | - | Time at which the NodeProfile was signed (unix seconds); decides which NodeProfile is newer for the same node ID | - |
+| FileRef | profile-memo | `FileRef` | - | Pair of a name and a hash with which higher-level data references a published file | file body |
+| memo | profile-memo | `MemoExchanger` | - | Lower-level mechanism that discovers, exchanges, and distributes Profiles | post body |
+| Profile | profile-memo | `Profile` | - | Higher-level data representing a subject's public information and FileRefs to public data | - |
+| rpf | rocketpack | `.rpf` | `.rpf` file | Schema file defining RocketPack types and field numbers | Rust type definition |
+| Session | session | `Session` | - | Communication channel that carries the peer's proof, the connection direction, and a use | TCP connection |
+| sweep | storage | - | - | Reclamation that reconciles RocksDB keys and temporary outputs against SQLite rows and deletes unreferenced ones | - |
 
-## 3. 隣接語の境界
+## 3. Boundaries between adjacent terms
 
 <a id="t-publisher-commit-vs-output-finalization"></a>
-#### 公開 commit と出力確定
+#### Publish commit and output finalization
 
-**境界**
-公開 commit は、block と root hash を広告可能な committed file にする。
-出力確定は、購読の復号結果を filesystem の出力先へ配置・永続化し、その後に Completed を記録する。
-DB の commit は、それぞれの処理を構成する手順の 1 つである。
+**Boundary**
+The publish commit turns blocks and a root hash into a committed file that can be advertised.
+The output finalization places and persists the decoded result of a subscription at the filesystem output destination, and only then records Completed.
+The DB commit is one step that makes up each of the two operations.
 
-**取り違えると何が起きるか**
-出力確定を Completed の DB commit だけと扱うと、配置と directory の永続化が完了する前に成功を返し、障害後に出力を失い得る。
+**What goes wrong if misread**
+Treating the output finalization as only the DB commit of Completed returns success before the placement and directory persistence finish, and the output can be lost after a failure.
 
 <a id="t-root-hash-vs-output-reservation"></a>
-#### root hash と出力先予約
+#### root hash and output reservation
 
-**境界**
-root hash は内容を識別し、購読間の block 共有に使う。
-出力先予約は filesystem の同じ entry への競合を防ぐ。
+**Boundary**
+The root hash identifies content and is used to share blocks between subscriptions.
+The output reservation prevents conflicts over the same filesystem entry.
 
-**取り違えると何が起きるか**
-root hash を予約の単位にすると、同じ内容を別の出力先へ購読できなくなり、異なる内容を同じ出力先へ購読する競合も防げない。
+**What goes wrong if misread**
+Using the root hash as the reservation unit makes it impossible to subscribe to the same content at different destinations and also fails to prevent different content from being subscribed to the same destination.
 
 <a id="t-node-profile-vs-session"></a>
-#### NodeProfile と Session
+#### NodeProfile and Session
 
-**境界**
-NodeProfile は探索に使う node の公開鍵と到達先を、node 本人が署名して結んだ値である。
-Session は相手の署名を検証して鍵を合意した後に用途へ渡す通信路であり、相手が誰であるかについては、通信の相手がその公開鍵の秘密鍵を持つことだけを保証する。
-両者の公開鍵の照合は [trust-security.md](./design/trust-security.md#node-id-は公開鍵から導出する) が扱う。
+**Boundary**
+A NodeProfile binds a node's public key and its reachable addresses with the node's own signature and is used for lookup.
+A Session is a communication channel that is handed to a use after verifying the peer's signature and agreeing on keys; about who the peer is, it guarantees only that the communication peer holds the private key for that public key.
+Reconciling the public keys of the two is handled by [trust-security.md](./design/trust-security.md#node-id-is-derived-from-the-public-key).
 
-**取り違えると何が起きるか**
-NodeProfile の署名を検証できたことを、その node への信頼や、到達先が現在もその node のものであることの保証として扱うと、Session で確かめる相手と未決の trust の contract を迂回する。
+**What goes wrong if misread**
+Treating a successfully verified NodeProfile signature as proof of trust in the node, or as proof that the reachable address still belongs to the node, bypasses the outstanding trust contract that is confirmed in the Session.
 
 <a id="t-asset-key-vs-file-ref"></a>
-#### AssetKey と FileRef
+#### AssetKey and FileRef
 
-**境界**
-AssetKey は network 上で所在を探す key である。
-FileRef は表示名と内容を参照する hash を上位データへ渡す値であり、探索結果を含まない。
+**Boundary**
+An AssetKey is a key whose location is looked up on the network.
+A FileRef is a value handed to higher-level data that references content by a display name and a hash; it carries no lookup results.
 
-**取り違えると何が起きるか**
-FileRef を探索 key として扱うと、表示名を含む上位表現へ NodeFinder の探索 contract が漏れる。
+**What goes wrong if misread**
+Treating a FileRef as a lookup key leaks NodeFinder's lookup contract into the higher-level representation that includes the display name.
 
 <a id="t-file-ref-vs-root-hash"></a>
-#### FileRef と root hash
+#### FileRef and root hash
 
-**境界**
-root hash は内容だけを識別する hash である。
-FileRef は上位データが内容へ名前付きで参照する値である。
+**Boundary**
+The root hash is a hash that identifies only content.
+A FileRef is a value with which higher-level data references content by name.
 
-**取り違えると何が起きるか**
-root hash だけを FileRef として扱うと、上位 service が保持すべき表示名と分類を失う。
+**What goes wrong if misread**
+Treating the root hash alone as a FileRef loses the display name and classification that the higher-level service should keep.
 
 <a id="t-profile-vs-memo"></a>
-#### Profile と memo
+#### Profile and memo
 
-**境界**
-Profile は公開情報と FileRef 群を表す payload である。
-memo はその payload を探索、交換、配布する下位機構であり、投稿本文や添付の意味を解釈しない。
+**Boundary**
+A Profile is a payload representing public information and a set of FileRefs.
+A memo is a lower-level mechanism that discovers, exchanges, and distributes that payload, and does not interpret the post body or attachments.
 
-**取り違えると何が起きるか**
-memo が Profile の内容を解釈すると、上位データ model の変更が探索と配布の protocol へ波及する。
+**What goes wrong if misread**
+If the memo interprets the Profile content, changes to the higher-level data model ripple into the discovery and distribution protocol.

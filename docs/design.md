@@ -1,80 +1,80 @@
-# Axus 設計
+# Axus Design
 
-## 1. このドキュメントについて
+## 1. About this document
 
-本書は、Axus の Rust 製 daemon が P2P ネットワーク上でノードを探索し、ファイルを公開および購読するための全体設計を扱う。
-主な読者は、`daemon/` の実装を変更する開発者と、設計判断を引き継ぐ AI エージェントである。
-本書は [terms.md](./terms.md#2-用語一覧) の語彙を前提とする。語の定義は本書にない。
+This document covers the overall design of the Axus Rust daemon: how it discovers nodes over the P2P network and publishes and subscribes to files.
+The main readers are developers who change the implementation under `daemon/` and AI agents who carry the design decisions forward.
+This document assumes the vocabulary of [terms.md](./terms.md#2-terminology). Term definitions are not given here.
 
-### 1.1 文書間の責務分担
+### 1.1 Division of responsibilities among documents
 
-| 文書または正本 | 正とする内容 |
+| Document or source of truth | Owns |
 | --- | --- |
-| 本書 | プロジェクト全体のスコープ、全体構成、関心事間の境界、横断的な設計判断、全体の依存関係 |
-| [terms.md](./terms.md#2-用語一覧) | プロジェクト固有の語の定義、表記、隣接語との境界 |
-| [issues.md](./issues.md) | コードで確認した明確な不具合と修正までの追跡 |
-| [knowledges.md](./knowledges.md) | 依存ライブラリと OS の挙動について確認した、出所付きの外部知識 |
-| [plans.md](./plans.md) | 進行中の実装計画の一覧と依存関係 |
-| [reviews.md](./reviews.md) | review の履歴と指摘の転記状態 |
-| [daemon-api.md](./design/daemon-api.md#1-このドキュメントについて) | daemon のライフサイクル、設定境界、REST API と OpenAPI 生成 |
-| [rocketpack.md](./design/rocketpack.md#1-このドキュメントについて) | RocketPack 型の生成、wire format の移行規約 |
-| [session.md](./design/session.md#1-このドキュメントについて) | transport、Session の確立、用途分離、停止 |
-| [node-finder.md](./design/node-finder.md#1-このドキュメントについて) | ノード探索、情報伝播、距離計算、探索状態 |
-| [file-transfer.md](./design/file-transfer.md#1-このドキュメントについて) | ファイルの公開、購読、Merkle 構造、出力先の予約、block 交換 protocol、block の検証 |
-| [storage.md](./design/storage.md#1-このドキュメントについて) | metadata、block、出力 file の永続化、確定と回収、障害後の回復、migration |
-| [trust-security.md](./design/trust-security.md#1-このドキュメントについて) | 認証、暗号化、内容検証、identity、Web of Trust |
-| [profile-memo.md](./design/profile-memo.md#1-このドキュメントについて) | Profile と memo の責務境界、参照する公開データ |
-| [rust.md](./coding/rust.md) | Rust のコーディング規約。正本は core-rs にある |
-| [README.md](../README.md) | プロジェクト概要、セットアップ、開発手順 |
-| [openapi.yaml](../daemon/openapi.yaml) | REST API の path、schema、status code |
-| [entrypoints/interface](../daemon/entrypoints/interface) | OpenAPI から生成する Rust interface |
-| `.rpf` ファイル | RocketPack で符号化する型の定義と field 番号 |
-| [Rust ソース](../daemon) | バイト列の形式、定数、依存 version |
+| This document | Scope of the whole project, overall structure, boundaries between concerns, cross-cutting design decisions, overall dependencies |
+| [terms.md](./terms.md#2-terminology) | Definitions of project-specific terms, notation, and boundaries with adjacent terms |
+| [issues.md](./issues.md) | Clear bugs confirmed in the code and their tracking until fixed |
+| [knowledges.md](./knowledges.md) | Confirmed, sourced external knowledge about depends and the OS |
+| [plans.md](./plans.md) | List of in-progress implementation plans and their dependencies |
+| [reviews.md](./reviews.md) | History of reviews and the transcription state of their findings |
+| [daemon-api.md](./design/daemon-api.md#1-about-this-document) | Lifecycle of the daemon, configuration boundaries, REST API, and OpenAPI generation |
+| [rocketpack.md](./design/rocketpack.md#1-about-this-document) | Generation of RocketPack types, migration conventions of the wire format |
+| [session.md](./design/session.md#1-about-this-document) | transport, Session establishment, use separation, shutdown |
+| [node-finder.md](./design/node-finder.md#1-about-this-document) | Node lookup, information propagation, distance calculation, lookup state |
+| [file-transfer.md](./design/file-transfer.md#1-about-this-document) | Publishing and subscribing to files, Merkle structure, output reservation, block exchange protocol, block verification |
+| [storage.md](./design/storage.md#1-about-this-document) | Persistence of metadata, blocks, and output files, finalization and reclamation, recovery after failure, migration |
+| [trust-security.md](./design/trust-security.md#1-about-this-document) | Authentication, encryption, content verification, identity, Web of Trust |
+| [profile-memo.md](./design/profile-memo.md#1-about-this-document) | Responsibility boundary between Profile and memo; the public data they reference |
+| [rust.md](./coding/rust.md) | Rust coding conventions. The canonical is in core-rs |
+| [README.md](../README.md) | Project overview, setup, development procedures |
+| [openapi.yaml](../daemon/openapi.yaml) | REST API paths, schemas, and status codes |
+| [entrypoints/interface](../daemon/entrypoints/interface) | Rust interface generated from OpenAPI |
+| `.rpf` files | Definitions of types and field numbers encoded with RocketPack |
+| [Rust sources](../daemon) | Byte-level formats, constants, dependency versions |
 
-本書には API の網羅的な一覧、RocketPack の field 番号、セットアップ手順、既知の不具合を置かない。
-生成された `entrypoints/interface` は確認対象ではあるが、設計変更の編集先にはしない。
+This document does not hold an exhaustive API list, the RocketPack field numbers, setup procedures, or known bugs.
+The generated `entrypoints/interface` is subject to review but is not an edit target for design changes.
 
-### 1.2 本書の時制について
+### 1.2 Tenses used in this document
 
-本文は、Axus が満たす設計を現在形で記述する。
-実装状況は各設計詳細文書の「現状と残作業」に集約する。
-いま何が動くのかを知りたい場合は §6 を先に読み、関心事ごとの詳細は対応する詳細文書の「現状と残作業」を読む。
+The body describes, in the present tense, the design that Axus satisfies.
+The implementation status is consolidated in each detailed design document's "Current status and remaining work" section.
+To find out what runs now, read §6 first; for concern-specific details, read the "Current status and remaining work" section of the corresponding detailed document.
 
-## 2. Axus daemon とは
+## 2. What the Axus daemon is
 
-Axus は、個人の server や PC で動かす P2P のファイル配布 service である。
-オープンソースで開発し、データの安全で安価な個人間共有を可能にすること、および BitTorrent の検索における単一障害点を解消することを目的とする。
-daemon は 1 node 分のネットワーク接続、ノード探索、ファイルの符号化と復号、永続状態、ローカル client 向け REST API を 1 process にまとめる。
+Axus is a P2P file distribution service that runs on personal servers and PCs.
+It is developed as open source, with the aims of enabling safe and cheap file sharing between individuals and removing the single point of failure in BitTorrent search.
+The daemon combines, in one process, one node's network connections, node lookup, file encoding and decoding, persistent state, and the REST API for local clients.
 
-### 2.1 スコープ外
+### 2.1 Out of scope
 
-- daemon を操作する GUI と、その画面遷移は扱わない。
-- 配布、監視、backup を含む運用基盤は扱わない。
-- `core-rs` の内部設計は扱わず、Axus から見た contract だけを扱う。
-- REST API と RocketPack の完全な wire format は、それぞれの正本に委ねる。
+- The GUI that operates the daemon and its screen transitions are not covered.
+- The operational infrastructure, including distribution, monitoring, and backup, is not covered.
+- The internal design of `core-rs` is not covered; only the contract as seen from Axus is.
+- The complete wire format of the REST API and RocketPack is left to each source of truth.
 
-これらを対象外にすることで、client UI、配置 topology、外部定義の複写を設計書に持たない。
+Keeping these out of scope means the design documents carry no client UI, deployment topology, or copies of externally defined formats.
 
-## 3. 全体構成
+## 3. Overall structure
 
-### 3.1 コンポーネントと directory 対応表
+### 3.1 Components and directory map
 
-| パス | package | 役割 |
+| Path | package | Role |
 | --- | --- | --- |
-| [daemon/entrypoints/daemon](../daemon/entrypoints/daemon) | `omnius-axus-daemon` | CLI、設定、process のライフサイクル、REST API の実装 |
-| [daemon/entrypoints/interface](../daemon/entrypoints/interface) | `omnius-axus-interface` | OpenAPI から生成する axum router と型であり、手で編集しない |
-| [daemon/modules/engine](../daemon/modules/engine) | `omnius-axus-engine` | Session、ノード探索、ファイル転送、永続化 |
-| [daemon/refs/core-rs](../daemon/refs/core-rs) | `omnius-core-*` | 時刻、ID、署名、serialization、migration などの共通基盤 |
+| [daemon/entrypoints/daemon](../daemon/entrypoints/daemon) | `omnius-axus-daemon` | CLI, configuration, process lifecycle, REST API implementation |
+| [daemon/entrypoints/interface](../daemon/entrypoints/interface) | `omnius-axus-interface` | axum router and types generated from OpenAPI; not edited by hand |
+| [daemon/modules/engine](../daemon/modules/engine) | `omnius-axus-engine` | Session, node lookup, file transfer, persistence |
+| [daemon/refs/core-rs](../daemon/refs/core-rs) | `omnius-core-*` | Shared foundations: time, IDs, signatures, serialization, migration |
 
-`daemon/` は Cargo workspace の root であり、`core-rs` の必要な crate を workspace member として直接 build する。
+`daemon/` is the root of the Cargo workspace and builds the required core-rs crates directly as workspace members.
 
-### 3.2 処理の流れ
+### 3.2 Flow of processing
 
-client から P2P 通信までの責務は、上位から下位へ一方向に渡す。
+Responsibilities are passed one-way from the client down to P2P communication.
 
 ```mermaid
 flowchart TD
-    Client[ローカル client]
+    Client[Local client]
     Api[ApiServer]
     State[DaemonState]
     Service[AxusService]
@@ -84,7 +84,7 @@ flowchart TD
     Finder[NodeFinder]
     Session[SessionConnector / SessionAccepter]
     Transport[TCP / FramedStream]
-    Peer[相手 node]
+    Peer[Peer node]
     Meta[(SQLite)]
     Blocks[(RocksDB)]
 
@@ -107,55 +107,55 @@ flowchart TD
     Subscriber --> Blocks
 ```
 
-API 層は engine を知るが、NodeFinder は FilePublisher と FileSubscriber を知らず、探索結果だけを返す。
-この依存方向により、探索規則とファイルの意味論を別々に変更できる。
+The API layer knows the engine, but NodeFinder does not know FilePublisher or FileSubscriber and returns only lookup results.
+This dependency direction lets the lookup rules and the file semantics change independently.
 
-## 4. 設計詳細
+## 4. Design details
 
-| 関心事 | 受け持つ設計文書 | ほかの関心事との境界 |
+| Concern | Owning design document | Boundary with other concerns |
 | --- | --- | --- |
-| daemon と REST API | [daemon-api.md](./design/daemon-api.md#1-このドキュメントについて) | engine の所有と外部 contract を結び、P2P protocol は持たない |
-| RocketPack 型 | [rocketpack.md](./design/rocketpack.md#1-このドキュメントについて) | wire 型の正を持ち、compiler の内部設計は持たない |
-| transport と Session | [session.md](./design/session.md#1-このドキュメントについて) | 接続を認証して用途へ渡し、探索と file message は解釈しない |
-| NodeFinder | [node-finder.md](./design/node-finder.md#1-このドキュメントについて) | AssetKey と NodeProfile の対応を扱い、file 内容を解釈しない |
-| file の公開と購読 | [file-transfer.md](./design/file-transfer.md#1-このドキュメントについて) | block を公開、購読、検証し、探索 algorithm は持たない |
-| 永続化 | [storage.md](./design/storage.md#1-このドキュメントについて) | metadata、block、出力 file の永続化と回復を扱い、上位 protocol は持たない |
-| trust と security | [trust-security.md](./design/trust-security.md#1-このドキュメントについて) | 各層の保証と限界を定め、個別の暗号 protocol を選ばない |
-| Profile と memo | [profile-memo.md](./design/profile-memo.md#1-このドキュメントについて) | 上位データの参照と配布を扱い、投稿本文と block 転送を解釈しない |
+| daemon and REST API | [daemon-api.md](./design/daemon-api.md#1-about-this-document) | Owns the engine and external contracts; no P2P protocol |
+| RocketPack types | [rocketpack.md](./design/rocketpack.md#1-about-this-document) | Source of truth for wire types; no compiler internal design |
+| transport and Session | [session.md](./design/session.md#1-about-this-document) | Authenticates connections and hands them to a use; does not interpret lookup or file messages |
+| NodeFinder | [node-finder.md](./design/node-finder.md#1-about-this-document) | Handles the AssetKey-to-NodeProfile mapping; does not interpret file content |
+| Publishing and subscribing to files | [file-transfer.md](./design/file-transfer.md#1-about-this-document) | Publishes, subscribes to, and verifies blocks; no lookup algorithm |
+| Persistence | [storage.md](./design/storage.md#1-about-this-document) | Persists metadata, blocks, and output files and recovers them; no higher-level protocol |
+| trust and security | [trust-security.md](./design/trust-security.md#1-about-this-document) | Defines the guarantees and limits of each layer; does not choose individual cryptographic protocols |
+| Profile and memo | [profile-memo.md](./design/profile-memo.md#1-about-this-document) | Handles referencing and distributing higher-level data; does not interpret post bodies or block transfer |
 
-## 5. 設計判断
+## 5. Design decisions
 
-### 5.1 決定済み
+### 5.1 Decided
 
-#### 探索とファイル転送を分離する
+#### Separate lookup from file transfer
 
-**決定**
-NodeFinder は AssetKey から NodeProfile を探し、FileExchanger はその結果を使って block を交換する。
+**Decision**
+NodeFinder looks up a NodeProfile for an AssetKey, and FileExchanger uses the result to exchange blocks.
 
-**理由**
-探索 algorithm がファイル形式を知らず、publisher と subscriber が DHT message を知らない依存方向を保つためである。
+**Rationale**
+To keep the dependency direction in which the lookup algorithm does not know the file format, and the publisher and subscriber do not know DHT messages.
 
-### 5.2 保留
+### 5.2 Deferred
 
-全体を横断する保留はない。
-関心事に閉じる保留は、各設計詳細文書の「設計判断」に置く。
+There are no project-wide deferred decisions.
+Concern-local deferred decisions live in the "Design decisions" sections of each detailed design document.
 
-## 6. 現状と残作業
+## 6. Current status and remaining work
 
-### 6.1 現状
+### 6.1 Current status
 
-関心事ごとの実装状況は、各設計詳細文書が正とする。
-全体としては、daemon の起動経路が NodeFinder までを所有し、設定した bootstrap node を起点に他の daemon とつながるが、ファイル公開、購読、P2P 転送、REST API を通す end-to-end の経路は完成していない。
-file の公開から復号までは、P2P 転送を介さない engine 内の試験で確認している。
+Each detailed design document is the source of truth for the implementation status of its concern.
+Overall, the daemon startup path owns down to NodeFinder and connects to other daemons starting from the configured bootstrap nodes, but the end-to-end path through file publishing, subscription, P2P transfer, and the REST API is not complete.
+From file publishing to decoding is confirmed by engine-internal tests that do not go through P2P transfer.
 
-### 6.2 ロードマップ
+### 6.2 Roadmap
 
-次の順序は暫定であり、守る必要があるのは表中の依存関係だけである。
+The following order is tentative; only the dependencies in the table must be preserved.
 
-| 番号 | 内容 | 前提とする依存 |
+| # | Item | Prerequisite dependency |
 | --- | --- | --- |
-| 1 | FileExchanger の block 交換 protocol と hash 検証を実装する | [file-transfer.md](./design/file-transfer.md#5-block-交換) の設計 |
-| 2 | 公開、購読、進捗、cancel の REST API を定義する | 1、[daemon-api.md](./design/daemon-api.md#52-保留) の長時間操作と到達範囲の判断 |
-| 3 | Web of Trust、Profile、memo を順に定義する | [trust-security.md](./design/trust-security.md#4-設計判断)、FileRef を解決できる 1 |
+| 1 | Implement FileExchanger's block exchange protocol and hash verification | Design in [file-transfer.md](./design/file-transfer.md#5-block-exchange) |
+| 2 | Define the REST API for publish, subscribe, progress, and cancel | 1, judgment on long-running operations and reach in [daemon-api.md](./design/daemon-api.md#52-deferred) |
+| 3 | Define Web of Trust, Profile, and memo in order | [trust-security.md](./design/trust-security.md#4-design-decisions), 1 to resolve FileRefs |
 
-確認済みの不具合と修正方針は [issues.md](./issues.md) を参照する。
+For confirmed bugs and fix directions, see [issues.md](./issues.md).

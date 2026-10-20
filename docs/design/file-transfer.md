@@ -1,59 +1,59 @@
-# file の公開と購読の設計
+# Design of file publish and subscription
 
-## 1. このドキュメントについて
+## 1. About this document
 
-本書は file を block と Merkle layer へ変換して公開し、node 間で block を交換し、購読側で検証および復号する設計を扱う。
-語の定義は [terms.md](../terms.md#2-用語一覧) が正とする。
+This document covers the design of converting a file into blocks and Merkle layers and publishing it, exchanging blocks between nodes, and verifying and decoding on the subscribing side.
+Term definitions are the source of [terms.md](../terms.md#2-terminology).
 
-### 1.1 文書間の責務分担
+### 1.1 Division of responsibilities among documents
 
-| 文書または正本 | 受け持つもの |
+| Document or source of truth | Owns |
 | --- | --- |
-| [design.md](../design.md#11-文書間の責務分担) | 全体構成、他の関心事との境界、横断的な依存関係 |
-| 本書 | file の公開、購読、Merkle 構造、状態遷移、出力先の予約、Store が守る整合性、block 交換 protocol、block の検証 |
-| [session.md](./session.md#2-責務と境界) | Session の確立、用途ごとの frame 上限 |
-| [node-finder.md](./node-finder.md#2-責務と境界) | AssetKey に対応する node の探索 |
-| [storage.md](./storage.md#2-責務と境界) | metadata、block、出力 file の永続化、確定と回収の手順、障害後の回復 |
-| [core/negotiator/file](../../daemon/modules/engine/src/core/negotiator/file) | file 公開、購読、転送の実装 |
+| [design.md](../design.md#11-division-of-responsibilities-among-documents) | Overall structure, boundaries with other concerns, cross-cutting dependencies |
+| This document | File publish, subscription, Merkle structure, state transitions, output reservation, integrity guarded by the Store, the block exchange protocol, block verification |
+| [session.md](./session.md#2-responsibilities-and-boundaries) | Session establishment, per-use frame limits |
+| [node-finder.md](./node-finder.md#2-responsibilities-and-boundaries) | Looking up nodes for an AssetKey |
+| [storage.md](./storage.md#2-responsibilities-and-boundaries) | Persistence of metadata, blocks, and output files, finalization and reclamation procedures, recovery after failure |
+| [core/negotiator/file](../../daemon/modules/engine/src/core/negotiator/file) | File publish, subscription, and transfer implementation |
 
-### 1.2 本書の時制について
+### 1.2 Tenses used in this document
 
-本文は完成形の設計を記述する。
-実装状況と残作業は §7 に集約する。
-現在動く範囲を確認する場合は §7 を先に読む。
+The body describes the completed design.
+The implementation status and remaining work are consolidated in §7.
+To check what works currently, read §7 first.
 
-## 2. 責務と境界
+## 2. Responsibilities and boundaries
 
-[FilePublisher](../../daemon/modules/engine/src/core/negotiator/file/file_publisher.rs) は local file を block と Merkle layer に変換し、公開可能な root hash を確定する。
-[FileSubscriber](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber.rs) は root hash から必要な block を管理し、揃った layer を上位から順に復号する。
-[FileExchanger](../../daemon/modules/engine/src/core/negotiator/file/file_exchanger.rs) は NodeFinder の探索結果を使って相手と Session を張り、publisher と subscriber の block を運ぶ。
+[FilePublisher](../../daemon/modules/engine/src/core/negotiator/file/file_publisher.rs) converts a local file into blocks and Merkle layers and finalizes a publishable root hash.
+[FileSubscriber](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber.rs) manages the blocks needed from a root hash and decodes the layers that have come together from the top down.
+[FileExchanger](../../daemon/modules/engine/src/core/negotiator/file/file_exchanger.rs) establishes a Session with a peer using NodeFinder's lookup results and carries the publisher's and subscriber's blocks.
 
-符号化、転送、復号を分けることで、local storage の処理を network Session の寿命から独立させる。
-publisher と subscriber は公開用と購読用の状態を共有しない。
+Separating encoding, transfer, and decoding makes the processing of local storage independent of the network Session lifetime.
+The publisher and subscriber do not share state between publish and subscription.
 
-公開側と購読側は、どちらも同じ 3 層に分かれる。
+Both the publisher side and the subscriber side split into the same three layers.
 
 ```text
-FilePublisher / FileSubscriber      API の入口。Store と Task を組み立て、Task を起動して停止する
-  │
-  ├──▶ TaskEncoder / TaskDecoder    符号化と復号、確定前の取り消し、配置と回収の再試行を進める loop
-  │      │
-  ▼      ▼
+FilePublisher / FileSubscriber      API entrypoint. Assembles the Store and the Task, starts and stops the Task
+  |
+  |--> TaskEncoder / TaskDecoder    Loop advancing encoding and decoding, pre-finalization cancellation,
+  |      |                           and retries of placement and reclamation
+  v      v
 FilePublisherStore / FileSubscriberStore
-                                    metadata、block、出力 file の整合性と永続化を管理する
+                                    Manages the integrity and persistence of metadata, blocks, and output files
 ```
 
-metadata と block 実体を書き換え、出力 file を作成・配置・削除するのは Store だけである。
-TaskDecoder は Store から渡された一時出力の handle へ復号結果を書き、出力先を直接開かない。
-FilePublisher、FileSubscriber、Task は Store が公開する操作を通して状態を変える。
-この配置により、2 つの storage にまたがる整合性の規則（§4.3）と lock が Store の中で閉じ、lock を型の間で受け渡さずに済む。
-削除に失敗した block と一時出力は、Store の sweep が metadata と照合して回収する。
-Task は、sweep と Finalizing の配置が成功するまで、間隔を置いて Store に再試行させる。
-停止時は確定前の処理を取り消し、確定中の処理は完了を待つ。I/O 障害で終えられなければ Finalizing のまま次回起動へ引き継ぐ。
+Only the Store rewrites metadata and block bodies and creates, places, and deletes output files.
+TaskDecoder writes the decode result into a temporary output handle handed over by the Store and does not open the destination directly.
+FilePublisher, FileSubscriber, and the Task change state only through the operations the Store exposes.
+This layout keeps the integrity rules across the two storages (§4.3) and the locks closed inside the Store, so locks are not passed between types.
+Blocks and temporary outputs whose deletion failed are reclaimed by the Store's sweep, reconciled against the metadata.
+The Task makes the Store retry the sweep and the Finalizing placement with intervals until they succeed.
+At shutdown, in-progress processing is cancelled and finalizing processing is waited on. If an I/O failure prevents finishing, it is carried over to the next startup as Finalizing.
 
-## 3. Merkle 構造
+## 3. Merkle structure
 
-file 本体を rank 0 の固定長 block に分け、各 block の hash 列を上位の MerkleLayer として再帰的に block 化する。
+The file body is split into fixed-length blocks at rank 0, and the hash list of each rank's blocks is recursively block-ized as a higher MerkleLayer.
 
 ```mermaid
 flowchart BT
@@ -61,7 +61,7 @@ flowchart BT
     B1[rank 0 block 1]
     BN[rank 0 block n]
     L1[rank 1 MerkleLayer]
-    LX[上位 MerkleLayer]
+    LX[higher MerkleLayer]
     Root[root hash]
 
     B0 --> L1
@@ -71,644 +71,644 @@ flowchart BT
     LX --> Root
 ```
 
-root hash から下位 block の hash を段階的に得られるため、受信者は file 全体の hash 一覧を事前に持つ必要がない。
-各受信 block は期待する hash と照合してから保存または復号に使う。
+Because the hashes of lower blocks are obtained step by step from the root hash, a receiver does not need the whole file's hash list in advance.
+Each received block is checked against the expected hash before being stored or used for decoding.
 
-MerkleLayer の rank は、その layer が列挙する子 block の rank を表す。
-購読側は root hash だけから始めるため、root block の rank は root の layer を復号するまで分からない。
-購読側は root の layer の rank を照合せずに次の rank とし、以降の layer では親の rank より 1 小さいことを照合する。
+A MerkleLayer's rank represents the rank of the child blocks it enumerates.
+The subscribing side starts from only the root hash, so the root block's rank is unknown until the root's layer is decoded.
+The subscribing side does not check the root layer's rank and uses the next rank; for later layers it checks that the rank is one less than the parent's rank.
 
-## 4. 状態遷移
+## 4. State transitions
 
-外部 API は内部状態名をそのまま公開せず、[daemon-api.md](./daemon-api.md#5-設計判断) の長時間操作の表現に従って安定した contract へ変換する。
+The external API does not expose the internal state names directly and converts them into a stable contract following the long-running operation representation of [daemon-api.md](./daemon-api.md#5-design-decisions).
 
-### 4.1 公開側
+### 4.1 Publisher side
 
-公開側は root hash の確定前後を uncommitted file と committed file に分ける。
+The publisher side splits the period before and after the root hash finalization into uncommitted files and committed files.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Pending: import
-    Pending --> Processing: 符号化を始める
-    Processing --> Pending: 再起動
+    Pending --> Processing: start encoding
+    Processing --> Pending: restart
     Processing --> Failed
-    Processing --> Committed: root hash を確定する
+    Processing --> Committed: finalize the root hash
     Pending --> [*]: cancel
     Processing --> [*]: cancel
-    Failed --> [*]: cancel、再 import
+    Failed --> [*]: cancel, re-import
     Committed --> [*]: remove
 ```
 
-Pending、Processing、Failed は uncommitted file の状態であり、Committed だけが network へ広告できる。
-root hash が確定するまでは一時 ID を使い、確定後に内容識別子へ commit するため、途中で失敗した処理と広告できる file を区別できる。
+Pending, Processing, and Failed are the states of an uncommitted file, and only Committed can be advertised to the network.
+Until the root hash is finalized, a temporary ID is used; after finalization the file is committed to the content identifier, so a process that failed midway is distinguished from a file that can be advertised.
 
-uncommitted file の行は commit と cancel で消え、失敗の理由を見せるために Failed だけが残る。
-同じ root hash と file 名の committed file がすでにあるときも、新しい committed file を作らずに uncommitted file の行を消す。
-同じ path と file 名の uncommitted file は 1 つしか持てない。
-Pending か Processing の file がある組の import は `AlreadyExists` で拒否する。
-Failed の file がある組の import は、その行を消し、新しい一時 ID で Pending の行を作る。
+An uncommitted file's row disappears on commit and cancel, and only Failed remains to show the reason for the failure.
+When a committed file with the same root hash and file name already exists, a new committed file is not created and the uncommitted file row disappears.
+Only one uncommitted file per path and file name can exist.
+Importing a pair with a Pending or Processing file is rejected with `AlreadyExists`.
+Importing a pair with a Failed file deletes that row and creates a Pending row with a new temporary ID.
 
-commit せずに符号化を終えた Task は、cancel、停止、失敗、条件付き更新の不一致（§4.3）のどれで終えた場合も、その一時 ID の block を Store に消させる。
-削除に失敗した block は、Pending と Processing の行がない一時 ID の block として sweep が回収する（[storage.md §4.3](./storage.md#43-公開の-commit-と回収)）。
-一時 ID を試行ごとに新しくするため、遅れて走る回収が新しい試行の block を消すことはなく、回収の完了を待たずに再 import できる。
+A Task that finished encoding without committing ends with cancel, shutdown, failure, or a conditional update mismatch (§4.3); in all cases it makes the Store delete that temporary ID's blocks.
+Blocks whose deletion failed are reclaimed by the sweep as blocks of a temporary ID with no Pending or Processing row (see [storage.md §4.3](./storage.md#43-publishing-commit-and-reclamation)).
+Because the temporary ID is renewed per attempt, a late-running reclamation never deletes a new attempt's blocks, and a file can be re-imported without waiting for reclamation.
 
-remove は committed file を対象にし、公開をやめる。
-同じ root hash を別の file 名で公開していれば、block の行と実体は最後の committed file が消えるまで残る。
+remove targets a committed file and stops the publication.
+If the same root hash is published under another file name, the block rows and bodies remain until the last committed file disappears.
 
-### 4.2 購読側
+### 4.2 Subscriber side
 
-購読側は block の取得と layer の復号を交互に進める。
+The subscriber side alternates fetching blocks and decoding layers.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Downloading: subscribe
-    Downloading --> Decoding: rank の block が揃う
-    Decoding --> Downloading: 次の rank がある
-    Decoding --> Decoding: 次の rank の block がすでに揃っている
-    Decoding --> Finalizing: rank 0 の一時出力を永続化
-    Finalizing --> Completed: 出力配置と永続化を終える
-    Finalizing --> Failed: 出力先に既存 entry がある、一時出力を失った
+    Downloading --> Decoding: the rank's blocks come together
+    Decoding --> Downloading: a next rank exists
+    Decoding --> Decoding: the next rank's blocks are already complete
+    Decoding --> Finalizing: persist the rank 0 temporary output
+    Finalizing --> Completed: finish the output placement and persistence
+    Finalizing --> Failed: an existing entry at the destination, or the temporary output is lost
     Downloading --> Failed
     Decoding --> Failed
     Downloading --> Canceled: cancel
     Decoding --> Canceled: cancel
 ```
 
-復号中に得た次の rank の hash 群が、次の Downloading の取得対象になる。
-cancel は Downloading と Decoding を Canceled にし、行と block を残す。
-remove は Finalizing 以外の購読の行を消し、その root hash を参照する購読がなくなれば block の行と実体も消す。
-Finalizing の cancel と remove は拒否する。Completed、Failed、Canceled の cancel は状態を変えない。
+The hash set of the next rank obtained during decoding becomes the fetch target of the next Downloading.
+cancel turns Downloading and Decoding into Canceled, keeping the rows and the blocks.
+remove deletes the rows of subscriptions other than Finalizing, and when no subscription references the root hash anymore, also deletes the block rows and bodies.
+cancel and remove of Finalizing are rejected. cancel of Completed, Failed, and Canceled does not change state.
 
-同じ root hash を複数の購読が参照してよく、block の行と実体は root hash ごとに共有する。
-block を保存すると、その root hash を参照する Downloading の購読すべての進捗を更新する。
-次の rank の block がほかの購読によってすでに揃っていれば、受信を待たずに次の layer を復号する。
+Multiple subscriptions may reference the same root hash, and the block rows and bodies are shared per root hash.
+Saving a block updates the progress of all Downloading subscriptions that reference that root hash.
+If the next rank's blocks are already complete through another subscription, the next layer is decoded without waiting for reception.
 
-FileExchanger が block を取得するために相手を探す root hash は、Downloading の購読のものに限る。
-block を提供する購読の範囲は §5.1 が扱う。
-rank 0 は購読ごとの一時出力へ復号する。
-一時出力は出力先と同じ directory に、購読 ID を含む規約の名前で作る。daemon が作成・削除するのはこの名前の file だけである。
-Completed の出力 file は利用者の file として扱い、remove でも消さない。
+The root hashes FileExchanger looks up peers for are limited to those of Downloading subscriptions.
+The range of subscriptions that provide blocks is handled by §5.1.
+Rank 0 is decoded into each subscription's temporary output.
+The temporary output is created in the same directory as the destination with a conventional name including the subscription ID. The daemon creates and deletes only files with this name.
+A completed output file is treated as the user's file and is not deleted by remove.
 
-#### 出力先の予約と確定
+#### Output reservation and finalization
 
-subscribe は出力先に file、directory、symlink などの既存 entry があれば失敗し、上書きしない。
-`.<entry 名>.axus-<購読 ID>.part` の形の名前は daemon が所有する一時出力の予約名であり、利用者の file の最終出力先として登録できない。
-予約名は登録時に名前の文字列だけで判定し、ASCII の大小文字を区別せず、既存 entry とは区別できるエラーで拒否する。
-購読 A の一時出力名を購読 B の最終出力先として登録し、B の完了後に A が一時出力を作り直すと、B の完成済み出力を消すためである。
-予約名の生成と判定の規則は [storage.md §4.5](./storage.md#45-出力の確定と回復) に従う。
-同じ出力先を Downloading、Decoding、Finalizing の購読が使っている場合も、開始時に拒否する。
-同じ root hash を異なる出力先へ購読することは許す。
-予約名以外の開始時の拒否は早期検出であり、大小文字や Unicode 正規化だけが違う別表記までは判定しない。
-別表記の衝突と、開始後に外部 process が作った entry は、確定時に上書きしない配置が失敗することで検出し、Failed にする。
+subscribe fails when an existing entry, such as a file, directory, or symlink, exists at the destination and does not overwrite it.
+A name of the form `.<entry name>.axus-<subscription ID>.part` is the reserved name the daemon owns for temporary outputs and cannot be registered as a user file's final destination.
+The reserved name is judged by the name string alone at registration, without distinguishing ASCII letter case, and rejected with an error distinguishable from existing entries.
+This is because registering subscription A's temporary output name as subscription B's final destination would make A, when it recreates its temporary output after B finishes, delete B's completed output.
+The rules for generating and judging the reserved name follow [storage.md §4.5](./storage.md#45-output-finalization-and-recovery).
+A subscription already using the same destination in Downloading, Decoding, or Finalizing is also rejected at start.
+Subscribing to the same root hash at a different destination is allowed.
+Rejections at start other than the reserved name are early detection, and alternative representations differing only in letter case or Unicode normalization are not judged.
+A collision between alternative representations and an entry an external process created after the start are detected by the non-overwriting placement failing at finalization, turning the subscription Failed.
 
-一時出力への書き込みを終えても、まだ Completed ではない。
-Store が一時出力を永続化し、Finalizing を DB に記録した時点を確定開始とする。
-その後、既存 entry を置き換えない rename で出力先へ配置し、配置を永続化してから Completed を記録する。
-確定開始後は取り消しを通さず、Completed、Failed、または再試行を待つ Finalizing まで進める。
+Finishing the write into the temporary output is not yet Completed.
+The point where the Store persists the temporary output and records Finalizing in the DB is the start of finalization.
+Afterwards, the output is placed with a rename that does not replace an existing entry, the placement is persisted, and then Completed is recorded.
+After finalization starts, cancellation is not allowed through; the subscription advances to Completed, Failed, or Finalizing awaiting retry.
 
-再起動時は、一時出力と出力先の有無から配置が済んだかを判定する。
-判定の規則と、出力先の directory に届かないときに Finalizing を保って再試行する扱いは [storage.md §4.5](./storage.md#45-出力の確定と回復) に従う。
-どの場合も出力先の既存 file を上書きも削除もしない。
+At restart, whether placement happened is judged from the presence of the temporary output and the destination.
+The judgment rules, and the handling that keeps Finalizing and retries when the destination directory is unreachable, follow [storage.md §4.5](./storage.md#45-output-finalization-and-recovery).
+In no case is an existing file at the destination overwritten or deleted.
 
-### 4.3 Store が守る整合性
+### 4.3 Integrity guarded by the Store
 
-Task が進める状態遷移は、遷移前に期待する状態を条件に含めた 1 回の更新で書く。
-条件に合う行がなければ、先行する状態変更に従い、何も書かない。
-失敗の記録も同じ条件で書くため、取り消した購読や公開を Failed で上書きしない。
-block の行の登録は既存の行を上書きせず、同じ root hash を共有するほかの購読の進捗を巻き戻さない。
+The state transitions advanced by the Task are written in one update whose condition includes the expected state before the transition.
+If no matching row exists, nothing is written, following the earlier state change.
+A failure record is also written with the same condition, so a cancelled subscription or publication is not overwritten with Failed.
+Registering a block row does not overwrite an existing row and does not roll back the progress of other subscriptions sharing the same root hash.
 
-状態の条件だけでは守れない block の操作には、次の lock を使う。
+For block operations that cannot be guarded by a state condition alone, the following locks are used.
 
-| Store | 割り込まれると起きること | lock |
+| Store | What interruption causes | Lock |
 | --- | --- | --- |
-| FilePublisherStore | commit 済みと判定した後に remove が最後の参照を消すと、block のない committed file ができる。remove や sweep の削除中に同じ root hash を commit すると、新しく commit した実体が消える | mutex。commit、remove、sweep の参照確認から実体操作と metadata 更新までを直列化する。open の中の回復も同じ mutex の中で行う。符号化そのものは lock の外で行う |
-| FileSubscriberStore | remove や sweep が最後の参照を確認した後、block 実体を消す前に、同じ root hash の subscribe と block の保存が入ると、downloaded と記録した block の実体が消える | read-write lock。subscribe と block の保存は read、remove と sweep は write で取る。block の受信どうしは並行のまま、remove と sweep のあいだだけ止まる |
+| FilePublisherStore | If remove deletes the last reference after a commit is judged done, a committed file with no blocks results. If a commit runs while remove or the sweep is deleting bodies, a newly committed body gets deleted | mutex. Serializes commit, remove, and the sweep from the reference checks through the body operations and metadata updates. The recovery inside open also runs in the same mutex. Encoding itself runs outside the lock |
+| FileSubscriberStore | If a subscribe and a block save come in after remove or the sweep checks the last reference but before the block bodies are deleted, the bodies of blocks recorded as downloaded disappear | read-write lock. subscribe and block saves take read, remove and the sweep take write. Block receptions stay concurrent and only pause between remove and the sweep |
 
-購読の出力先は、進行中の購読の行に対する DB の一意制約で守る。
-Decoding から Finalizing への条件付き更新と、cancel/remove が最初に行う Canceled への条件付き更新を対にする。
-先に Finalizing が記録されれば cancel/remove は拒否し、先に Canceled が記録されれば出力配置を始めない。一時出力の削除は、この更新が確定した後に行う。
-Finalizing の DB commit の結果が不明なときは、行を読み直して状態を確かめるまで配置も一時出力の削除もしない。
-復号と file の同期書き込みの間、共有 block 用の lock を保持し続けない。
-一時出力の名前は購読 ID を含むため、遅れて終わった Task や sweep が別の購読の一時出力や出力 file を消すことはない。
+The subscription destination is guarded by a DB unique constraint over in-progress subscription rows.
+The conditional update from Decoding to Finalizing is paired with the conditional update to Canceled that cancel/remove performs first.
+If Finalizing is recorded first, cancel/remove is rejected; if Canceled is recorded first, output placement does not start. The temporary output is deleted only after this update is finalized.
+When the result of the Finalizing DB commit is unknown, placement and temporary output deletion wait until the row is re-read and the state confirmed.
+The shared-block lock is not held throughout decoding and the file's synchronous writes.
+Because the temporary output name includes the subscription ID, a late-finishing Task or sweep never deletes another subscription's temporary output or output file.
 
-2 つの storage をまたぐ書き換えの順序と、途中で終了した状態の回復は [storage.md](./storage.md#4-論理-key-と-migration) が扱う。
+The order of rewrites across the two storages and the recovery of a state that ended midway are handled by [storage.md](./storage.md#4-logical-keys-and-migration).
 
-## 5. block 交換
+## 5. Block exchange
 
-FileExchanger は、同じ root hash の block を交換する node どうしを Session でつなぐ。
-公開側と購読側は protocol の上で区別がなく、どの node も block を要求でき、保持する block を提供する。
-FileExchanger の message は RocketPack の 1 つの enum として定義し、field の構成は [file.rpf](../../daemon/rpfs/file.rpf) が正である。
+FileExchanger connects nodes that exchange blocks of the same root hash with a Session.
+On the protocol, the publisher side and the subscriber side are indistinguishable: any node can request blocks and provides the blocks it holds.
+FileExchanger's messages are defined as one RocketPack enum, and the field structure is the source of [file.rpf](../../daemon/rpfs/file.rpf).
 
-### 5.1 参加する node と広告
+### 5.1 Participating nodes and advertisement
 
-block を提供するのは、committed file を持つ公開側と、Downloading、Decoding、Finalizing、Completed のいずれかの購読を持つ購読側である。
-Canceled と Failed の購読だけが参照する root hash の block は、Store に残っていても提供しない。
+Blocks are provided by a publisher side holding committed files and a subscriber side holding a subscription in Downloading, Decoding, Finalizing, or Completed.
+The blocks of a root hash referenced only by Canceled and Failed subscriptions are not provided even if they remain in the Store.
 
-FileExchanger は、提供する root hash を NodeFinder へ push で広告し、同じ root hash を want で要求する。
-NodeFinder は want を受けた node へ所在を返すため、全 block を持つ node も want を送らなければ、取得途中の node の所在を得られない。
-購読は block を保存する前から広告の対象になる。
-したがって file の所在情報に含まれる node は、全 block を持つとは限らず、block を 1 つも持たないこともある。
+FileExchanger advertises its provided root hashes to NodeFinder by push and requests the same root hashes with want.
+NodeFinder returns the location to a node that sent a want, so even a node with all blocks must send a want to obtain the locations of nodes in the middle of fetching.
+A subscription is an advertisement target from before saving blocks.
+Therefore, the nodes in a file's location info do not necessarily hold all blocks and may not hold any block.
 
-公開側と購読側は、どちらも自分の root hash の所在へ接続する。
-公開側が得る所在には取得途中の購読側が含まれるため、NAT の内側にあって受理できない公開側も、自分から接続して block を渡せる。
+Both the publisher side and the subscriber side connect to the locations of their own root hashes.
+Because the locations the publisher gets include subscriber sides in the middle of fetching, a publisher behind a NAT that cannot accept can still connect out and hand over blocks.
 
-### 5.2 Session の確立と接続枠
+### 5.2 Session establishment and connection slots
 
-1 本の Session は 1 つの root hash に割り当て、node ID と root hash の組で一意とする。
-Session 層の用途選択の後、双方が対応 version を交換し、発信側が root hash を伝え、受理側が受理または拒否を返す。
-この交換にも §5.3 の受信期限を適用する。
-受理側は、その root hash を提供していないとき、その root hash の Session 数が上限に達しているとき、相手を除外しているとき（§5.7）に拒否する。
-同じ node と root hash の組へ双方が発信した場合は、[NodeFinder と同じ規則](./node-finder.md#重複した-session-は-node-id-が小さい側から張ったものを残す)で、node ID が小さい側から張った Session を残す。
+One Session is assigned to one root hash and is unique per pair of node ID and root hash.
+After the Session layer's use selection, the two sides exchange supported versions, the dialing side conveys the root hash, and the accepting side returns accept or reject.
+This exchange also applies the §5.3 receive deadline.
+The accepting side rejects when it does not provide that root hash, when the Session count for that root hash is at the limit, or when the peer is excluded (§5.7).
+When both sides dial the same node/root-hash pair, the Session established by the smaller node ID is kept, following [the same rule as NodeFinder](./node-finder.md#keep-the-session-established-by-the-smaller-node-id-when-duplicates-occur).
 
-接続枠は 2 段で制限する。
-取得用の発信、提供用の発信、受理のそれぞれに全体の上限を置き、さらに 1 つの root hash が使える Session 数に上限を置く。
-取得用の発信は Downloading の購読の root hash を対象にし、提供用の発信はそれ以外の提供する root hash を対象にする。
-取得用の発信の枠が足りないときは、priority の高い購読の root hash から割り当てる。
+Connection slots are limited in two stages.
+An overall limit is placed on each of fetch dialing, serve dialing, and acceptance, and a further limit on the Sessions one root hash can use.
+Fetch dialing targets the root hashes of Downloading subscriptions; serve dialing targets the other provided root hashes.
+When the fetch dialing slots are insufficient, they are allocated from the subscriptions with the higher priority.
 
-### 5.3 状態 message と Session の寿命
+### 5.3 State messages and Session lifetime
 
-各 node は Session ごとに、相手の block を欲しいかどうかと、相手を choke しているかどうかを状態 message で伝える。
-確立直後の Session では、双方が相手を choke しており、どちらも block を欲しがっていないものとして扱う。
-状態 message は、どちらかの値が変わったときと、周期ごとに送る。
+Each node tells, per Session, whether it wants the peer's blocks and whether it chokes the peer, in a status message.
+Immediately after establishment, both sides are treated as choking the peer and as not wanting the peer's blocks.
+A status message is sent when either value changes and every cycle.
 
-周期ごとの送信は生存の確認を兼ねる。
-周期の 3 倍の間どの message も受信しなかった Session は閉じる。
-choke された node は block を欲しがっていても要求を送れないため、要求と応答だけでは、unchoke を待つ Session と応答しない相手の Session を区別できない。
+The periodic send doubles as a liveness check.
+A Session that receives no message for 3 times the cycle is closed.
+A choked node cannot send requests even if it wants blocks, so requests and responses alone cannot distinguish a Session waiting for unchoke from a Session against an unresponsive peer.
 
-双方とも相手の block を欲しがらない状態が一定時間続いた Session は閉じる。
-全 block を持つ node どうしの Session が接続枠を使い続けることを防ぐためである。
-閉じた node と root hash の組は一定時間、発信の候補から外す。
-所在情報にはその node が残っているため、外さなければ閉じた直後に同じ相手へ発信し直す。
-相手からの発信は、相手が新しく block を欲しがっている場合があるため、この間も受理する。
+A Session where both sides do not want the peer's blocks for a period is closed.
+This prevents Sessions between nodes with all blocks from occupying connection slots.
+A closed node/root-hash pair is removed from the dialing candidates for a period.
+Because the location info still contains that node, without this the same peer would be redialed immediately after closing.
+Incoming dials are still accepted during this period, since the peer may have newly started wanting blocks.
 
-### 5.4 要求と応答
+### 5.4 Requests and responses
 
-要求を送れるのは、相手が自分を choke していない間だけである。
-要求は欲しい block の hash の列であり、相手は hash ごとに、保持していれば block を、保持していなければ不保持の応答を返す。
-block は 1 つの frame に 1 つだけ載せ、内容の hash を付ける。
+A request can be sent only while the peer is not choking us.
+A request is a list of hashes of wanted blocks, and the peer returns a block for each held hash and a do-not-have response for each missing one.
+A block is carried one per frame with the content hash.
 
 ```mermaid
 sequenceDiagram
-    participant A as 要求する node
-    participant B as 提供する node
+    participant A as Requesting node
+    participant B as Providing node
 
-    A->>B: 状態 message（欲しい）
-    B->>A: 状態 message（choke していない）
-    A->>B: 要求（hash 1、hash 2、hash 3）
-    B->>A: block（hash 2）
-    B->>A: 不保持の応答（hash 1）
-    B->>A: block（hash 3）
-    B->>A: 状態 message（choke している）
+    A->>B: status message (want)
+    B->>A: status message (not choking)
+    A->>B: request (hash 1, hash 2, hash 3)
+    B->>A: block (hash 2)
+    B->>A: do-not-have response (hash 1)
+    B->>A: block (hash 3)
+    B->>A: status message (choking)
 ```
 
-要求と応答は hash で対応付けるため、応答の順序は要求の順序に従わなくてよい。
+Because requests and responses are matched by hash, the response order does not have to follow the request order.
 
-保持する block を事前に知らせる手順はなく、相手が何を持つかは応答で知る。
-取得途中の node は、要求された hash がその file に属さないのか、まだ取得していないだけなのかを区別できない。
-そのため、どちらの場合も不保持の応答を返し、file に属さない hash の要求を違反として扱わない。
+There is no procedure for announcing held blocks in advance; what the peer holds is learned from responses.
+A node in the middle of fetching cannot distinguish a requested hash that does not belong to the file from one it has not fetched yet.
+In both cases it returns a do-not-have response, and requesting a hash that does not belong to the file is not treated as a violation.
 
-1 回の要求に載せる hash の数と、1 つの Session で応答を待つ要求の数には上限がある。
-応答を待つ要求がある間に、block も不保持の応答も要求期限の間届かなければ、相手を無応答とみなして Session を閉じる。
-期限を要求ごとではなく最後の応答から数えるのは、遅い回線で複数の block を順に受け取っている Session を閉じないためである。
-choke を受けた時点で応答を待つ要求はなくなるため、要求期限は choke されている間は進まない。
+There are limits on the number of hashes in one request and on the number of requests awaiting responses on one Session.
+If, while requests await responses, neither a block nor a do-not-have response arrives within the request deadline, the peer is treated as unresponsive and the Session is closed.
+Measuring the deadline from the last response instead of per request keeps a Session receiving multiple blocks in sequence on a slow connection open.
+Because a choke removes all awaiting responses at that point, the request deadline does not advance while choked.
 
-choke を伝えた node は、その相手から受けて未応答の要求を破棄し、choke している間に届いた要求を無視する。
-choke の通知と行き違いに届く要求があるため、この要求は違反として扱わない。
-choke を受けた node は、その Session で応答を待っていた要求を取り下げ、対象の block を未割り当てに戻す（§5.5）。
+A node that conveyed a choke discards unresponded requests received from that peer and ignores requests arriving while choked.
+Because requests can cross a choke notification, these requests are not treated as violations.
+A choked node retracts the requests awaiting responses on that Session and returns the target blocks to unassigned (§5.5).
 
-block の最大長は 1 MiB である。
-import は 1 MiB を超える block size を拒否し、FileExchanger の frame 上限はこの値を基準に定める（[session.md](./session.md#用途に応じた-frame-上限)）。
+The maximum block length is 1 MiB.
+import rejects a block size over 1 MiB, and FileExchanger's frame limit is based on this value (see [session.md](./session.md#frame-limits-by-use)).
 
-### 5.5 要求の割り当て
+### 5.5 Request assignment
 
-FileExchanger は root hash ごとに、どの block をどの Session へ要求しているかを 1 か所で管理する。
-Session ごとの worker は送受信だけを行い、どの block を要求するかを判断しない。
+FileExchanger manages, per root hash, which block is requested from which Session in one place.
+The per-Session workers only send and receive and do not judge which block to request.
 
-要求の対象は、Store が持つ現在の rank の未取得 block であり、同じ root hash を参照する購読の間で共有する。
-1 つの block は同時に 1 つの Session にだけ要求する。
-割り当てた block は、不保持の応答を受けたとき、choke を受けたとき、Session が閉じたとき、内容の hash が一致しなかったときに未割り当てへ戻し、別の Session へ割り当て直す。
-不保持の応答を返した相手には、同じ hash を一定時間は再び要求しない。
+Request targets are the un-fetched blocks of the current rank that the Store holds, shared between subscriptions referencing the same root hash.
+One block is requested from only one Session at a time.
+An assigned block is returned to unassigned on a do-not-have response, on a choke, when the Session closes, or when the content hash does not match, and is reassigned to another Session.
+A peer that returned a do-not-have response is not asked for the same hash again for a period.
 
-### 5.6 転送量による送信先の選択
+### 5.6 Selecting send targets by transfer volume
 
-FileExchanger は node ID ごとに、内容の hash を照合できた block の受信 byte 数と、送信した block の byte 数を memory に記録する。
-記録は Session と root hash をまたいで合算し、順位付けには直近の一定時間の受信 byte 数だけを使う。
-過去に多くの block を提供した node が、提供をやめた後も優先され続けることを防ぐためである。
+FileExchanger records, per node ID, the received bytes of blocks whose content hash matched and the sent bytes, in memory.
+The records are summed across Sessions and root hashes, and the ranking uses only the received bytes of the recent period.
+This prevents a node that provided many blocks in the past from staying prioritized after it stops providing.
 
-choke は node 単位で判定し、その node との全 Session に同じ状態を伝える。
-状態 message の周期ごとに、自分の block を欲しがっている node のうち、受信 byte 数の多い順に一定数を unchoke し、残りを choke する。
-受信 byte 数が等しい node の間では無作為に選ぶ。
-そのため、何も取得していない公開側は、欲しがっている node を無作為に unchoke する。
+Choke is judged per node, and the same state is conveyed across all Sessions with that node.
+Every status message cycle, of the nodes that want our blocks, a fixed number in descending order of received bytes are unchoked and the rest are choked.
+Among nodes with equal received bytes, the choice is random.
+Therefore, a publisher side that has not fetched anything randomly unchokes the nodes that want blocks.
 
-これとは別に、欲しがっている node から無作為に 1 つを unchoke し、一定時間ごとに選び直す。
-この枠がないと、記録のない新しい node は block を受け取れず、ほかの node へ提供する block も得られないため、unchoke される順位へ上がる手段がない。
+Separately, one node is unchoked at random from those wanting blocks and re-chosen at regular intervals.
+Without this slot, a new node with no record cannot receive blocks and has no way to climb the unchoke ranking to obtain blocks to provide to others.
 
-### 5.7 検証と違反
+### 5.7 Verification and violations
 
-受信した block は 2 段で検査する。
-FileExchanger は、block の hash がその Session で応答を待っている要求に含まれることを確かめる。
-`FileSubscriber::write_block` は、内容の hash を計算して block に付いた hash と照合し、一致した block だけを保存する。
-`write_block` は、保存した、不要だった、hash が一致しなかった、の 3 つを区別して返す。
-汚染 block を永続化しないため、照合は metadata と block 実体の書き込みより前に行う。
+A received block is checked in two stages.
+FileExchanger confirms that the block's hash is in a request awaiting a response on that Session.
+`FileSubscriber::write_block` computes the content hash and checks it against the hash carried on the block, storing only matching blocks.
+`write_block` returns, distinguishing the three outcomes: stored, unneeded, and hash mismatch.
+Because a tainted block is not persisted, the check happens before writing the metadata and block bodies.
 
-次の行為は違反であり、FileExchanger は Session を閉じて、その node ID を一定時間除外する。
+The following acts are violations, and FileExchanger closes the Session and excludes that node ID for a period.
 
-- 内容の hash が一致しない block を送る
-- 要求されていない block を送る
-- 1 回の要求の hash の数、または応答を待たせる要求の数の上限を超える
-- frame の上限を超える message を送る
+- Sending a block whose content hash does not match
+- Sending a block that was not requested
+- Exceeding the limit on the number of hashes in one request or the number of requests awaiting responses
+- Sending a message over the frame limit
 
-除外している node は発信の候補から外し、その node からの Session を受理しない。
-要求期限の超過は回線の不調と区別できないため、違反よりも短い除外にとどめる。
-除外は memory に持ち、再起動で消える。
-node ID は鍵を作り直せば変えられるため、除外は同じ node ID による繰り返しを抑えるだけであり、相手への信頼の評価は [trust-security.md](./trust-security.md#3-保証の分担と脅威) が扱う。
+An excluded node is removed from the dialing candidates, and Sessions from that node are not accepted.
+A request-deadline overrun cannot be distinguished from a flaky connection, so the exclusion is shorter than for a violation.
+The exclusion is held in memory and disappears at restart.
+Because a node ID can be changed by regenerating a key, the exclusion only curbs repetition under the same node ID; the trust evaluation of the peer is handled by [trust-security.md](./trust-security.md#3-division-of-guarantees-and-threats).
 
-### 5.8 定数と既定値
+### 5.8 Constants and defaults
 
-次の値は相手と一致している必要があり、protocol の定数とする。
+The following values must agree with the peer and are protocol constants.
 
-| 項目 | 値 |
+| Item | Value |
 | --- | --- |
-| block の最大長 | 1 MiB |
-| 1 回の要求に載せる hash の数 | 64 件以下 |
-| 1 つの Session で応答を待つ要求の数 | 16 件以下 |
-| 状態 message の周期と受信期限 | 10 秒、30 秒 |
-| 要求期限 | 60 秒 |
+| Maximum block length | 1 MiB |
+| Number of hashes in one request | 64 or fewer |
+| Requests awaiting responses on one Session | 16 or fewer |
+| Status message cycle and receive deadline | 10 s, 30 s |
+| Request deadline | 60 s |
 
-次の値は node ごとに変えてよく、表の値を既定とする。
+The following values may vary per node, with the table values as the defaults.
 
-| 項目 | 既定値 |
+| Item | Default |
 | --- | --- |
-| 受信 byte 数の順に unchoke する node の数 | 4 |
-| 無作為に unchoke する node の数と、選び直す間隔 | 1、30 秒 |
-| 順位付けに使う受信 byte 数の期間 | 10 分 |
-| 双方が欲しがらない Session を閉じるまでの時間 | 60 秒 |
-| 双方が欲しがらずに閉じた組を発信の候補から外す時間 | 10 分 |
-| 不保持の応答を返した相手へ同じ hash を再び要求するまでの時間 | 30 秒 |
-| 違反による除外と、要求期限の超過による除外 | 30 分、3 分 |
-| 1 つの root hash が使える Session 数 | 8 |
+| Nodes unchoked in order of received bytes | 4 |
+| Randomly unchoked nodes and the re-choice interval | 1, 30 s |
+| Period of received bytes used for ranking | 10 min |
+| Time until a Session neither side wants is closed | 60 s |
+| Time a mutually-unwanted closed pair stays out of the dialing candidates | 10 min |
+| Time before a do-not-have responder is asked the same hash again | 30 s |
+| Exclusion for violations and for request-deadline overruns | 30 min, 3 min |
+| Sessions one root hash can use | 8 |
 
-## 6. 設計判断
+## 6. Design decisions
 
-### 6.1 決定済み
+### 6.1 Decided
 
-探索と file 転送の分離は [design.md](../design.md#51-決定済み) が正とする。
+The separation of lookup and file transfer is the source of [design.md](../design.md#51-decided).
 
-#### MerkleLayer.rank は子 block の rank を表す
+#### MerkleLayer.rank represents the children's rank
 
-**決定**
-MerkleLayer の rank には、その layer を格納する block の rank ではなく、layer が列挙する子 block の rank を記録する。
+**Decision**
+The rank of a MerkleLayer records the rank of the child blocks the layer enumerates, not the rank of the block the layer is stored in.
 
-**理由**
-購読側は layer を復号した時点で、次に取得する block の rank をそのまま得られる。
-互換性を保つべき既存の wire data はなく、encode から decode までの round-trip test でこの意味を固定している。
+**Rationale**
+The subscribing side gets the rank of the next blocks to fetch directly when it decodes the layer.
+There is no existing wire data to keep compatible with, and this meaning is fixed by a round-trip test from encode to decode.
 
-**却下案**
-格納先 block の rank を記録する案は、修正前の encoder が採っていた意味である。
-購読側は layer を復号するたびに、格納先の rank から 1 を引いて次の rank を計算する必要があるため採らない。
+**Rejected**
+Recording the rank of the storing block was the meaning the encoder took before the fix.
+The subscribing side would need to subtract 1 from the storing rank to compute the next rank on every layer decode, so it is not taken.
 
-#### metadata と block 実体の書き換えを Store に集める
+#### Consolidate the rewrites of metadata and block bodies in the Store
 
-**決定**
-公開側と購読側の metadata と block 実体を書き換える操作は Store にだけ置き、lock は Store の内部に持つ。
-出力の作成・確定・削除と sweep も Store が行う。
-符号化・復号、確定前の取り消し、sweep と配置を再試行する loop は Task に残す。
+**Decision**
+The operations that rewrite the publisher-side and subscriber-side metadata and block bodies live only in the Store, and the locks are held inside the Store.
+Output creation, finalization, deletion, and the sweep are also the Store's.
+The loops for encoding/decoding, pre-finalization cancellation, and retrying the sweep and placement stay in the Task.
 
-**理由**
-書き換える型が複数あると、2 つの storage にまたがる書き換えを守る lock を型の間で受け渡すことになり、lock を取らない経路がそのまま競合になる。
-書き換えを 1 つの型に集めると、整合性の規則と lock の範囲を 1 か所で確かめられる。
-実行中の処理の取り消しは loop の寿命に属するため、Store ではなく Task が持つ。
+**Rationale**
+With multiple mutating types, a lock guarding rewrites across the two storages would be passed between types, and any path that skips the lock becomes a race.
+Consolidating the rewrites in one type lets the integrity rules and lock ranges be checked in one place.
+Cancelling an in-progress operation belongs to the loop's lifetime, so the Task, not the Store, holds it.
 
-**却下案**
-lock を Task に置き、入口の操作を Task に委譲する案は、購読側では subscribe と block の保存まで Task に寄せることになり、Task が処理の制御と保存の整合性の両方を持つ。
-すべての操作を Task の loop で直列化して lock をなくす案は、大きな file を符号化または復号しているあいだ、block の受信と remove が止まるため採らない。
+**Rejected**
+A design that puts the lock in the Task and delegates entry operations to it moves subscribe and block saves, on the subscriber side, into the Task, so the Task holds both the control of processing and the integrity of persistence.
+A design that serializes all operations on the Task loop to remove locks stops block reception and remove while a large file is being encoded or decoded, so it is not taken.
 
-#### Task の状態遷移を期待する状態の条件付き更新で書く
+#### Write Task state transitions with conditional updates on the expected state
 
-**決定**
-Task が進める状態遷移と失敗の記録は、期待する状態を条件にした更新で書き、条件に合う行がなければ何も書かない。
+**Decision**
+The state transitions and failure records advanced by the Task are written as updates conditioned on the expected state, and when no row matches, nothing is written.
 
-**理由**
-cancel と remove は Task の処理と並行して呼ばれる。
-行全体を書き戻す upsert では、割り込まれた後に古い内容で状態を戻し、消した行を作り直す。
-条件付き更新は判定と書き込みを SQLite の 1 文で行うため、確認と書き込みのあいだに割り込みの余地がない。
+**Rationale**
+cancel and remove are called in parallel with the Task's processing.
+An upsert writing back the whole row would, after an interruption, restore the state with stale content and recreate a deleted row.
+A conditional update performs the judgment and the write in one SQLite statement, leaving no room for interruption between the check and the write.
 
-**却下案**
-書き込みの直前に処理の取り消しを確認する案は、確認と書き込みのあいだの割り込みを防げず、取り消しの対象にならない block の保存も守れない。
-file ごとの lock で直列化する案は、lock の表を管理する必要があり、cancel が長い復号の終わりを待つ。
+**Rejected**
+Checking for cancellation immediately before the write cannot prevent an interruption between the check and the write and does not protect saves of blocks that are not cancellation targets.
+Serializing with a per-file lock requires managing a lock table, and cancel waits for the end of a long decode.
 
-#### 購読の cancel と remove を分ける
+#### Separate subscription cancel and remove
 
-**決定**
-cancel は取得中または復号中の購読を Canceled にして行と block を残す。
-remove は Finalizing 以外の行を消して、参照がなくなった block を消す。
-確定中はどちらも拒否し、出力 file は削除対象にしない。
+**Decision**
+cancel turns a subscription that is fetching or decoding into Canceled, keeping the row and blocks.
+remove deletes rows other than Finalizing and deletes blocks that have lost their references.
+Both are rejected during finalization, and output files are not deletion targets.
 
-**理由**
-取り消した購読を記録として残しつつ、Completed と Failed を含むすべての行を消す手段を持つためである。
-block を消す経路を remove の 1 つに限ると、解放の条件を 1 か所で確かめられる。
+**Rationale**
+To keep a cancelled subscription as a record while still having a way to delete every row including Completed and Failed.
+Limiting the block-deletion paths to the single remove lets the release conditions be checked in one place.
 
-**却下案**
-cancel で行まで消す案は、取り消した記録が残らない。
-進行中の購読がなくなった時点で block を解放する案は、cancel、完了、失敗の各経路に解放を書くことになる。
+**Rejected**
+Having cancel delete the rows leaves no record of the cancellation.
+Releasing blocks as soon as no in-progress subscription remains requires writing the release into each of the cancel, completion, and failure paths.
 
-#### 公開側の uncommitted file を commit と cancel で消す
+#### Delete uncommitted files of the publisher side on commit and cancel
 
-**決定**
-commit した uncommitted file と cancel した uncommitted file の行は消し、Failed の行だけを残す。
-公開側の remove は committed file を対象にし、公開をやめる操作だけを指す。
+**Decision**
+The rows of committed and cancelled uncommitted files are deleted, and only the Failed row remains.
+The publisher-side remove targets committed files and refers only to the operation of stopping the publication.
 
-**理由**
-公開の記録は committed file が持つため、commit 後の uncommitted file に残す情報はない。
-uncommitted file は path と file 名の組で一意なので、行を残すと同じ file を再び import できなくなる。
-Failed の行は失敗の理由を見せるために残し、再 import で新しい一時 ID の行に置き換える。
+**Rationale**
+Because the committed file carries the publication record, there is nothing left on an uncommitted file after the commit.
+An uncommitted file is unique per path and file name, so keeping the row would block re-importing the same file.
+Failed rows remain to show the reason for the failure and are replaced by a new-temporary-ID row on re-import.
 
-**却下案**
-commit 後も Completed で残す案は、再 import の前に行を消す操作が別に必要になる。
-uncommitted file を消す remove を別に持つ案は、公開側の削除操作が 2 種類になり、公開をやめる操作と区別しにくい。
+**Rejected**
+Keeping a committed file as Completed requires a separate row deletion before re-import.
+Having a separate remove for uncommitted files creates two kinds of deletion operations on the publisher side and is hard to distinguish from stopping a publication.
 
-#### 同じ root hash の購読を重複して許す
+#### Allow duplicate subscriptions to the same root hash
 
-**決定**
-同じ root hash を複数の購読が参照してよい。
-block の行と実体は root hash ごとに共有する。
+**Decision**
+Multiple subscriptions may reference the same root hash.
+Block rows and bodies are shared per root hash.
 
-**理由**
-同じ内容を別の path へ書き出す用途を残すためである。
-block を共有すると、先に揃った block を後の購読が受信せずに使える。
+**Rationale**
+To keep the use of writing the same content to different paths.
+Sharing blocks lets a later subscription use the blocks that came together earlier without receiving them.
 
-**却下案**
-進行中の購読がある root hash の subscribe を拒否する案は、block を保存したときに更新する購読が 1 つに決まるが、同じ内容を複数の path へ同時に書き出せない。
+**Rejected**
+Rejecting a subscribe to a root hash with an in-progress subscription fixes the subscriptions a block save updates to one, but the same content cannot be written to multiple paths at the same time.
 
-#### remove で block 実体をその場で消す
+#### Delete block bodies in place on remove
 
-**決定**
-remove は metadata から最後の参照を消した後、同じ lock の中で block 実体を消す。
-実体の削除に失敗した場合は、参照のない block として sweep が回収する。
+**Decision**
+remove deletes the last reference from the metadata and then, in the same lock, deletes the block bodies.
+When body deletion fails, the sweep reclaims the blocks as unreferenced.
 
-**理由**
-消した購読や公開の容量を、再起動を待たずに解放するためである。
+**Rationale**
+To release the capacity of a deleted subscription or publication without waiting for a restart.
 
-**却下案**
-remove は metadata だけを消し、block 実体を起動時の回復だけで回収する案は、§4.3 の lock が不要になるが、容量が次の起動まで解放されない。
+**Rejected**
+A design where remove deletes only metadata and reclaims block bodies only at startup recovery removes the need for the §4.3 lock, but the capacity is not released until the next startup.
 
-#### 出力を上書きせず、確定中は取り消さない
+#### Do not overwrite outputs, and do not cancel during finalization
 
-**決定**
-既存出力と進行中の同一出力先を拒否し、一時出力の復号が終わった後に Finalizing を記録する。
-上書きしない配置、配置の永続化、Completed の記録が終わるまで cancel/remove を拒否する。
+**Decision**
+Existing outputs and another in-progress subscription to the same destination are rejected, and Finalizing is recorded after the temporary output's decode finishes.
+cancel/remove are rejected until the non-overwriting placement, the placement persistence, and the Completed record finish.
 
-**理由**
-利用者の既存 file と完成済み出力を守りながら、filesystem と DB の確定の間で終了した購読を回復するためである。
-確定中に行を消さないことで、再起動後に一時出力の名前と出力先を行から求められる。
+**Rationale**
+To protect a user's existing files and completed outputs while recovering a subscription that ended between the filesystem and DB finalization.
+Not deleting the row during finalization lets the temporary output name and destination be derived from the row after a restart.
 
-**却下案**
-出力先へ直接復号する案は、中断時に既存 file と途中出力を区別して保護できない。
-確定中の remove を待たせる案は、応答時間が file と DB の同期書き込みに依存するため採らない。
+**Rejected**
+Decoding directly into the destination cannot distinguish and protect existing files from partial outputs on interruption.
+Making remove wait during finalization makes the response time depend on the file and DB synchronous writes, so it is not taken.
 
-#### 再 import に新しい一時 ID を使う
+#### Use a new temporary ID for re-import
 
-**決定**
-Failed の file の再 import は、Failed の行を新しい一時 ID の行に置き換える。
-失敗した試行の block は、回収の完了を待たずに sweep に任せる。
+**Decision**
+Re-importing a Failed file replaces the Failed row with a row of a new temporary ID.
+The blocks of the failed attempt are left to the sweep without waiting for reclamation.
 
-**理由**
-回収対象の一時 ID が新しい試行と重ならないため、遅れて走る回収が新しい符号化の block を消すことがない。
-回収の記録や再 import の拒否を持たずに済む。
+**Rationale**
+Because the temporary ID of a reclamation target never overlaps a new attempt's, a late-running reclamation never deletes a new encoding's blocks.
+No reclamation record or re-import rejection is needed.
 
-**却下案**
-Failed の行と一時 ID を Pending に戻して使い回す案は、古い試行の block の回収が新しい試行と競合するため、回収の完了まで再 import を拒否する仕組みが要る。
+**Rejected**
+Reusing the Failed row and temporary ID by returning it to Pending makes the reclamation of the old attempt's blocks race the new attempt, requiring a mechanism to reject re-import until reclamation finishes.
 
-#### 取得途中の購読も block を提供する
+#### Subscriptions in the middle of fetching also provide blocks
 
-**決定**
-公開側に加えて、Downloading、Decoding、Finalizing、Completed のいずれかの購読を持つ node が block を提供する。
-Canceled と Failed の購読だけが参照する root hash の block は提供しない。
+**Decision**
+In addition to the publisher side, a node with a subscription in any of Downloading, Decoding, Finalizing, and Completed provides blocks.
+The blocks of a root hash referenced only by Canceled and Failed subscriptions are not provided.
 
-**理由**
-取得する node が増えるほど提供元が増え、公開側が停止した file も、block を持つ node が残っていれば取得を続けられる。
-購読側の Store は remove まで block を残すため、提供のための保存を追加せずに済む。
-代償として、相手が全 block を持つことを仮定できず、不保持の応答と再要求の規則が要る（§5.4、§5.5）。
-cancel は利用者がその file の取得をやめる操作なので、提供と広告も止める。
-完了した購読の提供をやめる手段は remove である。
+**Rationale**
+The more nodes that fetch, the more providers exist, and a file whose publisher stopped can keep being fetched as long as a node holding blocks remains.
+Because the subscriber-side Store keeps blocks until remove, no extra storage is needed for providing.
+The cost is that the peer cannot be assumed to hold all blocks, and do-not-have responses and re-request rules are needed (§5.4, §5.5).
+cancel is the operation of the user stopping the fetch, so it also stops providing and advertising.
+The way to stop providing for a completed subscription is remove.
 
-**却下案**
-公開側だけが提供する案は protocol が最も単純だが、提供元が import した node に限られる。
-完了した購読だけを加える案は、提供する node が常に全 block を持つため保持状況を伝える手順が要らないが、同時に取得している node の間で block を渡せない。
-Canceled と Failed を含め、行がある限り提供する案は、cancel しても送信と広告が続き、止める手段が remove だけになる。
-Completed になった時点で提供をやめる案は、全 block を持つ提供元が完了と同時に減る。
+**Rejected**
+A design where only the publisher side provides is the simplest, but the providers are limited to the importing node.
+Adding only completed subscriptions always has providers holding all blocks, so no hold-state procedure is needed, but blocks cannot be passed between nodes fetching at the same time.
+Providing as long as a row exists, including Canceled and Failed, keeps sending and advertising after cancel and makes remove the only way to stop.
+Stopping the provision at Completed reduces all-block providers exactly when they are completed.
 
-#### 購読は開始時から所在として広告する
+#### Subscriptions are advertised as locations from the start
 
-**決定**
-block を提供する購読（§5.1）は、block を保存する前の開始時から root hash を push で広告する。
-公開側と購読側は、どちらも自分の root hash を want で要求し、得た所在へ接続する。
-NodeFinder の want には要求元の NodeProfile を載せない。
+**Decision**
+The subscriptions that provide blocks (§5.1) advertise the root hash by push from the start, before saving any block.
+Both the publisher side and the subscriber side request their own root hashes by want and connect to the obtained locations.
+NodeFinder's want does not carry the requester's NodeProfile.
 
-**理由**
-NAT の内側にあって受理できない公開側は、自分から接続しなければ block を渡せない。
-取得する node が所在として広告していれば、公開側は自分の root hash を want で要求するだけで取得する node を見つけられ、NodeFinder の wire と保存形式を変えずに済む。
-block を保存してから広告する方式では、そのような公開側しかいない file を最初に取得する node は、公開側から見つけられず、自分からも接続できない。
-代償として、所在情報は block を持たない node を含み、購読する node の到達先が所在情報を中継する node に知られる。
-全 block を持つ node も want を送るため、want の件数は提供する root hash の数だけ増える。
+**Rationale**
+A publisher side behind a NAT that cannot accept must connect on its own to hand over blocks.
+If a fetching node advertises itself as a location, the publisher side only needs to request its own root hash with want to find the fetching node, without changing NodeFinder's wire or storage format.
+With an advertise-after-saving scheme, the first node to fetch a file that only such a publisher side serves cannot be found by the publisher side and cannot connect on its own.
+The costs are that location info includes nodes holding no blocks, and that the reachable addresses of subscribing nodes are known to the nodes relaying the location info.
+Because a node with all blocks also sends wants, the want count grows with the number of provided root hashes.
 
-**却下案**
-want に要求元の NodeProfile を載せ、NodeFinder が要求する node も返す案は、所在と要求を区別したまま公開側から接続できるが、NodeFinder の wire と保存形式が変わり、want の message が大きくなる。
-公開側は接続を始めず受理だけにする案は NodeFinder も広告の意味も変わらないが、NAT の内側で UPnP を使えない公開側の file を取得できない。
+**Rejected**
+Carrying the requester's NodeProfile in want and having NodeFinder return the requesting node keeps locations and requests distinguished while letting the publisher side connect, but changes NodeFinder's wire and storage format and grows the want message.
+A design where the publisher side only accepts and never dials changes neither NodeFinder nor the advertisement meaning, but a file served only by a publisher side behind a NAT without UPnP cannot be fetched.
 
-#### 1 Session を 1 root hash に割り当てる
+#### Assign one Session to one root hash
 
-**決定**
-FileExchanger の Session は 1 つの root hash だけを扱い、node ID と root hash の組で一意とする。
-同じ node 対が複数の file を交換するときは、file ごとに Session を張る。
+**Decision**
+FileExchanger's Session handles only one root hash and is unique per node ID and root hash pair.
+When a node pair exchanges multiple files, a Session is established per file.
 
-**理由**
-応答を待つ要求と、block を欲しいかどうかの状態が 1 つの file に閉じ、message に root hash を付けずに済む。
-root hash ごとの Session 数の上限と、欲しがらなくなった Session を閉じる規則を、Session の本数としてそのまま数えられる。
-代償として、同じ node 対に file の数だけ Session と secure channel の handshake が必要になる。
+**Rationale**
+The requests awaiting responses and the want state close within one file, and the message does not need a root hash.
+The per-root-hash Session count limit and the rule for closing Sessions that are no longer wanted can be counted directly as Session counts.
+The cost is one Session and secure-channel handshake per file for the same node pair.
 
-**却下案**
-node 対に 1 本の Session で複数の root hash を扱う案は、handshake と接続枠を node 対で 1 回に抑えられるが、各 message に root hash を付け、どの root hash を双方が扱うかを Session の中で伝え合う手順が要る。
+**Rejected**
+Handling multiple root hashes in one Session per node pair keeps the handshake and connection slots at one per node pair, but requires each message to carry the root hash and a procedure for conveying which root hashes both sides handle inside the Session.
 
-#### 保持する block を要求への応答で伝える
+#### Convey held blocks in responses to requests
 
-**決定**
-保持する block を事前に知らせず、要求された hash ごとに block か不保持の応答を返す。
+**Decision**
+Held blocks are not announced in advance; each requested hash gets a block or a do-not-have response.
 
-**理由**
-相手ごとの保持状況を持たずに済み、要求した hash と受信した block の対応をそのまま検査に使える。
-購読側は上位の rank を復号するまで下位の block の hash を知らないため、hash を指定する要求は取得の進み方と合う。
-代償として、取得の進み具合が近い相手への要求は、不保持の応答が増える。
+**Rationale**
+No per-peer hold state is needed, and the correspondence between a requested hash and the received block can be used as the check as-is.
+Because a subscriber does not know the hashes of lower blocks until the higher rank is decoded, hash-specified requests match how fetching progresses.
+The cost is more do-not-have responses to peers at a similar fetch stage.
 
-**却下案**
-現在の rank と、その rank の index の bitmap を互いに知らせる案は、相手が持つ block だけを要求でき、持つ node の少ない block を先に取得する選択もできるが、Session ごとに相手の bitmap と差分の message を管理する必要がある。
-保持しているかどうかを先に hash で問い合わせる案は、往復が 1 回増える。
+**Rejected**
+A design where both sides convey the current rank and a bitmap of that rank's indexes can request only the blocks the peer holds and can first fetch blocks held by few nodes, but requires managing per-Session bitmaps and diff messages.
+First querying by hash whether a block is held adds one round trip.
 
-#### block を即時の要求と応答で 1 frame に 1 つ送る
+#### Send blocks one per frame in immediate request-response
 
-**決定**
-要求は block が必要になった時点で送り、相手は保持する block を 1 つの frame に 1 つずつ返す。
-流量は、1 つの Session で応答を待つ要求の数の上限で制御する。
+**Decision**
+A request is sent at the moment a block is needed, and the peer returns one held block per frame.
+The flow is controlled by the limit on requests awaiting responses on one Session.
 
-**理由**
-転送速度が送信の周期で制限されず、frame の上限を block の最大長まで下げられる。
+**Rationale**
+The transfer speed is not limited by a send cycle, and the frame limit can be lowered to the maximum block length.
 
-**却下案**
-NodeFinder と同じく、周期ごとに要求と block を 1 つの message にまとめて送る案は、受信期限を周期から導けるが、転送速度が周期と 1 message の block 数で決まり、frame が大きくなる。
+**Rejected**
+Like NodeFinder, batching requests and blocks into one message per cycle lets the receive deadline be derived from the cycle, but the transfer speed is determined by the cycle and the blocks per message, and the frames grow.
 
-#### block の最大長を 1 MiB にする
+#### Set the maximum block length to 1 MiB
 
-**決定**
-import は 1 MiB を超える block size を拒否する。
-FileExchanger の frame 上限は、1 MiB に block の message の hash と tag の分を加えた値とする。
+**Decision**
+import rejects a block size over 1 MiB.
+FileExchanger's frame limit is 1 MiB plus the hash and tag carried in the block message.
 
-**理由**
-block は、受信側が 1 frame 分を memory に載せて hash を計算する単位であり、hash が一致しなかったときに捨てる転送量の単位でもある。
-上限が小さいほど、Session ごとの受信 buffer と、不正な block 1 件で失う転送量が小さく、複数の相手へ要求を細かく分けられる。
-代償として block の数と metadata の行数が増え、1 TiB の file では rank 0 の block が約 100 万件になる。
+**Rationale**
+A block is the unit a receiver loads into memory for one frame and computes the hash of, and the unit of transfer discarded when the hash does not match.
+The smaller the limit, the smaller the per-Session receive buffer and the transfer lost to one bad block, and the more finely requests can be split across peers.
+The cost is more blocks and metadata rows; a 1 TiB file has about a million rank 0 blocks.
 
-**却下案**
-上限を 4 MiB にする案は block の数と要求の往復が減るが、受信 buffer と不正な block の損失が 4 倍になる。
-frame の上限を 64 MiB のままにして block size の上限だけをそろえる案は、認証済みの相手の Session 1 本ごとに 64 MiB の受信 buffer を許す。
+**Rejected**
+A 4 MiB limit reduces the number of blocks and request round trips, but quadruples the receive buffer and the loss per bad block.
+Keeping the 64 MiB frame limit and aligning only the block-size limit allows a 64 MiB receive buffer per Session of an authenticated peer.
 
-#### 内容の hash を Store の入口で照合する
+#### Check the content hash at the Store entry
 
-**決定**
-`FileSubscriber::write_block` は保存の前に内容の hash を照合し、保存した、不要だった、hash が一致しなかった、の 3 つを区別して返す。
-FileExchanger は不一致を受けて Session を閉じる。
-受信した block が要求したものかどうかは、FileExchanger が検査する。
+**Decision**
+`FileSubscriber::write_block` checks the content hash before saving and returns, distinguishing stored, unneeded, and hash mismatch.
+FileExchanger closes the Session on a mismatch.
+Whether a received block was requested is checked by FileExchanger.
 
-**理由**
-block を保存する経路が増えても、照合を通らない保存が生じない。
-「内容の hash の検証は書き込みより前に行う」という規則を、Store の入口の 1 か所で確かめられる。
+**Rationale**
+No matter how many paths save a block, a save that bypasses the check cannot arise.
+The rule "content hash verification happens before the write" can be confirmed at the Store entry in one place.
 
-**却下案**
-FileExchanger が受信の直後に照合し、一致した block だけを `write_block` へ渡す案は、`write_block` の戻り値を変えずに済むが、`write_block` を呼ぶ経路が増えるたびに照合を書き足す必要があり、未検証の block を保存できる入口が残る。
+**Rejected**
+A design where FileExchanger checks right after reception and hands only matching blocks to `write_block` keeps the return value unchanged, but every new path calling `write_block` must add the check, leaving entries that can save unverified blocks.
 
-#### 要求の割り当てを root hash ごとに 1 か所で判断する
+#### Decide request assignment in one place per root hash
 
-**決定**
-FileExchanger は root hash ごとに block の割り当てを 1 か所で管理し、1 つの block を同時に 1 つの Session にだけ要求する。
+**Decision**
+FileExchanger manages block assignment per root hash in one place and requests one block from only one Session at a time.
 
-**理由**
-1 つの root hash に相手の数だけ Session が並ぶため、Session ごとに block を選ぶと、同じ block を複数の相手から最大 1 MiB ずつ重複して受け取る。
-判断を 1 か所に集め、送受信を Session ごとの worker に任せる分割は、[NodeFinder](./node-finder.md#4-判断と通信の分離) と同じである。
+**Rationale**
+Because one root hash has as many Sessions as peers, choosing blocks per Session would receive the same block, up to 1 MiB each, in duplicate from multiple peers.
+Consolidating the decision and leaving send/receive to per-Session workers is the same split as [NodeFinder](./node-finder.md#4-separation-of-decision-and-communication).
 
-**却下案**
-Session ごとの worker が未取得の block から無作為に選ぶ案は、共有する状態を持たないが、相手が増えるほど重複した受信が増え、残りの block が少ない終盤で特に多くなる。
+**Rejected**
+Per-Session workers randomly choosing from un-fetched blocks share no state, but the duplicate reception grows as peers grow and is especially large in the late stage when few blocks remain.
 
-#### 接続枠を全体と root hash ごとの 2 段で制限する
+#### Limit connection slots in two stages, overall and per root hash
 
-**決定**
-取得用の発信、提供用の発信、受理のそれぞれに全体の上限を置き、1 つの root hash が使える Session 数にも上限を置く。
-取得用の発信の枠が足りないときは、priority の高い購読から割り当てる。
+**Decision**
+An overall limit is placed on each of fetch dialing, serve dialing, and acceptance, and a limit on the Sessions one root hash can use.
+When the fetch dialing slots are insufficient, they are allocated from higher-priority subscriptions.
 
-**理由**
-Session は node と root hash の組ごとに張るため、全体の上限だけでは、1 つの file が枠を使い切ってほかの file の取得が進まない。
-root hash ごとの上限だけでは、Session の総数が公開と購読の file 数に比例して増える。
+**Rationale**
+Because Sessions are established per node/root-hash pair, an overall limit alone lets one file consume all slots and stall other files' fetches.
+A per-root-hash limit alone makes the total Session count grow with the number of published and subscribed files.
 
-**却下案**
-全体の上限だけを持ち、接続する root hash を無作為に選ぶ案は、file の間の偏りを制御できず、priority も反映しない。
+**Rejected**
+Holding only an overall limit and randomly choosing the root hash to connect cannot control bias between files and does not reflect priority.
 
-#### 違反した node を一定時間除外する
+#### Exclude violating nodes for a period
 
-**決定**
-§5.7 の違反をした node ID を memory に記録し、一定時間は発信の候補から外して、その node からの Session を受理しない。
+**Decision**
+The node IDs that committed the §5.7 violations are recorded in memory, removed from the dialing candidates for a period, and Sessions from those nodes are not accepted.
 
-**理由**
-Session を閉じるだけでは、同じ node がすぐに接続し直して、不正な block の送信を繰り返せる。
-除外を memory に持つのは、解除の手段と保存形式を持たずに済ませるためである。
+**Rationale**
+Closing the Session alone lets the same node reconnect immediately and keep sending bad blocks.
+Holding the exclusion in memory avoids a release mechanism and a storage format.
 
-**却下案**
-Session を閉じるだけにする案は状態が増えないが、相手からの再接続をそのまま受理するため、不正な block を送る node が受理の枠を使い続けられる。
-違反した node ID を DB に保存して再起動後も除外する案は、解除の手段と保存形式が要り、信頼の評価を担う Web of Trust（[trust-security.md](./trust-security.md#web-of-trust-の単位と伝播)）と役割が重なる。
+**Rejected**
+Only closing the Session adds no state but accepts the peer's reconnection as-is, letting a bad-block node keep consuming accept slots.
+Persisting excluded node IDs to the DB to keep the exclusion across restarts requires a release mechanism and storage format and overlaps the role of the Web of Trust's trust evaluation ([trust-security.md](./trust-security.md#unit-and-propagation-of-web-of-trust)).
 
-#### 転送量を node ID ごとに記録し、choke で送信先を絞る
+#### Record transfer volume per node ID and narrow send targets with choke
 
-**決定**
-FileExchanger は node ID ごとに受信 byte 数と送信 byte 数を memory に記録し、受信 byte 数の多い node を優先して unchoke する。
-choke している node からの要求には応じない。
+**Decision**
+FileExchanger records received and sent bytes per node ID in memory and unchokes the nodes with more received bytes first.
+Requests from choked nodes are not served.
 
-**理由**
-取得途中の node も提供するため、参加するすべての node が送信の帯域を使う。
-block を提供する node を優先すると、取得だけして提供しない node は block を受け取りにくくなる。
-choke を相手に伝えると、相手は応答されない要求を送らずに済み、その block をほかの Session へ割り当てられる。
-記録を node ID ごとにするのは、Session が root hash ごとに分かれ、欲しがらなくなると閉じるためである。
-A が file X を B へ渡し、B が file Y を A へ渡す関係は、Session ごとの記録では互いに一方的な転送に見え、Session を閉じるたびに記録も消える。
+**Rationale**
+Because a node in the middle of fetching also provides, every participating node uses the send bandwidth.
+Prioritizing block providers makes fetch-only non-providing nodes receive fewer blocks.
+Conveying a choke lets the peer skip sending unserved requests and assign those blocks to other Sessions.
+Recording per node ID is because Sessions split per root hash and close when no longer wanted.
+A relationship where A hands file X to B and B hands file Y to A looks like one-way transfer in per-Session records, and the record disappears every time a Session closes.
 
-**却下案**
-要求に無条件で応じる案は実装が最も小さいが、提供しない node を区別しない。
-全 Session の未応答の要求を 1 つの queue に集め、同時に送る block の数を制限して受信 byte 数の順に送る案は、状態の通知が要らないが、後回しにした要求ごとに「今は送れない」と返す必要があり、要求側は送ってみるまで応じてもらえるかを知らない。
-Session ごとの応答を待つ要求の数の上限を受信 byte 数に応じて変える案は、node の間の差が小さく、全体の送信量が相手の数に比例して増える。
-記録を DB に保存して再起動後も引き継ぐ案は、保存形式、件数の上限、回収の規則が要り、Web of Trust と役割が重なる。
+**Rejected**
+Serving requests unconditionally is the smallest implementation, but does not distinguish non-providing nodes.
+A design that gathers all Sessions' unserved requests into one queue, limits the blocks sent at once, and sends in order of received bytes needs no state notification, but must answer each deferred request with "cannot send now", and the requester does not know whether it will be served until it tries.
+Varying the per-Session awaiting-response limit with the received bytes leaves little difference between nodes, and the total send volume grows with the number of peers.
+Persisting the record to the DB to carry it across restarts requires a storage format, count limits, and reclamation rules, and overlaps the Web of Trust.
 
-#### 状態 message の周期送信で生存を判定する
+#### Judge liveness from periodic status message sends
 
-**決定**
-各 node は、block を欲しいかどうかと choke しているかどうかを 1 つの状態 message にまとめ、値が変わったときと周期ごとに送る。
-周期の 3 倍の間 message を受信しない Session は閉じる。
+**Decision**
+Each node combines whether it wants blocks and whether it chokes the peer into one status message and sends it on the value changing and every cycle.
+A Session receiving no message for 3 times the cycle is closed.
 
-**理由**
-choke された node は要求を送れず、通信が止まる。
-通信が流れているかどうかだけで不要な Session を判定すると、unchoke を待っている Session を閉じてしまう。
-周期ごとに送る約束を置けば、NodeFinder と同じく周期から受信期限を導ける。
-欲しいかどうかを伝えることで、unchoke の候補を block を欲しがっている node に限れる。
+**Rationale**
+A choked node cannot send requests, so communication stops.
+Judging unnecessary Sessions only by whether traffic flows would close a Session waiting for unchoke.
+With a send-every-cycle promise, the receive deadline can be derived from the cycle as with NodeFinder.
+Conveying want limits the unchoke candidates to the nodes that want blocks.
 
-**却下案**
-状態を値が変わったときだけ送り、choke されたまま一定時間が過ぎた Session を要求側が閉じる案は、message が少ないが、待てば unchoke される相手との Session を閉じることになり、応答しない相手と待たせているだけの相手を区別できない。
+**Rejected**
+Sending status only when the value changes and letting the requester close a Session that stays choked past a period sends fewer messages, but closes a Session against a peer that would unchoke if waited on, and cannot distinguish an unresponsive peer from one merely making it wait.
 
-### 6.2 保留
+### 6.2 Deferred
 
-#### 送信の帯域の上限
+#### Send bandwidth limit
 
-**現状**
-FileExchanger は、unchoke する node の数と、Session ごとの応答を待つ要求の数で送信を制限する。
-送信の速度そのものには上限を置かない。
+**Current state**
+FileExchanger limits sending by the number of unchoked nodes and the per-Session awaiting-response request count.
+There is no limit on the send speed itself.
 
-候補は次の 2 つである。
+The candidates are the following two.
 
-1. FileExchanger 全体の送信の速度に上限を置くと、利用者が回線の占有を抑えられるが、遅らせた応答が相手の要求期限を超えないようにする規則が要る。
-2. 上限を置かず unchoke する node の数だけで調整すると仕組みは増えないが、回線の速度に対する割合を指定できない。
+1. A limit on FileExchanger's overall send speed lets the user curb line occupation, but requires rules so a delayed response does not exceed the peer's request deadline.
+2. Limiting nothing and adjusting only the number of unchoked nodes adds no mechanism, but the ratio to the line speed cannot be specified.
 
-**なぜ今決めないか**
-転送の設定を受け取る REST API がなく、実際の回線での送信量を測定していないためである。
+**Why not decided yet**
+Because there is no REST API that receives transfer settings, and the actual send volume on a real line is not measured.
 
-**決める条件**
-公開と購読の REST API に転送の設定を加えるとき、または複数 node の結合試験で送信が回線を占有することを確認したときに決める。
+**Decision condition**
+Decide when adding transfer settings to the publish and subscribe REST API, or when a multi-node integration test confirms the sends occupy the line.
 
-## 7. 現状と残作業
+## 7. Current status and remaining work
 
-FilePublisher は file の取り込み、block 化、MerkleLayer の生成、root hash の確定、commit、committed block の読み出しを行う。
-FileSubscriber は購読の開始、block の保存、rank ごとの復号を行い、公開から復号までを engine 内の round-trip test で確認している。
-`FileSubscriber::write_block` は受け取った block の hash を照合せず、保存の結果も呼び出し元へ返さない。
+FilePublisher ingests a file, block-izes it, generates MerkleLayers, finalizes the root hash, commits, and reads out committed blocks.
+FileSubscriber starts a subscription, saves blocks, and decodes per rank, confirmed from publishing to decoding by engine-internal round-trip tests.
+`FileSubscriber::write_block` does not check the received block's hash and does not return the save result to the caller.
 
-公開側と購読側は §2 の 3 層に分かれ、metadata と block 実体の書き換えを Store に集めている。
-Task の状態遷移と失敗の記録は期待する状態を条件に更新し、Store 内の lock で commit、remove、subscribe、block の保存の競合を制御する。
-Task は子 CancellationToken で実行中の処理を取り消し、shutdown は worker の終了を待つ。
+The publisher and subscriber sides are split into the §2 three layers, and the metadata and block-body rewrites are consolidated in the Store.
+Task state transitions and failure records are updated with a condition on the expected state, and the Store-internal locks control races between commit, remove, subscribe, and block saves.
+The Task cancels in-progress processing with a child CancellationToken, and shutdown waits for the workers.
 
-入口には cancel と remove がある。
-公開側は commit と cancel で uncommitted file を消す。
-Failed の同じ path と file 名への import は、SQLite の 1 transaction で古い行を消し、新しい一時 ID の Pending の行を作る。
-古い試行の block の回収が遅れても、新しい試行の block を消さない。
-購読側は同じ root hash の購読を許し、共有 block の進捗をすべての Downloading の購読へ反映する。
-取得済みの block が揃っていれば受信を待たずに次の layer を復号し、相手を探す root hash は Downloading のものだけを返す。
-Completed の出力 file は remove でも残す。
+The entry points have cancel and remove.
+The publisher side deletes uncommitted files on commit and cancel.
+Importing to the same path and file name of a Failed file deletes the old row and creates a Pending row of a new temporary ID in one SQLite transaction.
+Even if the reclamation of the old attempt's blocks is delayed, the new attempt's blocks are not deleted.
+The subscriber side allows subscriptions to the same root hash and reflects shared-block progress into all Downloading subscriptions.
+When the fetched blocks are complete, the next layer is decoded without waiting for reception, and only Downloading root hashes are returned as the peers to look up.
+A completed output file survives remove.
 
-§4.2 の出力先予約と、file、directory、symlink を含む既存 entry の登録時の拒否を実装している。
-rank 0 は Store が作成した一時出力だけへ復号し、file の同期、Finalizing の記録、置換しない配置、配置の同期、Completed の記録を順に行う。
-Finalizing の回復と、確定中の cancel/remove の拒否を実装している。
-公開側は §2 の稼働中の sweep を行い、失敗した回収を TaskEncoder が間隔を延ばしながら再試行する。
-購読側も、参照のない root の block と、Canceled と Failed の一時出力を sweep で回収する。
-TaskDecoder は Finalizing の配置と sweep の失敗を、間隔を延ばしながら再試行する。
-永続化の残作業は [storage.md §6](./storage.md#6-現状と残作業) に集約する。
+The §4.2 output reservation and the registration-time rejection of existing entries, including files, directories, and symlinks, are implemented.
+Rank 0 is decoded only into the temporary output the Store created, and the file sync, Finalizing record, non-replacing placement, placement sync, and Completed record run in order.
+Finalizing recovery and the rejection of cancel/remove during finalization are implemented.
+The publisher side runs the §2 runtime sweep, and TaskEncoder retries a failed reclamation with increasing intervals.
+The subscriber side also reclaims unreferenced-root blocks and the temporary outputs of Canceled and Failed with the sweep.
+TaskDecoder retries Finalizing placement and sweep failures with increasing intervals.
+The remaining persistence work is consolidated in [storage.md §6](./storage.md#6-current-status-and-remaining-work).
 
-§5 の block 交換は実装していない。
-FileExchanger には接続と受理の task だけがあり、message の定義、送受信 loop、要求の割り当て、choke の判定、node の除外がない。
-NodeFinder への広告と要求の登録、AxusService への結線もない。
-接続の task は Session を node ID だけで区別し、接続枠は公開用の発信、購読用の発信、受理の全体の上限だけを持つ。
-購読側には、保存した block、現在の rank の未取得 block、提供する root hash を FileExchanger へ渡す入口がない。
-import は block size が 0 でないことだけを検査し、FileExchanger の frame 上限は 64 MiB である。
-block 交換の実装は、[design.md](../design.md#62-ロードマップ) の最初の項目である。
-公開と購読を始める REST API はない。
+The §5 block exchange is not implemented.
+FileExchanger has only the connection and accept tasks; there is no message definition, send/receive loop, request assignment, choke judgment, or node exclusion.
+There is also no registration of advertisements and requests with NodeFinder, and no wiring into AxusService.
+The connection task distinguishes Sessions only by node ID, and the connection slots are an overall limit on publish dialing, subscribe dialing, and acceptance.
+The subscriber side has no entry for handing FileExchanger the stored blocks, the un-fetched blocks of the current rank, and the provided root hashes.
+import checks only that the block size is not 0, and FileExchanger's frame limit is 64 MiB.
+The block exchange implementation is the first item of [design.md](../design.md#62-roadmap).
+There is no REST API to start publishing and subscribing.
 
-確認済みの不具合は [issues.md](../issues.md) を参照する。
+For confirmed bugs, see [issues.md](../issues.md).

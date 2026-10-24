@@ -12,7 +12,7 @@ Term definitions are the source of [terms.md](../terms.md#2-terminology).
 | [design.md](../design.md#11-division-of-responsibilities-among-documents) | Overall structure, boundaries with other concerns, cross-cutting dependencies |
 | This document | Persistence of metadata, blocks, and output files, finalization and reclamation procedures, startup recovery, the state directory, migration |
 | [file-transfer.md](./file-transfer.md#2-responsibilities-and-boundaries) | File state transitions, output reservation, block verification, Store and Task responsibilities |
-| [knowledges.md](../knowledges.md) | Evidence on the external specifications of RocksDB, SQLite, and filesystem syncing and placement |
+| [knowledge.md](../knowledge.md) | Evidence on the external specifications of RocksDB, SQLite, and filesystem syncing and placement |
 | [base/storage](../../daemon/modules/engine/src/base/storage) | Block storage implementation |
 | [core/negotiator](../../daemon/modules/engine/src/core/negotiator) | SQLite repository and migration implementation |
 
@@ -91,7 +91,7 @@ The bodies are persisted first, and the metadata indicating them is finalized af
 If this order breaks, finalized metadata can reference a body lost to a power failure.
 The entries for creating and deleting a temporary output are not synced. If a created entry is lost, the §4.5 recovery turns it into Failed.
 If a deleted entry returns after a power failure and the subscription row no longer exists, the temporary output remains in the destination directory. The sweep derives temporary output names from rows, so it does not reclaim this file.
-For external specifications, see [RocksDB syncing](../knowledges/rocksdb-write-durability.md), [SQLite syncing](../knowledges/sqlite-wal-durability.md), and [file and directory syncing](../knowledges/filesystem-sync-durability.md).
+For external specifications, see [RocksDB syncing](../knowledge/rocksdb-write-durability.md), [SQLite syncing](../knowledge/sqlite-wal-durability.md), and [file and directory syncing](../knowledge/filesystem-sync-durability.md).
 
 ### 4.3 Publishing commit and reclamation
 
@@ -166,7 +166,7 @@ The non-replacing rename uses `renameat2`'s `RENAME_NOREPLACE` on Linux, `rename
 When the rename fails because an entry exists at the destination, or the store does not support this rename, the subscription becomes Failed and the temporary output is deleted.
 When the rename fails because there is no temporary output, it is handled the same as "neither temporary output nor destination" at restart: Completed if the destination exists, otherwise Failed.
 For other I/O failures, Finalizing is kept, and TaskDecoder retries placement in the Store with increasing intervals.
-For external specifications, see [non-replacing rename](../knowledges/filesystem-output-publication.md).
+For external specifications, see [non-replacing rename](../knowledge/filesystem-output-publication.md).
 
 A rename in one operation removes the temporary output name and creates the destination name, so at restart the presence of the two names tells whether placement finished.
 

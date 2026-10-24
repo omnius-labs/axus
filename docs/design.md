@@ -13,7 +13,7 @@ This document assumes the vocabulary of [terms.md](./terms.md#2-terminology). Te
 | This document | Scope of the whole project, overall structure, boundaries between concerns, cross-cutting design decisions, overall dependencies |
 | [terms.md](./terms.md#2-terminology) | Definitions of project-specific terms, notation, and boundaries with adjacent terms |
 | [issues.md](./issues.md) | Clear bugs confirmed in the code and their tracking until fixed |
-| [knowledges.md](./knowledges.md) | Confirmed, sourced external knowledge about depends and the OS |
+| [knowledge.md](./knowledge.md) | Confirmed, sourced external knowledge about depends and the OS |
 | [plans.md](./plans.md) | List of in-progress implementation plans and their dependencies |
 | [reviews.md](./reviews.md) | History of reviews and the transcription state of their findings |
 | [daemon-api.md](./design/daemon-api.md#1-about-this-document) | Lifecycle of the daemon, configuration boundaries, REST API, and OpenAPI generation |

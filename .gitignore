@@ -1,2 +1,7 @@
+.playwright-cli
+/.axus
+/.env
+/compose.override.yaml
+/config/axus.toml
 .serena/
 .DS_Store

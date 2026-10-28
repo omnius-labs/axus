@@ -1,9 +1,12 @@
 use std::time::Duration;
 
-use omnius_core_omnikit::generated::omni_sign::OmniCert;
+use omnius_core_omnikit::generated::{
+    omni_hash::{OmniHash, OmniHashAlgorithmType},
+    omni_sign::OmniCert,
+};
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
-use crate::base::connection::FramedStream;
+use crate::{base::connection::FramedStream, model::NodeProfile};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SessionType {
@@ -53,6 +56,19 @@ pub enum SessionHandshakeType {
     Accepted,
 }
 
+impl SessionHandshakeType {
+    /// The direction of the Session to keep when two nodes dial each other at the same time.
+    /// Keeping the Session the smaller node ID dialed makes both sides choose the same one without an extra message.
+    pub fn preferred_between(my_id: &[u8], other_id: &[u8]) -> Self {
+        if my_id < other_id { Self::Connected } else { Self::Accepted }
+    }
+
+    /// Whether a new Session replaces the existing one: only when the new one has the preferred direction and the existing one does not.
+    pub fn replaces(preferred: &Self, existing: &Self, new: &Self) -> bool {
+        existing != preferred && new == preferred
+    }
+}
+
 #[derive(Clone)]
 pub struct Session {
     #[allow(unused)]
@@ -64,6 +80,19 @@ pub struct Session {
     #[allow(unused)]
     pub cert: OmniCert,
     pub stream: FramedStream,
+}
+
+impl Session {
+    /// Whether the peer proved the key that the node profile is bound to.
+    /// The key is derived into the node ID, so a match also fixes the node ID.
+    pub fn is_signed_by(&self, node_profile: &NodeProfile) -> bool {
+        node_profile.public_key() == self.cert.public_key.as_slice()
+    }
+
+    /// The ID of the peer's node, which is the hash of the key the peer proved.
+    pub fn peer_node_id(&self) -> Vec<u8> {
+        OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, &self.cert.public_key).value
+    }
 }
 
 #[cfg(test)]

@@ -325,6 +325,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connector_rejects_an_unknown_use_selection_result() -> TestResult {
+        let (tcp_accepter, tcp_connector) = loopback_tcp_pair();
+        let connector = create_connector(tcp_connector, SessionOption::default())?;
+        let addr = test_addr();
+        let connect = connector.connect(&addr, &SessionType::NodeFinder);
+        let peer = async {
+            let (peer, _) = tcp_accepter.accept().await?;
+            let peer = secure_framed_stream(peer, OmniSecureStreamType::Accepted).await?;
+            let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
+            peer.sender
+                .lock()
+                .await
+                .send_message_with::<HelloMessageCodec>(&HelloMessage { version: SessionVersion::V1 })
+                .await?;
+            let _: V1RequestMessage = peer.receiver.lock().await.recv_message_with::<V1RequestMessageCodec>().await?;
+            peer.sender
+                .lock()
+                .await
+                .send_message_with::<V1ResultMessageCodec>(&V1ResultMessage {
+                    result_type: V1ResultType::Unknown,
+                })
+                .await?;
+            Result::Ok(())
+        };
+        let (result, peer_result) = tokio::time::timeout(TEST_TIMEOUT, async { tokio::join!(connect, peer) }).await?;
+        assert!(result.is_err());
+        peer_result?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unaccepted_session_is_dropped_after_the_wait_time() -> TestResult {
+        let option = SessionOption {
+            handshake_timeout: Duration::from_millis(300),
+            ..SessionOption::default()
+        };
+        let (accepter, connector, _) = create_sessions(option, &[SessionType::FileExchanger]).await?;
+        let addr = test_addr();
+
+        let stale = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&addr, &SessionType::FileExchanger)).await??;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let fresh = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&addr, &SessionType::FileExchanger)).await??;
+
+        // The stale Session is skipped, and the accepted one is the later connection.
+        let accepted = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&SessionType::FileExchanger)).await??;
+        fresh
+            .stream
+            .sender
+            .lock()
+            .await
+            .send_message_with::<HelloMessageCodec>(&HelloMessage { version: SessionVersion::V1 })
+            .await?;
+        let _: HelloMessage = accepted.stream.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
+        assert!(tokio::time::timeout(TEST_TIMEOUT, stale.stream.receiver.lock().await.recv()).await?.is_err());
+
+        accepter.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn waiting_to_accept_one_use_does_not_block_accepting_another() -> TestResult {
+        let (accepter, connector, _) = create_sessions(SessionOption::default(), &[SessionType::NodeFinder, SessionType::FileExchanger]).await?;
+        let accepter = Arc::new(accepter);
+        let addr = test_addr();
+
+        // Nobody connects for this use, so the accept keeps waiting.
+        let waiting = tokio::spawn({
+            let accepter = accepter.clone();
+            async move { accepter.accept(&SessionType::FileExchanger).await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let client = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&addr, &SessionType::NodeFinder)).await??;
+        let server = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&SessionType::NodeFinder)).await??;
+        assert_eq!(client.typ, SessionType::NodeFinder);
+        assert_eq!(server.typ, SessionType::NodeFinder);
+        assert!(!waiting.is_finished());
+
+        waiting.abort();
+        accepter.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn handshake_deadline_starts_after_tcp_connect() -> TestResult {
         let (accepter, _connector, tcp_connector) = create_sessions(SessionOption::default(), &[SessionType::NodeFinder]).await?;
         let connector = create_connector(
@@ -428,7 +512,7 @@ mod tests {
         for typ in [SessionType::NodeFinder, SessionType::FileExchanger] {
             let client = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&test_addr(), &typ)).await??;
             let server = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&typ)).await??;
-            let length = if typ == SessionType::NodeFinder { typ.max_frame_length() } else { 4 * 1024 * 1024 + 1 };
+            let length = typ.max_frame_length();
             let frame = Bytes::from(vec![0; length]);
             let (sent, received) = tokio::time::timeout(TEST_TIMEOUT, async {
                 tokio::join!(async { client.stream.sender.lock().await.send(frame.clone()).await }, async {

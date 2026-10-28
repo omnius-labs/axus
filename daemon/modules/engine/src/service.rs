@@ -6,6 +6,7 @@ use parking_lot::Mutex;
 use omnius_core_base::{
     clock::{Clock, ClockUtc},
     sleeper::{Sleeper, SleeperImpl},
+    tsid::TsidProviderImpl,
 };
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 use rand::{
@@ -21,7 +22,10 @@ use crate::{
     },
     core::{
         identity::NodeIdentity,
-        negotiator::{NodeFinder, NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, NodeProfileFetcherImpl},
+        negotiator::{
+            FileExchanger, FileExchangerIntervals, FileExchangerOption, NodeFinder, NodeFinderIntervals, NodeFinderLocationFinder, NodeFinderOption, NodeFinderRepo,
+            NodeProfileFetcherImpl,
+        },
         session::{
             SessionAccepter, SessionConnector,
             model::{SessionOption, SessionType},
@@ -32,7 +36,8 @@ use crate::{
 };
 
 pub struct AxusService {
-    node_finder: NodeFinder,
+    node_finder: Arc<NodeFinder>,
+    file_exchanger: FileExchanger,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -46,12 +51,11 @@ pub struct AxusServiceOption {
 
 impl AxusService {
     pub async fn new<S: AsRef<Path>, A: AsRef<str>, T: AsRef<Path>>(state_dir: S, listen_addr: A, _temp_dir: T, option: AxusServiceOption) -> Result<Self> {
-        Ok(AxusService {
-            node_finder: Self::create_node_finder(state_dir.as_ref(), listen_addr.as_ref(), option).await?,
-        })
+        let (node_finder, file_exchanger) = Self::create_components(state_dir.as_ref(), listen_addr.as_ref(), option).await?;
+        Ok(AxusService { node_finder, file_exchanger })
     }
 
-    async fn create_node_finder(state_dir: &Path, listen_addr: &str, option: AxusServiceOption) -> Result<NodeFinder> {
+    async fn create_components(state_dir: &Path, listen_addr: &str, option: AxusServiceOption) -> Result<(Arc<NodeFinder>, FileExchanger)> {
         // 明示設定の違反は、接続 worker の開始前に返す。
         for profile in &option.bootstrap_node_profiles {
             profile.to_uri()?;
@@ -98,7 +102,7 @@ impl AxusService {
                 clock.clone(),
                 sleeper.clone(),
                 rng.clone(),
-                &[SessionType::NodeFinder],
+                &[SessionType::NodeFinder, SessionType::FileExchanger],
                 SessionOption::default(),
             )
             .await,
@@ -116,31 +120,56 @@ impl AxusService {
         let node_finder_dir = state_dir.join("finder");
         tokio::fs::create_dir_all(&node_finder_dir).await?;
 
-        let result = NodeFinder::new(
-            my_node_profile,
+        let tsid_provider = Arc::new(Mutex::new(TsidProviderImpl::new(ClockUtc, ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng)), 8)));
+        let node_finder = Arc::new(
+            NodeFinder::new(
+                my_node_profile,
+                session_connector.clone(),
+                session_accepter.clone(),
+                node_profile_repo,
+                node_profile_fetcher,
+                clock.clone(),
+                sleeper.clone(),
+                rng.clone(),
+                NodeFinderOption {
+                    state_dir: node_finder_dir.as_os_str().to_str().unwrap().to_string(),
+                    max_connected_session_count: 3,
+                    max_accepted_session_count: 3,
+                    intervals: option.node_finder_intervals,
+                },
+            )
+            .await?,
+        );
+
+        // 他の node の設定 p2p.bootstrap_nodes に書けるよう、起動時の制約を適用した NodeProfile を記録する
+        info!(node_profile = node_finder.my_node_profile().to_uri()?, "node profile");
+
+        let file_exchanger = match FileExchanger::new(
             session_connector,
             session_accepter,
-            node_profile_repo,
-            node_profile_fetcher,
+            Arc::new(NodeFinderLocationFinder::new(node_finder.clone())),
+            tsid_provider,
             clock,
             sleeper,
             rng,
-            NodeFinderOption {
-                state_dir: node_finder_dir.as_os_str().to_str().unwrap().to_string(),
-                max_connected_session_count: 3,
-                max_accepted_session_count: 3,
-                intervals: option.node_finder_intervals,
-            },
+            FileExchangerOption::new(state_dir.join("file_exchanger")),
+            FileExchangerIntervals::default(),
         )
-        .await?;
+        .await
+        {
+            Ok(file_exchanger) => file_exchanger,
+            Err(error) => {
+                node_finder.shutdown().await;
+                return Err(error);
+            }
+        };
 
-        // 他の node の設定 p2p.bootstrap_nodes に書けるよう、起動時の制約を適用した NodeProfile を記録する
-        info!(node_profile = result.my_node_profile().to_uri()?, "node profile");
-
-        Ok(result)
+        Ok((node_finder, file_exchanger))
     }
 
     pub async fn shutdown(&self) {
+        // FileExchanger uses the Sessions NodeFinder keeps looking nodes up for, so it stops first.
+        self.file_exchanger.shutdown().await;
         self.node_finder.shutdown().await;
     }
 }
@@ -148,17 +177,32 @@ impl AxusService {
 #[cfg(test)]
 mod tests {
     use crate::protocol::MessageCodec;
-    use std::{net::TcpListener, time::Duration};
+    use std::{net::TcpListener, sync::Arc, time::Duration};
 
     use chrono::Utc;
+    use parking_lot::Mutex;
+    use rand::{
+        SeedableRng as _,
+        rngs::{ChaCha20Rng, SysRng},
+    };
+    use rand_core::UnwrapErr;
 
     use testresult::TestResult;
 
+    use omnius_core_base::clock::{Clock, ClockUtc};
     use omnius_core_omnikit::generated::omni_hash::{OmniHash, OmniHashAlgorithmType};
     use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
     use crate::{
-        core::{identity::NodeIdentity, negotiator::NodeFinderIntervals},
+        base::connection::{ConnectionTcpConnectorImpl, TcpProxyOption, TcpProxyType},
+        core::{
+            identity::NodeIdentity,
+            negotiator::NodeFinderIntervals,
+            session::{
+                SessionConnector,
+                model::{SessionOption, SessionType},
+            },
+        },
         model::{AssetKey, NodeProfile},
         prelude::*,
     };
@@ -355,6 +399,35 @@ mod tests {
         owner.shutdown().await;
         hub.shutdown().await;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_file_exchanger_use_is_accepted_after_startup() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let service = AxusService::new(dir.path().join("node"), "127.0.0.1:0", dir.path(), fast_option(vec![])).await?;
+        let client_dir = tempfile::tempdir()?;
+        let signer = crate::core::identity::NodeIdentity::load_or_create(client_dir.path()).await?.signer();
+        let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
+        let connector = SessionConnector::new(
+            Arc::new(
+                ConnectionTcpConnectorImpl::new(TcpProxyOption {
+                    typ: TcpProxyType::None,
+                    addr: None,
+                })
+                .await?,
+            ),
+            signer,
+            clock,
+            Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng)))),
+            SessionOption::default(),
+        );
+        let addr = service.node_finder.my_node_profile().addrs()[0].clone();
+
+        let session = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&addr, &SessionType::FileExchanger)).await??;
+
+        assert_eq!(session.typ, SessionType::FileExchanger);
+        service.shutdown().await;
         Ok(())
     }
 

@@ -113,6 +113,23 @@ To lower the limit to the range needed by pre-authentication messages and to cur
 NodeFinder also consumes resources receiving propagated information, so it holds a 256 KiB limit after establishment.
 The largest message FileExchanger sends carries one block, so the limit is derived from the maximum block length (see [file-transfer.md](./file-transfer.md#set-the-maximum-block-length-to-1-mib)).
 
+#### Post-establishment receive deadline
+
+**Decision**
+FramedStream holds a receive deadline, and the owner of each use sets it right after the Session is established.
+NodeFinder sets 3 times the communication cycle and FileExchanger sets 30 seconds, and a `recv_message` that exceeds it returns an error.
+The deadline is not extended by the local node's sends.
+A Session that finished the handshake but is not taken by `accept` within 10 seconds, the same as the handshake deadline, is discarded.
+
+**Rationale**
+A receive without a deadline leaves a task waiting forever for a silent peer, and a caller that forgets to apply one reproduces the problem individually.
+Holding the deadline in the stream next to the per-use frame limit makes a receive without a deadline impossible on an established Session.
+The value stays with the owner of the use because it derives from that use's send cycle (see [NodeFinder receive deadline](./node-finder.md#nodefinder-receive-deadline) and [file-transfer.md](./file-transfer.md#53-state-messages-and-session-lifetime)).
+
+**Rejected**
+Holding a per-use deadline in `SessionOption` makes the session layer know each use's send cycle and duplicates NodeFinder's cycle setting.
+Leaving the deadline to each caller made each use responsible for applying it, which is how the FileExchanger Session came to have none.
+
 #### Element counts of NodeFinder messages
 
 **Decision**
@@ -212,11 +229,16 @@ A test using loopback TCP confirms that a peer's disconnect is detected as a rec
 SessionOption's deadline, concurrency, and frame limits are passed to SessionAccepter and SessionConnector and enforced at the handshake input boundary.
 The accepting side separates TCP acceptance from per-connection handshake tasks, and shutdown cancels and then waits for all tasks.
 The frame limit switch after use selection is also implemented.
-FileExchanger's frame limit remains 64 MiB; lowering it to the §5.1 value happens with the block exchange implementation.
-The receive deadlines for NodeFinder's Hello/Profile exchange and after establishment are implemented as 3 times the communication cycle.
+FileExchanger's frame limit is the maximum block length of 1 MiB plus 256 bytes, confirmed by tests that the largest block and request messages fit and that a block over 1 MiB is not encoded.
+FramedStream holds the post-establishment receive deadline, counted from the last received frame, and NodeFinder and FileExchanger set it with 3 times their cycle.
+Tests confirm that a silent peer fails at the deadline, that a received frame restarts it, and that an over-limit frame is reported as an invalid format, which is distinguished from a close or a deadline.
+SessionAccepter drops a Session that `accept` takes later than the handshake deadline after its establishment.
+It holds one receiver per use behind its own lock, so a FileExchanger accept that waits for a connection does not stop NodeFinder from accepting; a test confirms it.
+SessionConnector returns a Session only on Accept, and the dialing sides of NodeFinder and FileExchanger close a Session whose cert key differs from the key of the candidate's NodeProfile.
 The wire decode of DataMessage and NodeProfile checks the element count limits before allocation.
 Tests confirm closing Sessions that exceed limits and the round trip of sending-side information narrowed within limits.
 NodeFinder's frame limit is 256 KiB, confirmed by tests sending and receiving at exactly the limit and rejecting over-limit frames.
-Until multiple-version selection is decided, FileExchanger and Profile exchange on an untrusted network are not enabled.
+FileExchanger starts with the daemon, but it advertises and dials nothing until a file is published or subscribed, and the REST API that starts them is not defined yet.
+Until multiple-version selection is decided, Profile exchange on an untrusted network is not enabled.
 
 For confirmed bugs, see [issues.md](../issues.md).

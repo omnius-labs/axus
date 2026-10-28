@@ -91,8 +91,10 @@ impl SessionConnector {
             stream.sender.lock().await.send_message_with::<V1RequestMessageCodec>(&send_session_request_message).await?;
             let received_session_result_message: V1ResultMessage = stream.receiver.lock().await.recv_message_with::<V1ResultMessageCodec>().await?;
 
-            if received_session_result_message.result_type == V1ResultType::Reject {
-                return Err(Error::new(ErrorKind::Reject).with_message("Session rejected"));
+            match received_session_result_message.result_type {
+                V1ResultType::Accept => {}
+                V1ResultType::Reject => return Err(Error::new(ErrorKind::Reject).with_message("Session rejected")),
+                V1ResultType::Unknown => return Err(Error::new(ErrorKind::UnsupportedType).with_message("Session use selection result is unknown")),
             }
 
             stream.set_max_frame_length(typ.max_frame_length()).await;

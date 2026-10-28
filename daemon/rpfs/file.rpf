@@ -7,3 +7,33 @@ struct MerkleLayer {
   @0 rank: u32;
   @1 hashes: Vec<OmniHash>;
 }
+
+#[rust::derive(Eq)]
+enum ExchangeMessage {
+  @1 Hello {
+    @1 version: u32;
+  };
+  @2 Open {
+    @1 root_hash: OmniHash;
+  };
+  @3 Accept;
+  @4 Reject;
+  @5 Status {
+    @1 want: bool;
+    @2 choke: bool;
+  };
+  @6 Request {
+    @1 block_hashes: Vec<OmniHash>[..=MAX_REQUEST_BLOCK_HASHES];
+  };
+  @7 Block {
+    @1 block_hash: OmniHash;
+    @2 value: bytes[..=MAX_BLOCK_LENGTH];
+  };
+  @8 NotHave {
+    @1 block_hash: OmniHash;
+  };
+}
+
+const MAX_BLOCK_LENGTH: u32 = 1048576;
+const MAX_REQUEST_BLOCK_HASHES: u32 = 64;
+const MAX_PENDING_REQUESTS: u32 = 16;

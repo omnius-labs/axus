@@ -13,11 +13,23 @@ use tokio::sync::{Mutex as TokioMutex, Notify, OwnedMutexGuard, RwLock};
 use tokio_util::bytes::Bytes;
 
 use omnius_core_base::{clock::Clock, tsid::TsidProvider};
-use omnius_core_omnikit::generated::omni_hash::OmniHash;
+use omnius_core_omnikit::generated::omni_hash::{OmniHash, OmniHashAlgorithmType};
 
 use crate::base::storage::KeyValueRocksdbStorage;
 
 use super::{output_publication::OutputPublication, repo::FileSubscriberRepo, *};
+
+/// The outcome of saving a block, and whether the save completed the rank so that the decoder should run.
+pub struct WrittenBlock {
+    pub result: WriteBlockResult,
+    pub rank_completed: bool,
+}
+
+impl WrittenBlock {
+    fn new(result: WriteBlockResult, rank_completed: bool) -> Self {
+        Self { result, rank_completed }
+    }
+}
 
 pub struct FileSubscriberStore {
     repo: FileSubscriberRepo,
@@ -127,13 +139,37 @@ impl FileSubscriberStore {
         Ok(id)
     }
 
-    pub async fn write_block(&self, root_hash: &OmniHash, block_hash: &OmniHash, bytes: Bytes) -> Result<bool> {
+    /// Saves a received block only when its content hashes to `block_hash`.
+    /// A hash without an algorithm carries no integrity, so it never matches.
+    pub async fn write_block(&self, root_hash: &OmniHash, block_hash: &OmniHash, bytes: Bytes) -> Result<WrittenBlock> {
         let _guard = self.lock.read().await;
-        if self.repo.find_blocks_by_root_hash_and_block_hash(root_hash, block_hash).await?.is_empty() {
-            return Ok(false);
+        let rows = self.repo.find_blocks_by_root_hash_and_block_hash(root_hash, block_hash).await?;
+        if rows.is_empty() || rows.iter().all(|row| row.downloaded) {
+            return Ok(WrittenBlock::new(WriteBlockResult::Unneeded, false));
+        }
+        if block_hash.typ == OmniHashAlgorithmType::None || OmniHash::compute_hash(block_hash.typ.clone(), &bytes) != *block_hash {
+            return Ok(WrittenBlock::new(WriteBlockResult::HashMismatch, false));
         }
         self.blocks_storage.put_value(util::gen_block_path(root_hash, block_hash), bytes, true).await?;
-        self.repo.mark_downloaded(root_hash, block_hash).await
+        let rank_completed = self.repo.mark_downloaded(root_hash, block_hash).await?;
+        Ok(WrittenBlock::new(WriteBlockResult::Stored, rank_completed))
+    }
+
+    pub async fn get_provided_root_hashes(&self) -> Result<Vec<OmniHash>> {
+        self.repo.get_provided_root_hashes().await
+    }
+
+    /// Reads a saved block of a root hash this node provides. Blocks kept only by Canceled and Failed subscriptions are not read.
+    pub async fn read_provided_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<Option<Vec<u8>>> {
+        let _guard = self.lock.read().await;
+        if !self.repo.contains_provided_block(root_hash, block_hash).await? {
+            return Ok(None);
+        }
+        self.blocks_storage.get_value(util::gen_block_path(root_hash, block_hash)).await
+    }
+
+    pub async fn get_missing_block_hashes(&self, root_hash: &OmniHash) -> Result<Vec<OmniHash>> {
+        self.repo.find_missing_block_hashes(root_hash).await
     }
 
     pub async fn cancel(&self, id: &str) -> Result<()> {
@@ -515,7 +551,7 @@ mod tests {
         let root = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, output.to_str().unwrap().as_bytes());
         let hash = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, content);
         let id = store.subscribe(&root, output.to_str().unwrap(), None, 0).await?;
-        store.write_block(&root, &root, Bytes::from_static(b"root")).await?;
+        store.write_block(&root, &root, Bytes::copy_from_slice(output.to_str().unwrap().as_bytes())).await?;
         let file = store.find_file(&id).await?.unwrap();
         store
             .advance_layer(
@@ -1260,7 +1296,7 @@ mod tests {
         let store = FileSubscriberStore::open(dir.path(), ids.clone(), clock.clone()).await?;
         let root = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"root");
         let id = store.subscribe(&root, "output", None, 0).await?;
-        assert!(store.write_block(&root, &root, Bytes::from_static(b"root")).await?);
+        assert!(store.write_block(&root, &root, Bytes::from_static(b"root")).await?.rank_completed);
         drop(store);
         let store = FileSubscriberStore::open(dir.path(), ids, clock).await?;
         let file = store.find_file(&id).await?.unwrap();
@@ -1280,7 +1316,7 @@ mod tests {
         let first = store.subscribe(&root, "a", None, 0).await?;
         let second = store.subscribe(&root, "b", None, 0).await?;
         assert_eq!(store.get_subscribed_root_hashes().await?, vec![root.clone()]);
-        assert!(store.write_block(&root, &root, Bytes::from_static(b"root")).await?);
+        assert!(store.write_block(&root, &root, Bytes::from_static(b"root")).await?.rank_completed);
         for id in [&first, &second] {
             let file = store.find_file(id).await?.unwrap();
             assert!(file.status == SubscribedFileStatus::Decoding);

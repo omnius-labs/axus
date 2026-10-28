@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use omnius_core_omnikit::service::connection::codec::{FramedReceiver, FramedRecv, FramedSend, FramedSender};
 use tokio::{
@@ -6,24 +6,46 @@ use tokio::{
     sync::Mutex as TokioMutex,
 };
 
+use super::receive_deadline::{DeadlineReceiver, ReceiveDeadline};
+
 #[derive(Clone)]
 pub struct FramedStream {
     pub receiver: Arc<TokioMutex<dyn FramedRecv + Send + Unpin>>,
     pub sender: Arc<TokioMutex<dyn FramedSend + Send + Unpin>>,
+    receive_deadline: ReceiveDeadline,
 }
 
 impl FramedStream {
     pub const NODE_FINDER_MAX_FRAME_LENGTH: usize = crate::generated::axus::node::MAX_MESSAGE_LENGTH as usize;
-    pub const FILE_EXCHANGER_MAX_FRAME_LENGTH: usize = 64 * 1024 * 1024;
+    /// The maximum block length plus the hash and the tags a block message carries.
+    pub const FILE_EXCHANGER_MAX_FRAME_LENGTH: usize = crate::generated::axus::file::MAX_BLOCK_LENGTH as usize + 256;
 
     pub fn new<R, W>(reader: R, writer: W) -> Self
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
-        let receiver = Arc::new(TokioMutex::new(FramedReceiver::new(reader, Self::FILE_EXCHANGER_MAX_FRAME_LENGTH)));
+        let receive_deadline = ReceiveDeadline::default();
+        let receiver = Arc::new(TokioMutex::new(DeadlineReceiver::new(
+            FramedReceiver::new(reader, Self::FILE_EXCHANGER_MAX_FRAME_LENGTH),
+            receive_deadline.clone(),
+        )));
         let sender = Arc::new(TokioMutex::new(FramedSender::new(writer, Self::FILE_EXCHANGER_MAX_FRAME_LENGTH)));
-        Self { receiver, sender }
+        Self {
+            receiver,
+            sender,
+            receive_deadline,
+        }
+    }
+
+    /// Makes a receive fail when no frame arrives within `timeout` of the last received frame, counting from now.
+    pub fn set_receive_timeout(&self, timeout: Duration) {
+        self.receive_deadline.set(timeout);
+    }
+
+    /// Whether the error is a receive that exceeded the deadline of `set_receive_timeout`.
+    pub fn is_receive_timeout(error: &(dyn std::error::Error + 'static)) -> bool {
+        ReceiveDeadline::is_timeout(error)
     }
 
     pub async fn set_max_frame_length(&self, max_frame_length: usize) {
@@ -36,6 +58,8 @@ impl FramedStream {
 mod tests {
     use testresult::TestResult;
     use tokio_util::bytes::Bytes;
+
+    use omnius_core_base::error::OmniError as _;
 
     use super::FramedStream;
 
@@ -81,6 +105,29 @@ mod tests {
         local.set_max_frame_length(4).await;
         assert!(local.receiver.lock().await.recv().await.is_err());
         assert!(local.sender.lock().await.send(Bytes::from_static(b"hello")).await.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_frame_over_the_limit_is_an_invalid_format_error() -> TestResult {
+        let (local, peer) = stream_pair();
+        local.set_max_frame_length(4).await;
+        peer.sender.lock().await.send(Bytes::from_static(b"hello")).await?;
+
+        let error = local.receiver.lock().await.recv().await.err().expect("an over-limit frame fails");
+        assert_eq!(error.kind(), &omnius_core_omnikit::ErrorKind::InvalidFormat);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_closed_stream_is_not_an_invalid_format_error() -> TestResult {
+        let (local, peer) = stream_pair();
+        drop(peer);
+
+        let error = local.receiver.lock().await.recv().await.err().expect("a closed stream fails");
+        assert_eq!(error.kind(), &omnius_core_omnikit::ErrorKind::EndOfStream);
 
         Ok(())
     }

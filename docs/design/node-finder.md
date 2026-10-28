@@ -122,7 +122,7 @@ A design that has the connection target return the source address it saw through
 **Decision**
 NodeFinder closes a Session when it receives no message from the peer, including the Hello/Profile exchange, for 3 times the communication cycle.
 The communication cycle is taken from `NodeFinderIntervals::communicate`; with the default of 20 seconds the receive deadline is 60 seconds.
-The deadline is updated on each Hello, Profile, and DataMessage reception and is not extended by the local node's sends.
+The deadline is held by FramedStream ([session.md](./session.md#post-establishment-receive-deadline)), updated on each Hello, Profile, and DataMessage reception, and not extended by the local node's sends.
 After establishment, a DataMessage is always sent every communication cycle, even when empty.
 Shutdown ends the send/receive task with the cancellation token without waiting for the receive deadline, and waits for its termination.
 
@@ -197,7 +197,7 @@ Decide once the reachability and latency needed to start a subscription are meas
 The connection, accept, computation, and communication tasks and the SQLite repo exist, and lookup scans only the receive state of connected Sessions.
 A two-node integration test starting from AxusService's startup path confirms Session establishment and AssetKey lookup.
 Each task's cycle is specified by NodeFinderOption, and the integration test uses short cycles.
-The Hello/Profile exchange and post-establishment receive deadlines are derived from the communication cycle and close unresponsive Sessions.
+The Hello/Profile exchange and post-establishment receive deadlines are derived from the communication cycle, set on the stream, and close unresponsive Sessions.
 Tests confirm the periodic send of empty DataMessages, deadline updates on reception, and shutdown during a receive wait.
 DataMessage and NodeProfile element counts are checked at decode before allocation, and over-limit Sessions are closed.
 TaskComputer narrows candidates randomly within the same limits, and the local node's addresses are kept at 8 or fewer at startup.

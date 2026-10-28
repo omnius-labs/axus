@@ -53,11 +53,25 @@ impl FileSubscriber {
         self.task_decoder.cancel(id).await;
         self.store.remove(id).await
     }
-    pub async fn write_block(&self, root_hash: &OmniHash, block_hash: &OmniHash, bytes: Bytes) -> Result<()> {
-        if self.store.write_block(root_hash, block_hash, bytes).await? {
+    pub async fn write_block(&self, root_hash: &OmniHash, block_hash: &OmniHash, bytes: Bytes) -> Result<WriteBlockResult> {
+        let written = self.store.write_block(root_hash, block_hash, bytes).await?;
+        if written.rank_completed {
             self.task_decoder.wake();
         }
-        Ok(())
+        Ok(written.result)
+    }
+    #[cfg(test)]
+    pub async fn find_file(&self, id: &str) -> Result<Option<SubscribedFile>> {
+        self.store.find_file(id).await
+    }
+    pub async fn get_provided_root_hashes(&self) -> Result<Vec<OmniHash>> {
+        self.store.get_provided_root_hashes().await
+    }
+    pub async fn read_provided_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<Option<Vec<u8>>> {
+        self.store.read_provided_block(root_hash, block_hash).await
+    }
+    pub async fn get_missing_block_hashes(&self, root_hash: &OmniHash) -> Result<Vec<OmniHash>> {
+        self.store.get_missing_block_hashes(root_hash).await
     }
     pub async fn get_subscribed_root_hashes(&self) -> Result<Vec<OmniHash>> {
         self.store.get_subscribed_root_hashes().await

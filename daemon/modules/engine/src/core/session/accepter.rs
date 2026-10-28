@@ -1,5 +1,5 @@
 use crate::protocol::session::*;
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -35,8 +35,16 @@ use super::{
 
 pub struct SessionAccepter {
     tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
-    receivers: Arc<TokioMutex<HashMap<SessionType, mpsc::Receiver<Session>>>>,
+    /// One receiver per use, each behind its own lock, so that waiting to accept one use never blocks accepting another.
+    receivers: Arc<HashMap<SessionType, TokioMutex<mpsc::Receiver<QueuedSession>>>>,
     task_accepter: TaskAccepter,
+    accept_wait_timeout: Duration,
+}
+
+/// An established Session waiting for its use to take it.
+struct QueuedSession {
+    session: Session,
+    queued_at: Instant,
 }
 
 impl SessionAccepter {
@@ -49,8 +57,9 @@ impl SessionAccepter {
         supported_types: &[SessionType],
         option: SessionOption,
     ) -> Self {
-        let mut senders = HashMap::<SessionType, mpsc::Sender<Session>>::new();
-        let mut receivers = HashMap::<SessionType, mpsc::Receiver<Session>>::new();
+        let accept_wait_timeout = option.handshake_timeout;
+        let mut senders = HashMap::<SessionType, mpsc::Sender<QueuedSession>>::new();
+        let mut receivers = HashMap::<SessionType, TokioMutex<mpsc::Receiver<QueuedSession>>>::new();
 
         for typ in supported_types {
             if senders.contains_key(typ) {
@@ -58,7 +67,7 @@ impl SessionAccepter {
             }
             let (tx, rx) = mpsc::channel(20);
             senders.insert(typ.clone(), tx);
-            receivers.insert(typ.clone(), rx);
+            receivers.insert(typ.clone(), TokioMutex::new(rx));
         }
 
         let task_accepter = TaskAccepter::new(Arc::new(TokioMutex::new(senders)), tcp_accepter.clone(), signer, clock, rng, sleeper, option);
@@ -66,18 +75,28 @@ impl SessionAccepter {
 
         Self {
             tcp_accepter,
-            receivers: Arc::new(TokioMutex::new(receivers)),
+            receivers: Arc::new(receivers),
             task_accepter,
+            accept_wait_timeout,
         }
     }
 
     pub async fn accept(&self, typ: &SessionType) -> Result<Session> {
-        let mut receivers = self.receivers.lock().await;
-        let receiver = receivers
-            .get_mut(typ)
-            .ok_or_else(|| Error::new(ErrorKind::UnsupportedType).with_message("unsupported session type"))?;
+        let mut receiver = self
+            .receivers
+            .get(typ)
+            .ok_or_else(|| Error::new(ErrorKind::UnsupportedType).with_message("unsupported session type"))?
+            .lock()
+            .await;
 
-        receiver.recv().await.ok_or_else(|| Error::new(ErrorKind::EndOfStream).with_message("receiver is closed"))
+        loop {
+            let queued = receiver.recv().await.ok_or_else(|| Error::new(ErrorKind::EndOfStream).with_message("receiver is closed"))?;
+            // A Session nobody took within the wait time is dropped, which closes its connection and frees the queue slot.
+            if queued.queued_at.elapsed() <= self.accept_wait_timeout {
+                return Ok(queued.session);
+            }
+            warn!(address = queued.session.address.to_string(), "dropped an established session nobody accepted in time");
+        }
     }
 }
 
@@ -101,7 +120,7 @@ struct TaskAccepter {
 
 impl TaskAccepter {
     pub fn new(
-        senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<Session>>>>,
+        senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<QueuedSession>>>>,
         tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
         signer: Arc<OmniSigner>,
         clock: Arc<dyn Clock<Utc> + Send + Sync>,
@@ -209,7 +228,7 @@ impl Shutdown for TaskAccepter {
 
 #[derive(Clone)]
 struct Inner {
-    senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<Session>>>>,
+    senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<QueuedSession>>>>,
     signer: Arc<OmniSigner>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
@@ -271,7 +290,10 @@ impl Inner {
                     cert,
                     stream,
                 };
-                permit.send(session);
+                permit.send(QueuedSession {
+                    session,
+                    queued_at: Instant::now(),
+                });
             } else {
                 let send_session_result_message = V1ResultMessage {
                     result_type: V1ResultType::Reject,

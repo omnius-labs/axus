@@ -76,9 +76,51 @@ CREATE INDEX IF NOT EXISTS index_root_hash_rank_index_for_blocks ON blocks (root
     }
 
     pub async fn get_downloading_root_hashes(&self) -> Result<Vec<OmniHash>> {
-        let rows: Vec<(String,)> = sqlx::query_as("SELECT DISTINCT root_hash FROM files WHERE status = 'Downloading'")
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT root_hash FROM files WHERE status = 'Downloading' GROUP BY root_hash ORDER BY MAX(priority) DESC, root_hash ASC")
             .fetch_all(self.db.as_ref())
             .await?;
+        rows.into_iter().map(|(hash,)| OmniHash::from_str(&hash).map_err(Into::into)).collect()
+    }
+
+    /// The root hashes whose saved blocks this node hands to other nodes.
+    pub async fn get_provided_root_hashes(&self) -> Result<Vec<OmniHash>> {
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT DISTINCT root_hash FROM files WHERE status IN ('Downloading', 'Decoding', 'Finalizing', 'Completed')")
+            .fetch_all(self.db.as_ref())
+            .await?;
+        rows.into_iter().map(|(hash,)| OmniHash::from_str(&hash).map_err(Into::into)).collect()
+    }
+
+    pub async fn contains_provided_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<bool> {
+        let found: Option<i64> = sqlx::query_scalar(
+            r#"
+SELECT 1
+    FROM blocks
+    WHERE root_hash = ? AND block_hash = ? AND downloaded = 1
+        AND EXISTS (SELECT 1 FROM files WHERE files.root_hash = blocks.root_hash AND files.status IN ('Downloading', 'Decoding', 'Finalizing', 'Completed'))
+    LIMIT 1
+"#,
+        )
+        .bind(root_hash.to_string())
+        .bind(block_hash.to_string())
+        .fetch_optional(self.db.as_ref())
+        .await?;
+        Ok(found.is_some())
+    }
+
+    /// The blocks of the rank each Downloading subscription of the root hash is waiting for that are not saved yet.
+    pub async fn find_missing_block_hashes(&self, root_hash: &OmniHash) -> Result<Vec<OmniHash>> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            r#"
+SELECT DISTINCT blocks.block_hash
+    FROM blocks
+    JOIN files ON files.root_hash = blocks.root_hash AND files.rank = blocks.rank
+    WHERE blocks.root_hash = ? AND blocks.downloaded = 0 AND files.status = 'Downloading'
+    ORDER BY blocks.rank ASC, blocks.`index` ASC
+"#,
+        )
+        .bind(root_hash.to_string())
+        .fetch_all(self.db.as_ref())
+        .await?;
         rows.into_iter().map(|(hash,)| OmniHash::from_str(&hash).map_err(Into::into)).collect()
     }
 

@@ -145,8 +145,8 @@ Concern-local deferred decisions live in the "Design decisions" sections of each
 ### 6.1 Current status
 
 Each detailed design document is the source of truth for the implementation status of its concern.
-Overall, the daemon startup path owns down to NodeFinder and connects to other daemons starting from the configured bootstrap nodes, but the end-to-end path through file publishing, subscription, P2P transfer, and the REST API is not complete.
-From file publishing to decoding is confirmed by engine-internal tests that do not go through P2P transfer.
+Overall, the daemon startup path owns down to FileExchanger and connects to other daemons starting from the configured bootstrap nodes, but the REST API that starts file publishing and subscription is not defined, so the end-to-end path is not complete.
+From file publishing to decoding, including P2P transfer between daemons over loopback TCP, is confirmed by engine-internal tests.
 
 ### 6.2 Roadmap
 
@@ -154,8 +154,7 @@ The following order is tentative; only the dependencies in the table must be pre
 
 | # | Item | Prerequisite dependency |
 | --- | --- | --- |
-| 1 | Implement FileExchanger's block exchange protocol and hash verification | Design in [file-transfer.md](./design/file-transfer.md#5-block-exchange) |
-| 2 | Define the REST API for publish, subscribe, progress, and cancel | 1, judgment on long-running operations and reach in [daemon-api.md](./design/daemon-api.md#52-deferred) |
-| 3 | Define Web of Trust, Profile, and memo in order | [trust-security.md](./design/trust-security.md#4-design-decisions), 1 to resolve FileRefs |
+| 1 | Define the REST API for publish, subscribe, progress, and cancel | Judgment on long-running operations and reach in [daemon-api.md](./design/daemon-api.md#52-deferred) |
+| 2 | Define Web of Trust, Profile, and memo in order | [trust-security.md](./design/trust-security.md#4-design-decisions) |
 
 For confirmed bugs and fix directions, see [issues.md](./issues.md).

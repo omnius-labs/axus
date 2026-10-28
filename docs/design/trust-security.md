@@ -125,7 +125,7 @@ The Session is not closed over a NodeProfile past the tolerance because even an 
 The ProfileMessage is not checked because it is the peer's own NodeProfile and, after reconciliation with the Session cert's public key, is used only for identifying the Session and does not enter the known-node update order.
 Refusing by age is not done because refusing would force long-running nodes to re-sign and re-advertise periodically, and URIs issued at startup for bootstrap would expire.
 What redelivering an old signature causes is a connection attempt to an old reachable address, and even if that address now belongs to another node, the dialing side can distinguish it by reconciling the connection candidate's public key with the Session's cert.
-This reconciliation is handled by [dialer-does-not-match-candidate-public-key](../issues/dialer-does-not-match-candidate-public-key.md).
+The dialing sides of NodeFinder and FileExchanger perform this reconciliation, closing the Session and trying the next address when the key differs.
 
 The signature shows only that the owner showed the reachable addresses.
 It does not show trust in the node or that the reachable address still belongs to it.

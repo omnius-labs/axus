@@ -82,17 +82,13 @@ impl SessionRegistry {
 
     /// 重複したときに残す Session の向き。node ID が小さい側では Connected、大きい側では Accepted になる。
     fn preferred_handshake_type(my_id: &[u8], other_id: &[u8]) -> SessionHandshakeType {
-        if my_id < other_id {
-            SessionHandshakeType::Connected
-        } else {
-            SessionHandshakeType::Accepted
-        }
+        SessionHandshakeType::preferred_between(my_id, other_id)
     }
 
     /// 新しい Session が既存の Session を入れ替えるかどうか。
     /// 優先する向きの Session が新しい側だけのときに入れ替え、それ以外は既存を残す。
     fn replaces(preferred: &SessionHandshakeType, existing: &SessionHandshakeType, new: &SessionHandshakeType) -> bool {
-        existing != preferred && new == preferred
+        SessionHandshakeType::replaces(preferred, existing, new)
     }
 }
 

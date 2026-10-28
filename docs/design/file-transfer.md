@@ -347,6 +347,9 @@ The following values may vary per node, with the table values as the defaults.
 | Time before a do-not-have responder is asked the same hash again | 30 s |
 | Exclusion for violations and for request-deadline overruns | 30 min, 3 min |
 | Sessions one root hash can use | 8 |
+| Sessions dialed to fetch, dialed to serve, and accepted | 16, 8, 16 |
+
+The cycles and deadlines are held in `FileExchangerIntervals`, whose default is the table values (see [the decision](#inject-fileexchangers-time-constants-through-intervals)).
 
 ## 6. Design decisions
 
@@ -657,6 +660,20 @@ Conveying want limits the unchoke candidates to the nodes that want blocks.
 **Rejected**
 Sending status only when the value changes and letting the requester close a Session that stays choked past a period sends fewer messages, but closes a Session against a peer that would unchoke if waited on, and cannot distinguish an unresponsive peer from one merely making it wait.
 
+#### Inject FileExchanger's time constants through Intervals
+
+**Decision**
+The cycles and deadlines of §5.8 are held in `FileExchangerIntervals`, whose default is the table values, and tests replace them with short values.
+`AxusServiceOption` does not expose it and always uses the default.
+The element counts and lengths that must agree with the peer are constants of `file.rpf` and cannot be replaced.
+
+**Rationale**
+Tests that confirm the request deadline and the receive deadline would take a minute each with the real values.
+Replacing a time value affects only the local timing, whereas the element counts and lengths change what the peer accepts.
+
+**Rejected**
+Advancing a fake Clock and Sleeper cannot be synchronized with the I/O of real TCP, so a test waits on a time that never advances or races.
+
 ### 6.2 Deferred
 
 #### Send bandwidth limit
@@ -680,7 +697,6 @@ Decide when adding transfer settings to the publish and subscribe REST API, or w
 
 FilePublisher ingests a file, block-izes it, generates MerkleLayers, finalizes the root hash, commits, and reads out committed blocks.
 FileSubscriber starts a subscription, saves blocks, and decodes per rank, confirmed from publishing to decoding by engine-internal round-trip tests.
-`FileSubscriber::write_block` does not check the received block's hash and does not return the save result to the caller.
 
 The publisher and subscriber sides are split into the §2 three layers, and the metadata and block-body rewrites are consolidated in the Store.
 Task state transitions and failure records are updated with a condition on the expected state, and the Store-internal locks control races between commit, remove, subscribe, and block saves.
@@ -702,13 +718,23 @@ The subscriber side also reclaims unreferenced-root blocks and the temporary out
 TaskDecoder retries Finalizing placement and sweep failures with increasing intervals.
 The remaining persistence work is consolidated in [storage.md §6](./storage.md#6-current-status-and-remaining-work).
 
-The §5 block exchange is not implemented.
-FileExchanger has only the connection and accept tasks; there is no message definition, send/receive loop, request assignment, choke judgment, or node exclusion.
-There is also no registration of advertisements and requests with NodeFinder, and no wiring into AxusService.
-The connection task distinguishes Sessions only by node ID, and the connection slots are an overall limit on publish dialing, subscribe dialing, and acceptance.
-The subscriber side has no entry for handing FileExchanger the stored blocks, the un-fetched blocks of the current rank, and the provided root hashes.
-import checks only that the block size is not 0, and FileExchanger's frame limit is 64 MiB.
-The block exchange implementation is the first item of [design.md](../design.md#62-roadmap).
+The §5 block exchange is implemented, and AxusService starts and stops FileExchanger.
+`FileSubscriber::write_block` hashes the received content with the algorithm of the expected hash before saving and returns stored, unneeded, or hash mismatch; a hash without an algorithm never matches.
+Tests confirm that a mismatched block leaves neither a block row nor a body.
+import rejects a block size over 1 MiB, and FileExchanger's frame limit is 1 MiB plus 256 bytes.
+The messages are the enum of [file.rpf](../../daemon/rpfs/file.rpf), and the element counts and the block length are checked at decode.
+
+Connection tasks dial the root hashes of Downloading subscriptions in the order of their priority, then the other provided root hashes, each with its own slots and a limit per root hash.
+The accepting side rejects a root hash it does not provide, an excluded node, and a root hash at its limit, and the dialing side keeps a rejected pair out of its candidates for a while.
+When both sides dial the same pair, the Session the smaller node ID dialed is kept, and the dialing side checks that the peer proved the key of the NodeProfile it looked up.
+Each Session has a worker that sends the status message every cycle and when a value changes, requests the blocks assigned to it, answers requests one block per frame, and applies the request deadline, the receive deadline, and the violation rules.
+Blocks are assigned in one place per root hash, choke is judged per node from the bytes received in the recent period, and violations and deadline overruns exclude the node in memory.
+A Session neither side wants is closed, and its pair stays out of the dialing candidates.
+`LocationFinder` advertises the provided root hashes by push and want and finds the nodes holding a root hash, and `NodeFinderLocationFinder` implements it on NodeFinder.
+
+Tests between nodes over loopback TCP confirm the transfer of a multi-rank file, the relay by a node in the middle of fetching, the exclusion of peers that send a mismatched or unrequested block or exceed the request limit, completion from another peer after an exclusion, and the closing at the request and receive deadlines.
+They also confirm that a request crossing the choke is ignored without blame, the do-not-have response, the rejection of a root hash the peer does not provide, the closing of a Session neither side wants, and that a node answering at another node's address is not dialed.
+A test with real NodeFinders confirms that advertising, lookup, and transfer work together.
 There is no REST API to start publishing and subscribing.
 
 For confirmed bugs, see [issues.md](../issues.md).

@@ -26,19 +26,15 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 | Item | Severity | Investigated on | Issue |
 | --- | --- | --- | --- |
 | [Lock file of an abnormally terminated daemon remains and prevents restart](./issues/daemon-lock-survives-abnormal-exit.md) | Medium | 2026-10-06 | - |
-| [No deadline for send_message and an accept-waiting Session after establishment](./issues/session-accept-and-message-without-deadline.md) | Medium | 2026-10-07 | - |
 | [output_lock is common across all subscriptions and a writing subscription stops other subscriptions' finalization](./issues/output-lock-shared-across-subscriptions.md) | Medium | 2026-10-07 | - |
 | [A vanished destination directory of Failed or Canceled rows makes sweep retries continue and remove impossible](./issues/vanished-output-directory-blocks-sweep-and-remove.md) | Medium | 2026-10-07 | - |
 | [delete_bulk succeeds deleting nothing when it contains a missing key](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | Low | 2026-10-06 | - |
 | [TaskCommunicator::start does not exit its loop even when the accept channel is closed](./issues/task-communicator-spins-on-closed-session-channel.md) | Low | 2026-10-07 | - |
-| [SessionConnector accepts the Unknown use-selection result](./issues/session-connector-accepts-unknown-result.md) | Low | 2026-10-11 | - |
-| [The dialing side does not reconcile a candidate's public key with the Session cert](./issues/dialer-does-not-match-candidate-public-key.md) | Medium | 2026-10-12 | - |
 
 ## 3. Not included here
 
 | Item | Reference |
 | --- | --- |
-| No FileExchanger block exchange protocol | [file-transfer.md](./design/file-transfer.md#7-current-status-and-remaining-work) |
 | No REST API to start publishing and subscribing | [file-transfer.md](./design/file-transfer.md#7-current-status-and-remaining-work) |
 | No NodeFinder active lookup | [node-finder.md](./design/node-finder.md#6-design-decisions) |
 | REST API reach and authentication undecided | [daemon-api.md](./design/daemon-api.md#reach-and-authentication-of-the-rest-api) |

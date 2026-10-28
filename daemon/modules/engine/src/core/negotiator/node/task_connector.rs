@@ -155,6 +155,11 @@ impl TaskConnector {
     async fn connect_node(&self, node_profile: &NodeProfile) -> Result<()> {
         for addr in node_profile.addrs().iter() {
             if let Ok(session) = self.session_connector.connect(addr, &SessionType::NodeFinder).await {
+                // 公開済みの addr は古くなり得るため、別の node が応答した接続は採用しない
+                if !session.is_signed_by(node_profile) {
+                    warn!(address = addr.to_string(), "the peer's key does not match the node profile");
+                    continue;
+                }
                 let status = SessionStatus::new(session, self.clock.clone());
                 self.session_sender
                     .lock()
@@ -197,8 +202,15 @@ mod tests {
     use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
     use crate::{
-        base::{collections::VolatileHashSet, connection::ConnectionTcpConnector, runtime::Shutdown as _},
-        core::session::{SessionConnector, model::SessionOption},
+        base::{
+            collections::VolatileHashSet,
+            connection::{ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, TcpProxyOption, TcpProxyType},
+            runtime::Shutdown as _,
+        },
+        core::session::{
+            SessionAccepter, SessionConnector,
+            model::{SessionOption, SessionType},
+        },
         model::NodeProfile,
         prelude::*,
     };
@@ -261,6 +273,73 @@ mod tests {
             task.shutdown().await;
         }
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_node_answering_at_the_address_of_another_node_is_not_recorded_as_connected() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
+        let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
+        let tcp_connector = Arc::new(
+            ConnectionTcpConnectorImpl::new(TcpProxyOption {
+                typ: TcpProxyType::None,
+                addr: None,
+            })
+            .await?,
+        );
+
+        // The answering node listens at the address and proves its own key.
+        let answering_signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "answering")?);
+        let tcp_accepter = ConnectionTcpAccepterImpl::new(&OmniAddr::create_tcp("127.0.0.1".parse()?, 0), false).await?;
+        let addrs = tcp_accepter.get_advertised_addrs().await?;
+        let session_accepter = SessionAccepter::new(
+            Arc::new(tcp_accepter),
+            answering_signer,
+            clock.clone(),
+            Arc::new(SleeperImpl),
+            rng.clone(),
+            &[SessionType::NodeFinder],
+            SessionOption::default(),
+        )
+        .await;
+
+        // The candidate is another node that used to listen at the address.
+        let candidate_signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "candidate")?;
+        let candidate = NodeProfile::sign(&candidate_signer, addrs, clock.now())?;
+        let my_signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "mine")?);
+        let my_node_profile = NodeProfile::sign(&my_signer, vec![], clock.now())?;
+
+        let node_profile_repo = Arc::new(NodeFinderRepo::new(dir.path().to_str().unwrap(), clock.clone()).await?);
+        node_profile_repo.insert_or_update_node_profiles(&[&candidate], 0).await?;
+        let connected_node_profiles = Arc::new(Mutex::new(VolatileHashSet::new(chrono::Duration::seconds(180), clock.clone())));
+        let (session_sender, mut session_receiver) = mpsc::channel(20);
+        let task = TaskConnector::new(
+            Arc::new(Mutex::new(my_node_profile)),
+            Arc::new(SessionRegistry::new()),
+            Arc::new(TokioMutex::new(session_sender)),
+            Arc::new(SessionConnector::new(tcp_connector, my_signer, clock.clone(), rng.clone(), SessionOption::default())),
+            connected_node_profiles.clone(),
+            Arc::new(Mutex::new(HashSet::new())),
+            node_profile_repo,
+            clock,
+            Arc::new(SleeperImpl),
+            rng,
+            NodeFinderOption {
+                state_dir: dir.path().to_str().unwrap().to_string(),
+                max_connected_session_count: 3,
+                max_accepted_session_count: 3,
+                intervals: NodeFinderIntervals::default(),
+            },
+        )
+        .await?;
+
+        task.connect().await?;
+
+        assert!(connected_node_profiles.lock().is_empty());
+        assert!(session_receiver.try_recv().is_err());
+        task.shutdown().await;
+        session_accepter.shutdown().await;
         Ok(())
     }
 

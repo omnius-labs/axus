@@ -16,5 +16,4 @@ Add a row when starting work, advance its state, and delete the row and child do
 
 | Plan | Purpose | State | Prerequisite |
 | --- | --- | --- | --- |
-
-There are no in-progress plans.
+| [file-exchanger-block-exchange](./plans/file-exchanger-block-exchange.md) | Two daemons exchange blocks and a mismatched block is never stored | in progress | - |

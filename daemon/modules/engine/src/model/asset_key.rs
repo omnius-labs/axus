@@ -1,5 +1,5 @@
 pub use crate::generated::axus::model::AssetKey;
-use omnius_core_omnikit::generated::omni_hash::OmniHashAlgorithmType;
+use omnius_core_omnikit::generated::omni_hash::{OmniHash, OmniHashAlgorithmType};
 use std::cmp::Ordering;
 impl Ord for AssetKey {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -15,6 +15,16 @@ impl PartialOrd for AssetKey {
     }
 }
 impl AssetKey {
+    /// The type of the AssetKey that stands for a published file, whose hash is the root hash.
+    const FILE_TYPE: &str = "file";
+
+    pub fn file(root_hash: OmniHash) -> Self {
+        Self {
+            typ: Self::FILE_TYPE.to_string(),
+            hash: root_hash,
+        }
+    }
+
     fn algorithm_order(value: &OmniHashAlgorithmType) -> u8 {
         match value {
             OmniHashAlgorithmType::None => 0,

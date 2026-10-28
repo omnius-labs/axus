@@ -1,232 +1,149 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Utc;
-use parking_lot::Mutex;
-use rand::seq::SliceRandom;
-use tokio::{
-    select,
-    sync::{Mutex as TokioMutex, RwLock as TokioRwLock, mpsc},
-    task::JoinHandle,
-};
-use tokio_util::sync::CancellationToken;
+use rand::seq::SliceRandom as _;
+use tokio::{select, sync::Mutex as TokioMutex, task::JoinHandle};
 use tracing::warn;
 
-use omnius_core_base::{clock::Clock, sleeper::Sleeper};
+use omnius_core_base::sleeper::Sleeper;
 use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
 use crate::{
-    base::{collections::VolatileHashSet, runtime::Shutdown},
-    core::{
-        negotiator::NodeFinder,
-        session::{
-            SessionConnector,
-            model::{SessionHandshakeType, SessionType},
-        },
-    },
+    base::runtime::Shutdown,
+    core::session::{SessionConnector, model::SessionType},
     model::{AssetKey, NodeProfile},
     prelude::*,
 };
 
 use super::*;
 
-#[derive(Clone)]
+/// Dials the nodes that hold the root hashes this node fetches or provides.
 pub struct TaskConnector {
-    sessions: Arc<TokioRwLock<HashMap<Vec<u8>, Arc<SessionStatus>>>>,
-    session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
+    ctx: Arc<ExchangeContext>,
     session_connector: Arc<SessionConnector>,
-    node_finder: Arc<NodeFinder>,
-    file_publisher: Arc<TokioMutex<Option<Arc<FilePublisher>>>>,
-    file_subscriber: Arc<TokioMutex<Option<Arc<FileSubscriber>>>>,
-    connected_node_profiles: Arc<Mutex<VolatileHashSet<Arc<NodeProfile>>>>,
-    clock: Arc<dyn Clock<Utc> + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
-    rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
-    option: FileExchangerOption,
-    join_handles: Arc<TokioMutex<Vec<JoinHandle<()>>>>,
-    token: CancellationToken,
+    rng: Arc<parking_lot::Mutex<dyn rand::Rng + Send + Sync>>,
+    join_handles: TokioMutex<Vec<JoinHandle<()>>>,
 }
 
 #[async_trait]
 impl Shutdown for TaskConnector {
     async fn shutdown(&self) {
-        self.token.cancel();
-        for join_handle in self.join_handles.lock().await.drain(..) {
-            let _ = join_handle.await;
+        let handles = std::mem::take(&mut *self.join_handles.lock().await);
+        for handle in handles {
+            let _ = handle.await;
         }
     }
 }
 
 impl TaskConnector {
-    #[allow(clippy::too_many_arguments)]
-    pub async fn new(
-        sessions: Arc<TokioRwLock<HashMap<Vec<u8>, Arc<SessionStatus>>>>,
-        session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
+    pub fn new(
+        ctx: Arc<ExchangeContext>,
         session_connector: Arc<SessionConnector>,
-        node_finder: Arc<NodeFinder>,
-        file_publisher: Arc<TokioMutex<Option<Arc<FilePublisher>>>>,
-        file_subscriber: Arc<TokioMutex<Option<Arc<FileSubscriber>>>>,
-        connected_node_profiles: Arc<Mutex<VolatileHashSet<Arc<NodeProfile>>>>,
-        clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
-        rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
-        option: FileExchangerOption,
-    ) -> Result<Arc<Self>> {
+        rng: Arc<parking_lot::Mutex<dyn rand::Rng + Send + Sync>>,
+    ) -> Arc<Self> {
         let v = Arc::new(Self {
-            sessions,
-            session_sender,
+            ctx,
             session_connector,
-            node_finder,
-            file_publisher,
-            file_subscriber,
-            connected_node_profiles,
-            clock,
             sleeper,
             rng,
-            option,
-            join_handles: Arc::new(TokioMutex::new(vec![])),
-            token: CancellationToken::new(),
+            join_handles: TokioMutex::new(Vec::new()),
         });
-
-        v.clone().start().await?;
-
-        Ok(v)
-    }
-
-    async fn start(self: Arc<Self>) -> Result<()> {
-        {
-            let this = self.clone();
-            let join_handle = tokio::spawn(async move {
-                while !this.token.is_cancelled() {
-                    select! {
-                        _ = async {
-                            this.sleeper.sleep(std::time::Duration::from_secs(1)).await;
-                            let res = this.connect_for_publish().await;
-                            if let Err(e) = res {
-                                warn!(error_message = e.to_string(), "connect failed");
-                            }
-                        } => {}
-                        _ = this.token.cancelled() => break,
-                    }
+        let this = v.clone();
+        let join_handle = tokio::spawn(async move {
+            while !this.ctx.cancellation_token.is_cancelled() {
+                select! {
+                    _ = async {
+                        this.sleeper.sleep(this.ctx.intervals.connect).await;
+                        if let Err(error) = this.connect().await {
+                            warn!(error_message = error.to_string(), "connect failed");
+                        }
+                    } => {}
+                    _ = this.ctx.cancellation_token.cancelled() => break,
                 }
-            });
-            self.join_handles.lock().await.push(join_handle);
-        }
+            }
+        });
+        v.join_handles.try_lock().expect("the task was just created").push(join_handle);
+        v
+    }
 
-        {
-            let this = self.clone();
-            let join_handle = tokio::spawn(async move {
-                while !this.token.is_cancelled() {
-                    select! {
-                        _ = async {
-                            this.sleeper.sleep(std::time::Duration::from_secs(1)).await;
-                            let res = this.connect_for_subscribe().await;
-                            if let Err(e) = res {
-                                warn!(error_message = e.to_string(), "connect failed");
-                            }
-                        } => {}
-                        _ = this.token.cancelled() => break,
-                    }
+    /// Dials one new peer, taking the fetch targets first in the order of their priority.
+    /// Fetch and serve targets use separate connection slots.
+    async fn connect(&self) -> Result<()> {
+        let (fetching, mut serving) = {
+            let root_hashes = self.ctx.root_hashes();
+            (root_hashes.fetching().to_vec(), root_hashes.serving())
+        };
+        serving.shuffle(&mut *self.rng.lock());
+
+        for (slots, root_hashes) in [(self.ctx.fetch_slots.clone(), fetching), (self.ctx.serve_slots.clone(), serving)] {
+            for root_hash in root_hashes {
+                let Ok(permit) = slots.clone().try_acquire_owned() else {
+                    break;
+                };
+                if self.ctx.registry.count_by_root_hash(&root_hash) >= self.ctx.option.max_session_per_root_hash_count {
+                    continue;
                 }
-            });
-            self.join_handles.lock().await.push(join_handle);
-        }
-
-        Ok(())
-    }
-
-    async fn connect_for_publish(&self) -> Result<()> {
-        let session_count = self
-            .sessions
-            .read()
-            .await
-            .iter()
-            .filter(|(_, status)| status.session.handshake_type == SessionHandshakeType::Connected && status.exchange_type == ExchangeType::Publish)
-            .count();
-        if session_count >= self.option.max_connected_session_for_publish_count {
-            return Ok(());
-        }
-
-        let root_hashes = {
-            if let Some(file_publisher) = self.file_publisher.lock().await.as_ref() {
-                file_publisher.as_ref().get_published_root_hashes().await?
-            } else {
-                return Ok(());
-            }
-        };
-        self.connect_sub(ExchangeType::Publish, root_hashes).await
-    }
-
-    async fn connect_for_subscribe(&self) -> Result<()> {
-        let session_count = self
-            .sessions
-            .read()
-            .await
-            .iter()
-            .filter(|(_, status)| status.session.handshake_type == SessionHandshakeType::Connected && status.exchange_type == ExchangeType::Subscribe)
-            .count();
-        if session_count >= self.option.max_connected_session_for_subscribe_count {
-            return Ok(());
-        }
-
-        let root_hashes = {
-            if let Some(file_subscriber) = self.file_subscriber.lock().await.as_ref() {
-                file_subscriber.as_ref().get_subscribed_root_hashes().await?
-            } else {
-                return Ok(());
-            }
-        };
-        self.connect_sub(ExchangeType::Subscribe, root_hashes).await
-    }
-
-    async fn connect_sub(&self, exchange_type: ExchangeType, root_hashes: Vec<OmniHash>) -> Result<()> {
-        self.connected_node_profiles.lock().refresh();
-
-        let connected_ids: HashSet<Vec<u8>> = {
-            let v1: Vec<Vec<u8>> = self.connected_node_profiles.lock().iter().map(|n| n.id().to_vec()).collect();
-            let v2: Vec<Vec<u8>> = self.sessions.read().await.iter().map(|n| n.0.to_owned()).collect();
-            v1.into_iter().chain(v2).collect()
-        };
-
-        let asset_keys = {
-            let mut rng = self.rng.lock();
-            let mut asset_keys: Vec<AssetKey> = root_hashes.into_iter().map(|hash| AssetKey { typ: "file".to_string(), hash }).collect();
-            asset_keys.shuffle(&mut rng);
-            asset_keys
-        };
-
-        for asset_key in asset_keys {
-            // let asset_keys = {
-            //     let mut rng = self.rng.lock();
-            //     let mut asset_keys: Vec<AssetKey> = root_hashes.into_iter().map(|hash| AssetKey { typ: "file".to_string(), hash }).collect();
-            //     asset_keys.shuffle(&mut rng);
-            //     asset_keys
-            // };
-
-            let node_profiles = self.node_finder.find_node_profile(&asset_key).await?;
-            let node_profiles: Vec<Arc<NodeProfile>> = node_profiles.into_iter().filter(|n| !connected_ids.contains(n.id())).collect();
-
-            for node_profile in node_profiles {
-                for addr in node_profile.addrs().iter() {
-                    if let Ok(session) = self.session_connector.connect(addr, &SessionType::FileExchanger).await {
-                        let status = SessionStatus::new(exchange_type, session, Some(asset_key.hash.clone()), self.clock.clone());
-                        self.session_sender
-                            .lock()
-                            .await
-                            .send(status)
-                            .await
-                            .map_err(|e| Error::from_error(e, ErrorKind::UnexpectedError))?;
-                        self.connected_node_profiles.lock().insert(node_profile.clone());
-
-                        return Ok(());
-                    }
+                if let Some(session) = self.dial(&root_hash).await? {
+                    self.ctx.start_session(session, permit);
+                    return Ok(());
                 }
             }
         }
 
         Ok(())
+    }
+
+    async fn dial(&self, root_hash: &OmniHash) -> Result<Option<Arc<ExchangeSession>>> {
+        let mut node_profiles = self.ctx.location_finder.find(&AssetKey::file(root_hash.clone())).await?;
+        node_profiles.shuffle(&mut *self.rng.lock());
+
+        for node_profile in node_profiles {
+            let node_id = node_profile.id();
+            if !self.is_candidate(node_id, root_hash) || !self.ctx.begin_dial(node_id, root_hash) {
+                continue;
+            }
+            let session = self.dial_node(root_hash, &node_profile).await;
+            self.ctx.end_dial(node_id, root_hash);
+            if let Some(session) = session {
+                return Ok(Some(session));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn is_candidate(&self, node_id: &[u8], root_hash: &OmniHash) -> bool {
+        node_id != self.ctx.my_node_id.as_slice()
+            && !self.ctx.is_excluded(node_id)
+            && !self.ctx.is_pair_set_aside(node_id, root_hash)
+            && !self.ctx.registry.contains(node_id, root_hash)
+    }
+
+    async fn dial_node(&self, root_hash: &OmniHash, node_profile: &NodeProfile) -> Option<Arc<ExchangeSession>> {
+        for addr in node_profile.addrs().iter() {
+            let Ok(session) = self.session_connector.connect(addr, &SessionType::FileExchanger).await else {
+                continue;
+            };
+            // The address may belong to another node now, which cannot be the node the lookup found.
+            if !session.is_signed_by(node_profile) {
+                warn!(address = addr.to_string(), "the peer's key does not match the node profile");
+                continue;
+            }
+            match ExchangeHandshake::dial(&session, root_hash, self.ctx.intervals.receive_timeout()).await {
+                Ok(()) => {
+                    let id = self.ctx.next_session_id();
+                    return Some(Arc::new(ExchangeSession::new(id, node_profile.id().to_vec(), root_hash.clone(), session)));
+                }
+                Err(error) if error.kind() == &ErrorKind::Reject => {
+                    self.ctx.set_aside_pair(node_profile.id(), root_hash, self.ctx.intervals.reject_retry);
+                    return None;
+                }
+                Err(error) => warn!(error_message = error.to_string(), "file exchange handshake failed"),
+            }
+        }
+
+        None
     }
 }

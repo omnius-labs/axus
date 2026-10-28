@@ -120,7 +120,7 @@ impl TaskCommunicator {
     async fn communicate(self: Arc<Self>, status: SessionStatus) -> Result<()> {
         let my_node_profile = self.my_node_profile.lock().clone();
         // 登録前なので、cancel されたら後始末なしで終える
-        let (other_node_profile, received_at) = select! {
+        let other_node_profile = select! {
             res = Self::handshake(&status.session, &my_node_profile, self.option.intervals.receive_timeout()) => res?,
             _ = self.cancellation_token.cancelled() => return Ok(()),
         };
@@ -139,7 +139,7 @@ impl TaskCommunicator {
         info!(node_profile = other_node_profile_uri, "Session established");
 
         let s = self.clone().send(status.clone()).await;
-        let r = self.clone().receive(status.clone(), received_at).await;
+        let r = self.clone().receive(status.clone()).await;
         let _ = tokio::join!(s, r);
 
         info!(node_profile = other_node_profile_uri, "Session closed");
@@ -149,12 +149,12 @@ impl TaskCommunicator {
         Ok(())
     }
 
-    pub async fn handshake(session: &Session, node_profile: &NodeProfile, receive_timeout: Duration) -> Result<(NodeProfile, Instant)> {
-        let deadline = Instant::now() + receive_timeout;
+    pub async fn handshake(session: &Session, node_profile: &NodeProfile, receive_timeout: Duration) -> Result<NodeProfile> {
+        session.stream.set_receive_timeout(receive_timeout);
         let send_hello_message = HelloMessage {
             version: make_bitflags!(NodeFinderVersion::V1),
         };
-        let (received_hello_message, received_at) = Self::exchange_message::<HelloMessageCodec>(session, &send_hello_message, deadline).await?;
+        let received_hello_message = Self::exchange_message::<HelloMessageCodec>(session, &send_hello_message).await?;
 
         let version = send_hello_message.version & received_hello_message.version;
 
@@ -162,7 +162,7 @@ impl TaskCommunicator {
             let send_profile_message = ProfileMessage {
                 node_profile: node_profile.clone(),
             };
-            let (received_profile_message, received_at) = Self::exchange_message::<ProfileMessageCodec>(session, &send_profile_message, received_at + receive_timeout).await?;
+            let received_profile_message = Self::exchange_message::<ProfileMessageCodec>(session, &send_profile_message).await?;
 
             if received_profile_message.node_profile.id() == node_profile.id() {
                 return Err(Error::new(ErrorKind::Reject).with_message("connected to self"));
@@ -173,23 +173,18 @@ impl TaskCommunicator {
                 return Err(Error::new(ErrorKind::Reject).with_message("node profile does not match the session certificate"));
             }
 
-            Ok((received_profile_message.node_profile, received_at))
+            Ok(received_profile_message.node_profile)
         } else {
             Err(Error::new(ErrorKind::UnsupportedType).with_message(format!("invalid version: {}", version.bits())))
         }
     }
 
-    async fn exchange_message<C: MessageCodec>(session: &Session, message: &C::Message, deadline: Instant) -> Result<(C::Message, Instant)>
+    async fn exchange_message<C: MessageCodec>(session: &Session, message: &C::Message) -> Result<C::Message>
     where
         C::Message: Send + Sync,
     {
-        let received = timeout_at(deadline, async {
-            session.stream.sender.lock().await.send_message_with::<C>(message).await?;
-            session.stream.receiver.lock().await.recv_message_with::<C>().await
-        })
-        .await
-        .map_err(|e| Error::from_error(e, ErrorKind::NetworkError).with_message("NodeFinder receive timed out"))??;
-        Ok((received, Instant::now()))
+        session.stream.sender.lock().await.send_message_with::<C>(message).await?;
+        session.stream.receiver.lock().await.recv_message_with::<C>().await
     }
 
     async fn send(self: Arc<Self>, status: Arc<SessionStatus>) -> JoinHandle<()> {
@@ -215,7 +210,7 @@ impl TaskCommunicator {
         })
     }
 
-    async fn receive(self: Arc<Self>, status: Arc<SessionStatus>, received_at: Instant) -> JoinHandle<()> {
+    async fn receive(self: Arc<Self>, status: Arc<SessionStatus>) -> JoinHandle<()> {
         let this = self.clone();
         tokio::spawn(async move {
             let receiver = TaskReceiver {
@@ -226,16 +221,12 @@ impl TaskCommunicator {
             let f = async {
                 let communicate = this.option.intervals.communicate;
                 let receive_timeout = this.option.intervals.receive_timeout();
-                let mut deadline = received_at + receive_timeout;
                 loop {
                     let res = async {
-                        let data_message = timeout_at(deadline, receiver.receive())
-                            .await
-                            .map_err(|e| Error::from_error(e, ErrorKind::NetworkError).with_message("NodeFinder receive timed out"))??;
-                        // 受信した時点で更新し、保存処理にかかった時間で期限を延ばさない
+                        let data_message = receiver.receive().await?;
+                        // 受信した時点を基準にし、保存処理にかかった時間で期限を延ばさない
                         let received_at = Instant::now();
-                        deadline = received_at + receive_timeout;
-                        timeout_at(deadline, receiver.apply(data_message))
+                        timeout_at(received_at + receive_timeout, receiver.apply(data_message))
                             .await
                             .map_err(|e| Error::from_error(e, ErrorKind::NetworkError).with_message("NodeFinder receive timed out"))??;
                         // 周期より速く送る相手に、保存処理を繰り返させない
@@ -1058,7 +1049,7 @@ mod tests {
 
         let peer_task = tokio::spawn(answer_handshake(peer, peer_node_profile.clone()));
 
-        let (received, _) = TaskCommunicator::handshake(&session, &node_profile(), NodeFinderIntervals::default().receive_timeout()).await?;
+        let received = TaskCommunicator::handshake(&session, &node_profile(), NodeFinderIntervals::default().receive_timeout()).await?;
         assert_eq!(received, peer_node_profile);
         peer_task.await??;
 

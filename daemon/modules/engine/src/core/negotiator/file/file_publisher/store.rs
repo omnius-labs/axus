@@ -15,7 +15,7 @@ use tokio_util::bytes::Bytes;
 use omnius_core_base::{clock::Clock, tsid::TsidProvider};
 use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
-use crate::base::storage::KeyValueRocksdbStorage;
+use crate::{base::storage::KeyValueRocksdbStorage, generated::axus::file::MAX_BLOCK_LENGTH};
 
 use super::{repo::FilePublisherRepo, *};
 
@@ -66,6 +66,9 @@ impl FilePublisherStore {
     pub async fn import(&self, file_path: &str, file_name: &str, block_size: u32, attrs: Option<&str>, priority: i64) -> Result<String> {
         if block_size == 0 {
             return Err(Error::new(ErrorKind::InvalidFormat).with_message("block size must be nonzero"));
+        }
+        if block_size > MAX_BLOCK_LENGTH {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message(format!("block size must be at most {MAX_BLOCK_LENGTH} bytes")));
         }
         let _guard = self.lock.lock().await;
         let existing = self
@@ -430,6 +433,20 @@ mod tests {
         // 遅延外部 key 制約で INSERT を通し、SQLite の COMMIT 自体を失敗させる。
         sqlx::raw_sql("CREATE TABLE commit_parent (id INTEGER PRIMARY KEY); CREATE TABLE commit_failure (id INTEGER REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER reject_commit AFTER INSERT ON committed_files BEGIN INSERT INTO commit_failure VALUES (1); END;")
             .execute(store.repo.test_db()).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn import_rejects_a_block_size_over_the_maximum_block_length() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FilePublisherStore::open(dir.path(), ids, clock).await?;
+        assert_eq!(
+            store.import("source", "a", MAX_BLOCK_LENGTH + 1, None, 0).await.unwrap_err().kind(),
+            &ErrorKind::InvalidFormat
+        );
+        assert!(store.repo.get_uncommitted_files().await?.is_empty());
+        store.import("source", "a", MAX_BLOCK_LENGTH, None, 0).await?;
         Ok(())
     }
 

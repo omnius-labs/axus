@@ -57,3 +57,262 @@ impl omnius_core_rocketpack::RocketPackStruct for MerkleLayer {
         })
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExchangeMessage {
+    Hello {
+        version: u32,
+    },
+    Open {
+        root_hash: omnius_core_omnikit::generated::omni_hash::OmniHash,
+    },
+    Accept,
+    Reject,
+    Status {
+        want: bool,
+        choke: bool,
+    },
+    Request {
+        block_hashes: Vec<omnius_core_omnikit::generated::omni_hash::OmniHash>,
+    },
+    Block {
+        block_hash: omnius_core_omnikit::generated::omni_hash::OmniHash,
+        value: Vec<u8>,
+    },
+    NotHave {
+        block_hash: omnius_core_omnikit::generated::omni_hash::OmniHash,
+    },
+}
+
+impl omnius_core_rocketpack::RocketPackStruct for ExchangeMessage {
+    fn validate(value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        match value {
+            Self::Hello { version: _ } => {}
+            Self::Open { root_hash } => {
+                <omnius_core_omnikit::generated::omni_hash::OmniHash as omnius_core_rocketpack::RocketPackStruct>::validate(root_hash)?;
+            }
+            Self::Accept => {}
+            Self::Reject => {}
+            Self::Status { want: _, choke: _ } => {}
+            Self::Request { block_hashes } => {
+                omnius_core_rocketpack::validate_length("ExchangeMessage.Request.block_hashes", 0, 64, (block_hashes).len())?;
+                for item in (block_hashes).iter() {
+                    <omnius_core_omnikit::generated::omni_hash::OmniHash as omnius_core_rocketpack::RocketPackStruct>::validate(item)?;
+                }
+            }
+            Self::Block { block_hash, value } => {
+                <omnius_core_omnikit::generated::omni_hash::OmniHash as omnius_core_rocketpack::RocketPackStruct>::validate(block_hash)?;
+                omnius_core_rocketpack::validate_length("ExchangeMessage.Block.value", 0, 1048576, (value).len())?;
+            }
+            Self::NotHave { block_hash } => {
+                <omnius_core_omnikit::generated::omni_hash::OmniHash as omnius_core_rocketpack::RocketPackStruct>::validate(block_hash)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn pack(encoder: &mut impl omnius_core_rocketpack::RocketPackEncoder, value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        encoder.write_map(1)?;
+
+        match value {
+            Self::Hello { version } => {
+                encoder.write_u64(1)?;
+                encoder.write_map(1)?;
+                encoder.write_u64(1)?;
+                encoder.write_u32(*(version))?;
+            }
+            Self::Open { root_hash } => {
+                encoder.write_u64(2)?;
+                encoder.write_map(1)?;
+                encoder.write_u64(1)?;
+                encoder.write_struct(root_hash)?;
+            }
+            Self::Accept => {
+                encoder.write_u64(3)?;
+                encoder.write_map(0)?;
+            }
+            Self::Reject => {
+                encoder.write_u64(4)?;
+                encoder.write_map(0)?;
+            }
+            Self::Status { want, choke } => {
+                encoder.write_u64(5)?;
+                encoder.write_map(2)?;
+                encoder.write_u64(1)?;
+                encoder.write_bool(*(want))?;
+                encoder.write_u64(2)?;
+                encoder.write_bool(*(choke))?;
+            }
+            Self::Request { block_hashes } => {
+                encoder.write_u64(6)?;
+                encoder.write_map(1)?;
+                encoder.write_u64(1)?;
+                omnius_core_rocketpack::validate_length("ExchangeMessage.Request.block_hashes", 0, 64, (block_hashes).len())?;
+                encoder.write_array((block_hashes).len())?;
+                for item in (block_hashes).iter() {
+                    encoder.write_struct(item)?;
+                }
+            }
+            Self::Block { block_hash, value } => {
+                encoder.write_u64(7)?;
+                encoder.write_map(2)?;
+                encoder.write_u64(1)?;
+                encoder.write_struct(block_hash)?;
+                encoder.write_u64(2)?;
+                omnius_core_rocketpack::validate_length("ExchangeMessage.Block.value", 0, 1048576, (value).len())?;
+                encoder.write_bytes((value).as_slice())?;
+            }
+            Self::NotHave { block_hash } => {
+                encoder.write_u64(8)?;
+                encoder.write_map(1)?;
+                encoder.write_u64(1)?;
+                encoder.write_struct(block_hash)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn unpack(decoder: &mut impl omnius_core_rocketpack::RocketPackDecoder) -> std::result::Result<Self, omnius_core_rocketpack::RocketPackDecoderError>
+    where
+        Self: Sized,
+    {
+        let mut __rpf_result: Option<Self> = None;
+        let __rpf_count = decoder.read_map()?;
+
+        for _ in 0..__rpf_count {
+            match decoder.read_u64()? {
+                1 => {
+                    let __inner_count_0 = decoder.read_map()?;
+                    let mut __rpf_storage_version: Option<u32> = None;
+                    for _ in 0..__inner_count_0 {
+                        match decoder.read_u64()? {
+                            1 => {
+                                __rpf_storage_version = Some(decoder.read_u32()?);
+                            }
+                            _ => decoder.skip_field()?,
+                        }
+                    }
+                    __rpf_result = Some(Self::Hello {
+                        version: __rpf_storage_version.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: version"))?,
+                    });
+                }
+                2 => {
+                    let __inner_count_1 = decoder.read_map()?;
+                    let mut __rpf_storage_root_hash: Option<omnius_core_omnikit::generated::omni_hash::OmniHash> = None;
+                    for _ in 0..__inner_count_1 {
+                        match decoder.read_u64()? {
+                            1 => {
+                                __rpf_storage_root_hash = Some(decoder.read_struct::<omnius_core_omnikit::generated::omni_hash::OmniHash>()?);
+                            }
+                            _ => decoder.skip_field()?,
+                        }
+                    }
+                    __rpf_result = Some(Self::Open {
+                        root_hash: __rpf_storage_root_hash.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: root_hash"))?,
+                    });
+                }
+                3 => {
+                    let __inner_count_2 = decoder.read_map()?;
+                    for _ in 0..__inner_count_2 {
+                        let _ = decoder.read_u64()?;
+                        decoder.skip_field()?;
+                    }
+                    __rpf_result = Some(Self::Accept);
+                }
+                4 => {
+                    let __inner_count_3 = decoder.read_map()?;
+                    for _ in 0..__inner_count_3 {
+                        let _ = decoder.read_u64()?;
+                        decoder.skip_field()?;
+                    }
+                    __rpf_result = Some(Self::Reject);
+                }
+                5 => {
+                    let __inner_count_4 = decoder.read_map()?;
+                    let mut __rpf_storage_want: Option<bool> = None;
+                    let mut __rpf_storage_choke: Option<bool> = None;
+                    for _ in 0..__inner_count_4 {
+                        match decoder.read_u64()? {
+                            1 => {
+                                __rpf_storage_want = Some(decoder.read_bool()?);
+                            }
+                            2 => {
+                                __rpf_storage_choke = Some(decoder.read_bool()?);
+                            }
+                            _ => decoder.skip_field()?,
+                        }
+                    }
+                    __rpf_result = Some(Self::Status {
+                        want: __rpf_storage_want.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: want"))?,
+                        choke: __rpf_storage_choke.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: choke"))?,
+                    });
+                }
+                6 => {
+                    let __inner_count_5 = decoder.read_map()?;
+                    let mut __rpf_storage_block_hashes: Option<Vec<omnius_core_omnikit::generated::omni_hash::OmniHash>> = None;
+                    for _ in 0..__inner_count_5 {
+                        match decoder.read_u64()? {
+                            1 => {
+                                let __count_6 = decoder.read_array_bounded("ExchangeMessage.Request.block_hashes", 0, 64)?;
+                                let mut __values_7: Vec<omnius_core_omnikit::generated::omni_hash::OmniHash> = Vec::new();
+                                for _ in 0..__count_6 {
+                                    __values_7.push(decoder.read_struct::<omnius_core_omnikit::generated::omni_hash::OmniHash>()?);
+                                }
+                                __rpf_storage_block_hashes = Some(__values_7);
+                            }
+                            _ => decoder.skip_field()?,
+                        }
+                    }
+                    __rpf_result = Some(Self::Request {
+                        block_hashes: __rpf_storage_block_hashes.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: block_hashes"))?,
+                    });
+                }
+                7 => {
+                    let __inner_count_8 = decoder.read_map()?;
+                    let mut __rpf_storage_block_hash: Option<omnius_core_omnikit::generated::omni_hash::OmniHash> = None;
+                    let mut __rpf_storage_value: Option<Vec<u8>> = None;
+                    for _ in 0..__inner_count_8 {
+                        match decoder.read_u64()? {
+                            1 => {
+                                __rpf_storage_block_hash = Some(decoder.read_struct::<omnius_core_omnikit::generated::omni_hash::OmniHash>()?);
+                            }
+                            2 => {
+                                __rpf_storage_value = Some(decoder.read_bytes_bounded("ExchangeMessage.Block.value", 0, 1048576)?);
+                            }
+                            _ => decoder.skip_field()?,
+                        }
+                    }
+                    __rpf_result = Some(Self::Block {
+                        block_hash: __rpf_storage_block_hash.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: block_hash"))?,
+                        value: __rpf_storage_value.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: value"))?,
+                    });
+                }
+                8 => {
+                    let __inner_count_9 = decoder.read_map()?;
+                    let mut __rpf_storage_block_hash: Option<omnius_core_omnikit::generated::omni_hash::OmniHash> = None;
+                    for _ in 0..__inner_count_9 {
+                        match decoder.read_u64()? {
+                            1 => {
+                                __rpf_storage_block_hash = Some(decoder.read_struct::<omnius_core_omnikit::generated::omni_hash::OmniHash>()?);
+                            }
+                            _ => decoder.skip_field()?,
+                        }
+                    }
+                    __rpf_result = Some(Self::NotHave {
+                        block_hash: __rpf_storage_block_hash.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: block_hash"))?,
+                    });
+                }
+                _ => decoder.skip_field()?,
+            }
+        }
+
+        __rpf_result.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing enum variant"))
+    }
+}
+
+pub const MAX_BLOCK_LENGTH: u32 = 1048576;
+
+pub const MAX_REQUEST_BLOCK_HASHES: u32 = 64;
+
+pub const MAX_PENDING_REQUESTS: u32 = 16;

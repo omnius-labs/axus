@@ -1,12 +1,11 @@
 use std::{sync::Arc, time::Duration};
 
-use omnius_core_omnikit::service::connection::codec::{FramedReceiver, FramedRecv, FramedSend, FramedSender};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::Mutex as TokioMutex,
 };
 
-use super::receive_deadline::{DeadlineReceiver, ReceiveDeadline};
+use omnius_core_omnikit::service::connection::codec::{DeadlineReceiver, FramedReceiver, FramedRecv, FramedSend, FramedSender, ReceiveDeadline};
 
 #[derive(Clone)]
 pub struct FramedStream {

@@ -45,6 +45,19 @@ impl MessageCodec for NodeMessageCodec {
             NodeMessage::AnnounceProfiles { node_profiles } => wire::NodeMessage::AnnounceProfiles {
                 node_profiles: node_profiles.iter().map(|profile| NodeProfileCodec::to_wire(profile)).collect(),
             },
+            NodeMessage::LookupRequest { lookup_id, asset_key } => wire::NodeMessage::LookupRequest {
+                lookup_id: *lookup_id,
+                asset_key: asset_key.clone(),
+            },
+            NodeMessage::LookupResponse {
+                lookup_id,
+                locations,
+                closer_nodes,
+            } => wire::NodeMessage::LookupResponse {
+                lookup_id: *lookup_id,
+                locations: locations.iter().map(|profile| NodeProfileCodec::to_wire(profile)).collect(),
+                closer_nodes: closer_nodes.iter().map(|profile| NodeProfileCodec::to_wire(profile)).collect(),
+            },
             NodeMessage::AnnounceLocations { locations } => wire::NodeMessage::AnnounceLocations {
                 locations: locations
                     .iter()
@@ -71,6 +84,16 @@ impl MessageCodec for NodeMessageCodec {
                 node_profile: NodeProfileCodec::from_wire(node_profile)?,
             },
             wire::NodeMessage::Status => NodeMessage::Status,
+            wire::NodeMessage::LookupRequest { lookup_id, asset_key } => NodeMessage::LookupRequest { lookup_id, asset_key },
+            wire::NodeMessage::LookupResponse {
+                lookup_id,
+                locations,
+                closer_nodes,
+            } => NodeMessage::LookupResponse {
+                lookup_id,
+                locations: Self::profiles(locations)?,
+                closer_nodes: Self::profiles(closer_nodes)?,
+            },
             wire::NodeMessage::AnnounceProfiles { node_profiles } => NodeMessage::AnnounceProfiles {
                 node_profiles: Self::profiles(node_profiles)?,
             },

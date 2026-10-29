@@ -3,52 +3,9 @@ use std::cmp::Ordering;
 pub struct Kadex;
 
 impl Kadex {
-    pub fn find<'a>(base: &'a [u8], target: &'a [u8], elements: &[&'a [u8]], count: usize) -> Vec<&'a [u8]> {
-        let mut list: Vec<SortEntry<'a>> = Vec::new();
-
-        let diff: Vec<u8> = target.iter().zip(base).map(|(x, y)| x ^ y).collect();
-        list.push(SortEntry { value: base, diff });
-
-        for element in elements {
-            let diff: Vec<u8> = target.iter().zip(*element).map(|(x, y)| x ^ y).collect();
-            list.push(SortEntry { value: element.to_owned(), diff });
-        }
-
-        let mut results: Vec<&SortEntry<'a>> = Vec::with_capacity(count);
-
-        // append dummy
-        for _ in 0..count {
-            results.push(&list[0]);
-        }
-
-        for entry in list.iter().skip(1) {
-            let mut left = 0;
-            let mut right = results.len();
-
-            while left < right {
-                let middle = (left + right) / 2;
-
-                if Kadex::compare(&results[middle].diff, &entry.diff) != Ordering::Greater {
-                    left = middle + 1;
-                } else {
-                    right = middle;
-                }
-            }
-
-            if left == results.len() {
-                continue;
-            }
-
-            for j in ((left + 1)..results.len()).rev() {
-                results.swap(j - 1, j);
-            }
-
-            results[left] = entry;
-        }
-
-        results.into_iter().take_while(|v| v.value != base).map(|v| v.value).collect::<Vec<&'a [u8]>>()
-    }
-
+    /// Orders two XOR distances, nearest first.
+    ///
+    /// The distance is compared from its last byte toward its first, because the node ID and the AssetKey hash are interpreted the same way by every node; another implementation must use this order to choose the same closest nodes.
     pub fn compare(x: &[u8], y: &[u8]) -> Ordering {
         if x.len() != y.len() {
             return x.len().cmp(&y.len());
@@ -69,11 +26,6 @@ impl Kadex {
     }
 }
 
-struct SortEntry<'a> {
-    pub value: &'a [u8],
-    pub diff: Vec<u8>,
-}
-
 #[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
@@ -81,56 +33,13 @@ mod tests {
     use super::Kadex;
 
     #[test]
-    pub fn find_test() {
-        let element1 = vec![1, 1, 1, 1];
-        let element2 = vec![0, 1, 1, 1];
-        let element3 = vec![0, 0, 1, 1];
+    fn the_nearest_distance_sorts_first() {
+        let target = vec![1u8, 1];
+        let near = vec![1u8, 0];
+        let far = vec![0u8, 0];
+        let distance = |id: &Vec<u8>| -> Vec<u8> { target.iter().zip(id).map(|(left, right)| left ^ right).collect() };
 
-        let base: Vec<u8> = vec![0, 0, 0, 0];
-        let target: Vec<u8> = vec![1, 1, 1, 1];
-        let elements: Vec<&[u8]> = vec![&element1, &element2, &element3];
-        let res = Kadex::find(&base, &target, &elements, 3);
-        assert_eq!(res, vec![&element1, &element2, &element3]);
-
-        let base: Vec<u8> = vec![0, 0, 0, 0];
-        let target: Vec<u8> = vec![1, 1, 1, 1];
-        let elements: Vec<&[u8]> = vec![&element1, &element2, &element3];
-        let res = Kadex::find(&base, &target, &elements, 2);
-        assert_eq!(res, vec![&element1, &element2]);
-
-        let base: Vec<u8> = vec![0, 0, 0, 0];
-        let target: Vec<u8> = vec![1, 1, 1, 1];
-        let elements: Vec<&[u8]> = vec![&element1, &element2, &element3];
-        let res = Kadex::find(&base, &target, &elements, 1);
-        assert_eq!(res, vec![&element1]);
-    }
-
-    #[test]
-    pub fn find_farthest_first_test() {
-        let candidates = [vec![1, 0], vec![0, 1], vec![1, 1], vec![0, 2], vec![0, 3]];
-        let expected: Vec<&[u8]> = candidates.iter().map(Vec::as_slice).collect();
-        let elements: Vec<&[u8]> = expected.iter().copied().rev().collect();
-        let base = vec![255, 255];
-        let target = vec![0, 0];
-
-        for count in [1, 2, 3, 7] {
-            let res = Kadex::find(&base, &target, &elements, count);
-            assert_eq!(res, expected[..count.min(expected.len())]);
-        }
-    }
-
-    #[test]
-    pub fn find_shuffled_test() {
-        let candidates = [vec![1, 0], vec![0, 1], vec![1, 1], vec![0, 2], vec![0, 3]];
-        let expected: Vec<&[u8]> = candidates.iter().map(Vec::as_slice).collect();
-        let elements = vec![expected[2], expected[4], expected[0], expected[3], expected[1]];
-        let base = vec![255, 255];
-        let target = vec![0, 0];
-
-        for count in [1, 2, 3, 7] {
-            let res = Kadex::find(&base, &target, &elements, count);
-            assert_eq!(res, expected[..count.min(expected.len())]);
-        }
+        assert_eq!(Kadex::compare(&distance(&near), &distance(&far)), Ordering::Less);
     }
 
     #[test]

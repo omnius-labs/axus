@@ -88,7 +88,7 @@ The NodeFinder wire becomes incompatible with the previous daemon in both direct
 | [1](#s-1) | Location cache and receive limits | 0 | done |
 | [2](#s-2) | Message-per-purpose protocol, announcements, and Status | 1 | done |
 | [3](#s-3) | Persistence by last seen time and dial backoff | | done |
-| [4](#s-4) | Routing table and active lookup | 2, 3 | |
+| [4](#s-4) | Routing table and active lookup | 2, 3 | done |
 | [5](#s-5) | Distance order, cleanup, and document close-out | 4 | |
 
 <a id="s-0"></a>
@@ -163,8 +163,12 @@ Dial a node that the lookup needs when no Session exists, and register the estab
 Keep a per-AssetKey cooldown and a negative cache so a missing AssetKey does not dial on every cycle.
 Raise the Session limits to eight connected and eight accepted.
 
+**What it became**
+The lookup runs as its own task over the local wants, every `NodeFinderIntervals::lookup` cycle with a cooldown of three cycles per AssetKey.
+The XOR order used to choose the fan-out is `RoutingTable::closest_ids`; `Kadex::find` padded its result with the node itself and stopped at it, which dropped every candidate when the asking node was the closest one, so only `Kadex::compare` remains in use.
+
 **Completion criterion**
-Tests show an iterative lookup reaching a publisher two hops away, a lookup advancing through `closer_nodes`, the deadline ending a lookup whose peers stay silent, and no repeated dial for an AssetKey nobody publishes.
+The service tests reach a publisher through a bootstrap node and through a relay node without the propagation that Step 2 removed, and the lookup, registry, and routing-table unit tests pass.
 
 <a id="s-5"></a>
 ### Step 5. Distance order, cleanup, and document close-out

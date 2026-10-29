@@ -48,6 +48,7 @@ pub struct NodeFinder {
     task_acceptors: Arc<TokioMutex<Vec<Arc<TaskAccepter>>>>,
     task_computer: Arc<TokioMutex<Option<Arc<TaskComputer>>>>,
     task_communicator: Arc<TokioMutex<Option<Arc<TaskCommunicator>>>>,
+    task_lookup: Arc<TokioMutex<Option<Arc<TaskLookup>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +65,8 @@ pub struct NodeFinderIntervals {
     pub connect: std::time::Duration,
     pub compute: std::time::Duration,
     pub communicate: std::time::Duration,
+    /// How often the wanted AssetKeys are looked up again.
+    pub lookup: std::time::Duration,
 }
 
 impl NodeFinderIntervals {
@@ -78,6 +81,7 @@ impl Default for NodeFinderIntervals {
             connect: std::time::Duration::from_secs(20),
             compute: std::time::Duration::from_secs(60),
             communicate: std::time::Duration::from_secs(20),
+            lookup: std::time::Duration::from_secs(10),
         }
     }
 }
@@ -123,6 +127,7 @@ impl NodeFinder {
             task_acceptors: Arc::new(TokioMutex::new(Vec::new())),
             task_computer: Arc::new(TokioMutex::new(None)),
             task_communicator: Arc::new(TokioMutex::new(None)),
+            task_lookup: Arc::new(TokioMutex::new(None)),
         };
         v.start().await?;
 
@@ -201,18 +206,37 @@ impl NodeFinder {
         .await?;
         self.task_computer.lock().await.replace(task);
 
-        let task = TaskCommunicator::new(
+        let lookup_registry = Arc::new(LookupRegistry::new());
+        let communicator = TaskCommunicator::new(
             self.my_node_profile.clone(),
             self.sessions.clone(),
+            self.session_connector.clone(),
             self.node_profile_repo.clone(),
             self.location_cache.clone(),
+            lookup_registry.clone(),
             self.session_receiver.clone(),
             self.clock.clone(),
             self.sleeper.clone(),
             self.option.clone(),
         )
         .await?;
-        self.task_communicator.lock().await.replace(task);
+        self.task_communicator.lock().await.replace(communicator.clone());
+
+        let task = TaskLookup::new(
+            self.my_node_profile.clone(),
+            self.sessions.clone(),
+            communicator,
+            self.node_profile_repo.clone(),
+            self.location_cache.clone(),
+            self.want_cache.clone(),
+            lookup_registry,
+            self.clock.clone(),
+            self.sleeper.clone(),
+            self.rng.clone(),
+            self.option.clone(),
+        )
+        .await?;
+        self.task_lookup.lock().await.replace(task);
 
         Ok(())
     }
@@ -243,6 +267,13 @@ impl Shutdown for NodeFinder {
             let mut task_computer = self.task_computer.lock().await;
             if let Some(task_computer) = task_computer.take() {
                 task_computer.shutdown().await;
+            }
+        }
+
+        {
+            let mut task_lookup = self.task_lookup.lock().await;
+            if let Some(task_lookup) = task_lookup.take() {
+                task_lookup.shutdown().await;
             }
         }
 

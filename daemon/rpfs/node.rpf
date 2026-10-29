@@ -27,10 +27,20 @@ enum NodeMessage {
   @5 AnnounceLocations {
     @1 locations: Map<AssetKey, LocationEntry>[..=MAX_ANNOUNCE_ASSET_KEYS];
   };
+  @6 LookupRequest {
+    @1 lookup_id: u64;
+    @2 asset_key: AssetKey;
+  };
+  @7 LookupResponse {
+    @1 lookup_id: u64;
+    @2 locations: Vec<NodeProfile>[..=MAX_LOCATION_NODE_PROFILES];
+    @3 closer_nodes: Vec<NodeProfile>[..=MAX_CLOSER_NODES];
+  };
 }
 
 const MAX_HOPS: u32 = 3;
 const MAX_ANNOUNCE_NODE_PROFILES: u32 = 32;
 const MAX_ANNOUNCE_ASSET_KEYS: u32 = 1024;
 const MAX_LOCATION_NODE_PROFILES: u32 = 8;
+const MAX_CLOSER_NODES: u32 = 8;
 const MAX_MESSAGE_LENGTH: u32 = 262144;

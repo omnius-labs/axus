@@ -168,7 +168,7 @@ impl TaskComputer {
                 hops: MAX_HOPS,
                 node_profiles: vec![my_node_profile.clone()],
             };
-            for id in Kadex::find(my_node_profile.id(), &asset_key.hash.value, &ids, TaskCommunicator::FAN_OUT) {
+            for id in RoutingTable::closest_ids(my_node_profile.id(), &asset_key.hash.value, &ids, TaskCommunicator::FAN_OUT) {
                 per_session.entry(id.to_vec()).or_default().insert(asset_key.clone(), location.clone());
             }
         }

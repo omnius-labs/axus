@@ -22,7 +22,10 @@ use crate::{
     },
     core::{
         negotiator::node::{AnnounceLocation, NodeFinderVersion, NodeMessage},
-        session::model::Session,
+        session::{
+            SessionConnector,
+            model::{Session, SessionType},
+        },
     },
     model::{AssetKey, NodeProfile},
     prelude::*,
@@ -35,8 +38,10 @@ use super::*;
 pub struct TaskCommunicator {
     my_node_profile: Arc<Mutex<NodeProfile>>,
     sessions: Arc<SessionRegistry>,
+    session_connector: Arc<SessionConnector>,
     node_profile_repo: Arc<NodeFinderRepo>,
     location_cache: Arc<Mutex<LocationCache>>,
+    lookup_registry: Arc<LookupRegistry>,
     session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
@@ -69,8 +74,10 @@ impl TaskCommunicator {
     pub async fn new(
         my_node_profile: Arc<Mutex<NodeProfile>>,
         sessions: Arc<SessionRegistry>,
+        session_connector: Arc<SessionConnector>,
         node_profile_repo: Arc<NodeFinderRepo>,
         location_cache: Arc<Mutex<LocationCache>>,
+        lookup_registry: Arc<LookupRegistry>,
         session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
         clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
@@ -81,8 +88,10 @@ impl TaskCommunicator {
         let v = Arc::new(Self {
             my_node_profile,
             sessions,
+            session_connector,
             node_profile_repo,
             location_cache,
+            lookup_registry,
             session_receiver,
             clock,
             sleeper,
@@ -125,11 +134,53 @@ impl TaskCommunicator {
     }
 
     async fn communicate(self: Arc<Self>, status: SessionStatus) -> Result<()> {
+        // 確立後の後始末は supervisor が持つので、ここでは相手が閉じるまで待つ
+        let status = self.establish(status).await?;
+        status.cancellation_token.cancelled().await;
+
+        Ok(())
+    }
+
+    /// Dials a node and registers the established Session.
+    ///
+    /// The lookup uses this when the closest node it needs is not connected; the Session then behaves like one the connector dialed.
+    pub async fn connect(self: &Arc<Self>, node_profile: &NodeProfile) -> Result<Arc<SessionStatus>> {
+        for addr in node_profile.addrs() {
+            let Ok(session) = self.session_connector.connect(addr, &SessionType::NodeFinder).await else {
+                continue;
+            };
+            // 公開済みの addr は古くなり得るため、別の node が応答した接続は採用しない
+            if !session.is_signed_by(node_profile) {
+                warn!(address = addr.to_string(), "the peer's key does not match the node profile");
+                continue;
+            }
+            return match self.establish(SessionStatus::new(session)).await {
+                Ok(status) => Ok(status),
+                // 既に同じ相手と繋がっているなら、その Session を使う
+                Err(e) if e.kind() == &ErrorKind::AlreadyExists => self
+                    .sessions
+                    .statuses()
+                    .await
+                    .into_iter()
+                    .find(|(id, _)| id == node_profile.id())
+                    .map(|(_, status)| status)
+                    .ok_or(e),
+                Err(e) => Err(e),
+            };
+        }
+
+        self.node_profile_repo.mark_unreachable(node_profile.id()).await?;
+
+        Err(Error::new(ErrorKind::NotConnected).with_message("no address of the node accepted a connection"))
+    }
+
+    /// Finishes the handshake, registers the Session, and starts its writer, reader, and cleanup.
+    async fn establish(self: &Arc<Self>, status: SessionStatus) -> Result<Arc<SessionStatus>> {
         let my_node_profile = self.my_node_profile.lock().clone();
         // 登録前なので、cancel されたら後始末なしで終える
         let other_node_profile = select! {
             res = Self::handshake(&status.session, &my_node_profile, self.option.intervals.receive_timeout()) => res?,
-            _ = self.cancellation_token.cancelled() => return Ok(()),
+            _ = self.cancellation_token.cancelled() => return Err(Error::new(ErrorKind::NotConnected).with_message("shutdown")),
         };
 
         let other_node_profile_uri = other_node_profile.to_uri()?;
@@ -149,14 +200,26 @@ impl TaskCommunicator {
         info!(node_profile = other_node_profile_uri, "Session established");
 
         let s = self.clone().send(status.clone()).await;
-        let r = self.clone().receive(status.clone(), other_node_id).await;
-        let _ = tokio::join!(s, r);
+        let r = self.clone().receive(status.clone(), other_node_id.clone()).await;
+        let c = self.clone().supervise(status.clone(), other_node_id).await;
+        let mut handles = self.communicate_join_handles.lock().await;
+        handles.push(s);
+        handles.push(r);
+        handles.push(c);
 
-        info!(node_profile = other_node_profile_uri, "Session closed");
+        Ok(status)
+    }
 
-        self.sessions.unregister(other_node_profile.id(), &status).await;
-
-        Ok(())
+    /// Removes the Session once its writer or reader ends.
+    async fn supervise(self: Arc<Self>, status: Arc<SessionStatus>, other_node_id: Vec<u8>) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            select! {
+                _ = status.cancellation_token.cancelled() => {}
+                _ = self.cancellation_token.cancelled() => status.cancellation_token.cancel(),
+            }
+            self.sessions.unregister(&other_node_id, &status).await;
+            info!("Session closed");
+        })
     }
 
     pub async fn handshake(session: &Session, node_profile: &NodeProfile, receive_timeout: Duration) -> Result<NodeProfile> {
@@ -239,7 +302,7 @@ impl TaskCommunicator {
                         let message = status.session.stream.receiver.lock().await.recv_message_with::<NodeMessageCodec>().await?;
                         // 受信した時点を基準にし、保存処理にかかった時間で期限を延ばさない
                         let received_at = Instant::now();
-                        timeout_at(received_at + receive_timeout, this.dispatch(&peer_id, message))
+                        timeout_at(received_at + receive_timeout, this.dispatch(&status, &peer_id, message))
                             .await
                             .map_err(|e| Error::from_error(e, ErrorKind::NetworkError).with_message("NodeFinder receive timed out"))??;
                         // 周期より速く送る相手に、保存処理を繰り返させない
@@ -262,7 +325,7 @@ impl TaskCommunicator {
         })
     }
 
-    async fn dispatch(&self, peer_id: &[u8], message: NodeMessage) -> Result<()> {
+    async fn dispatch(&self, status: &Arc<SessionStatus>, peer_id: &[u8], message: NodeMessage) -> Result<()> {
         match message {
             NodeMessage::Status => {}
             NodeMessage::AnnounceProfiles { node_profiles } => {
@@ -294,12 +357,48 @@ impl TaskCommunicator {
                 }
                 self.relay_locations(relayed, peer_id).await;
             }
+            NodeMessage::LookupRequest { lookup_id, asset_key } => {
+                let locations = self.location_cache.lock().get(&asset_key).to_vec();
+                let closer_nodes = self.closest_nodes(&asset_key).await?;
+                if let Err(e) = status
+                    .outbox
+                    .send(NodeMessage::LookupResponse {
+                        lookup_id,
+                        locations,
+                        closer_nodes,
+                    })
+                    .await
+                {
+                    debug!(error_message = e.to_string(), "dropped a lookup answer because the outbox is closed");
+                }
+            }
+            NodeMessage::LookupResponse {
+                lookup_id,
+                locations,
+                closer_nodes,
+            } => {
+                let answer = LookupAnswer { locations, closer_nodes };
+                self.lookup_registry.complete(peer_id, lookup_id, answer).await;
+            }
             NodeMessage::Hello { .. } | NodeMessage::Profile { .. } => {
                 return Err(Error::new(ErrorKind::InvalidFormat).with_message("unexpected handshake message"));
             }
         }
 
         Ok(())
+    }
+
+    /// The known nodes closest to an AssetKey, which the answer tells the asker so the lookup can move toward the key.
+    pub async fn closest_nodes(&self, asset_key: &AssetKey) -> Result<Vec<Arc<NodeProfile>>> {
+        let known = self.node_profile_repo.fetch_node_profiles().await?;
+        let my_node_profile = self.my_node_profile.lock().clone();
+        Ok(RoutingTable::closest(
+            my_node_profile.id(),
+            &asset_key.hash.value,
+            &known,
+            NodeMessage::MAX_CLOSER_NODES,
+            my_node_profile.id(),
+        ))
     }
 
     /// Relays an advertisement to the connected nodes closest to the AssetKey, never back to the sender.
@@ -314,7 +413,7 @@ impl TaskCommunicator {
 
         let mut per_session: HashMap<Vec<u8>, HashMap<Arc<AssetKey>, AnnounceLocation>> = HashMap::new();
         for (asset_key, location) in locations {
-            for id in Kadex::find(my_node_profile.id(), &asset_key.hash.value, &ids, Self::FAN_OUT) {
+            for id in RoutingTable::closest_ids(my_node_profile.id(), &asset_key.hash.value, &ids, Self::FAN_OUT) {
                 if id == from {
                     continue;
                 }
@@ -337,6 +436,7 @@ impl TaskCommunicator {
 mod tests {
     use std::time::Duration;
 
+    use rand::SeedableRng as _;
     use testresult::TestResult;
     use tokio::sync::Mutex as TokioMutex;
     use tokio_util::bytes::Bytes;
@@ -373,11 +473,22 @@ mod tests {
     async fn create_task_communicator(state_dir: &str, intervals: NodeFinderIntervals) -> Result<(Arc<TaskCommunicator>, mpsc::Sender<SessionStatus>)> {
         let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
         let (session_sender, session_receiver) = mpsc::channel(20);
+        let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
+        let rng = Arc::new(Mutex::new(rand::rngs::ChaCha20Rng::from_rng(&mut rand_core::UnwrapErr(rand::rngs::SysRng))));
+        let session_connector = Arc::new(SessionConnector::new(
+            Arc::new(UnusedTcpConnector),
+            signer,
+            clock.clone(),
+            rng,
+            crate::core::session::model::SessionOption::default(),
+        ));
         let task = TaskCommunicator::new(
             Arc::new(Mutex::new(node_profile())),
             Arc::new(SessionRegistry::new()),
+            session_connector,
             Arc::new(NodeFinderRepo::new(state_dir, clock.clone()).await?),
             Arc::new(Mutex::new(LocationCache::new(clock.clone()))),
+            Arc::new(LookupRegistry::new()),
             Arc::new(TokioMutex::new(session_receiver)),
             clock,
             Arc::new(SleeperImpl),
@@ -390,6 +501,15 @@ mod tests {
         )
         .await?;
         Ok((task, session_sender))
+    }
+
+    struct UnusedTcpConnector;
+
+    #[async_trait::async_trait]
+    impl crate::base::connection::ConnectionTcpConnector for UnusedTcpConnector {
+        async fn connect(&self, _addr: &OmniAddr) -> Result<tokio::net::TcpStream> {
+            Err(Error::new(ErrorKind::NotConnected).with_message("the test does not dial"))
+        }
     }
 
     fn session_pair() -> Result<(Session, FramedStream, NodeProfile)> {

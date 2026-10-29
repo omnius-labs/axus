@@ -75,6 +75,15 @@ pub enum NodeMessage {
     AnnounceLocations {
         locations: std::collections::BTreeMap<crate::generated::axus::model::AssetKey, crate::generated::axus::node::LocationEntry>,
     },
+    LookupRequest {
+        lookup_id: u64,
+        asset_key: crate::generated::axus::model::AssetKey,
+    },
+    LookupResponse {
+        lookup_id: u64,
+        locations: Vec<crate::generated::axus::model::NodeProfile>,
+        closer_nodes: Vec<crate::generated::axus::model::NodeProfile>,
+    },
 }
 
 impl omnius_core_rocketpack::RocketPackStruct for NodeMessage {
@@ -96,6 +105,23 @@ impl omnius_core_rocketpack::RocketPackStruct for NodeMessage {
                 for (key, value) in (locations).iter() {
                     <crate::generated::axus::model::AssetKey as omnius_core_rocketpack::RocketPackStruct>::validate(key)?;
                     <crate::generated::axus::node::LocationEntry as omnius_core_rocketpack::RocketPackStruct>::validate(value)?;
+                }
+            }
+            Self::LookupRequest { lookup_id: _, asset_key } => {
+                <crate::generated::axus::model::AssetKey as omnius_core_rocketpack::RocketPackStruct>::validate(asset_key)?;
+            }
+            Self::LookupResponse {
+                lookup_id: _,
+                locations,
+                closer_nodes,
+            } => {
+                omnius_core_rocketpack::validate_length("NodeMessage.LookupResponse.locations", 0, 8, (locations).len())?;
+                for item in (locations).iter() {
+                    <crate::generated::axus::model::NodeProfile as omnius_core_rocketpack::RocketPackStruct>::validate(item)?;
+                }
+                omnius_core_rocketpack::validate_length("NodeMessage.LookupResponse.closer_nodes", 0, 8, (closer_nodes).len())?;
+                for item in (closer_nodes).iter() {
+                    <crate::generated::axus::model::NodeProfile as omnius_core_rocketpack::RocketPackStruct>::validate(item)?;
                 }
             }
         }
@@ -141,6 +167,36 @@ impl omnius_core_rocketpack::RocketPackStruct for NodeMessage {
                 for (key, value) in (locations).iter() {
                     encoder.write_struct(key)?;
                     encoder.write_struct(value)?;
+                }
+            }
+            Self::LookupRequest { lookup_id, asset_key } => {
+                encoder.write_u64(6)?;
+                encoder.write_map(2)?;
+                encoder.write_u64(1)?;
+                encoder.write_u64(*(lookup_id))?;
+                encoder.write_u64(2)?;
+                encoder.write_struct(asset_key)?;
+            }
+            Self::LookupResponse {
+                lookup_id,
+                locations,
+                closer_nodes,
+            } => {
+                encoder.write_u64(7)?;
+                encoder.write_map(3)?;
+                encoder.write_u64(1)?;
+                encoder.write_u64(*(lookup_id))?;
+                encoder.write_u64(2)?;
+                omnius_core_rocketpack::validate_length("NodeMessage.LookupResponse.locations", 0, 8, (locations).len())?;
+                encoder.write_array((locations).len())?;
+                for item in (locations).iter() {
+                    encoder.write_struct(item)?;
+                }
+                encoder.write_u64(3)?;
+                omnius_core_rocketpack::validate_length("NodeMessage.LookupResponse.closer_nodes", 0, 8, (closer_nodes).len())?;
+                encoder.write_array((closer_nodes).len())?;
+                for item in (closer_nodes).iter() {
+                    encoder.write_struct(item)?;
                 }
             }
         }
@@ -238,6 +294,61 @@ impl omnius_core_rocketpack::RocketPackStruct for NodeMessage {
                         locations: __rpf_storage_locations.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: locations"))?,
                     });
                 }
+                6 => {
+                    let __inner_count_10 = decoder.read_map()?;
+                    let mut __rpf_storage_lookup_id: Option<u64> = None;
+                    let mut __rpf_storage_asset_key: Option<crate::generated::axus::model::AssetKey> = None;
+                    for _ in 0..__inner_count_10 {
+                        match decoder.read_u64()? {
+                            1 => {
+                                __rpf_storage_lookup_id = Some(decoder.read_u64()?);
+                            }
+                            2 => {
+                                __rpf_storage_asset_key = Some(decoder.read_struct::<crate::generated::axus::model::AssetKey>()?);
+                            }
+                            _ => decoder.skip_field()?,
+                        }
+                    }
+                    __rpf_result = Some(Self::LookupRequest {
+                        lookup_id: __rpf_storage_lookup_id.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: lookup_id"))?,
+                        asset_key: __rpf_storage_asset_key.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: asset_key"))?,
+                    });
+                }
+                7 => {
+                    let __inner_count_11 = decoder.read_map()?;
+                    let mut __rpf_storage_lookup_id: Option<u64> = None;
+                    let mut __rpf_storage_locations: Option<Vec<crate::generated::axus::model::NodeProfile>> = None;
+                    let mut __rpf_storage_closer_nodes: Option<Vec<crate::generated::axus::model::NodeProfile>> = None;
+                    for _ in 0..__inner_count_11 {
+                        match decoder.read_u64()? {
+                            1 => {
+                                __rpf_storage_lookup_id = Some(decoder.read_u64()?);
+                            }
+                            2 => {
+                                let __count_12 = decoder.read_array_bounded("NodeMessage.LookupResponse.locations", 0, 8)?;
+                                let mut __values_13: Vec<crate::generated::axus::model::NodeProfile> = Vec::new();
+                                for _ in 0..__count_12 {
+                                    __values_13.push(decoder.read_struct::<crate::generated::axus::model::NodeProfile>()?);
+                                }
+                                __rpf_storage_locations = Some(__values_13);
+                            }
+                            3 => {
+                                let __count_14 = decoder.read_array_bounded("NodeMessage.LookupResponse.closer_nodes", 0, 8)?;
+                                let mut __values_15: Vec<crate::generated::axus::model::NodeProfile> = Vec::new();
+                                for _ in 0..__count_14 {
+                                    __values_15.push(decoder.read_struct::<crate::generated::axus::model::NodeProfile>()?);
+                                }
+                                __rpf_storage_closer_nodes = Some(__values_15);
+                            }
+                            _ => decoder.skip_field()?,
+                        }
+                    }
+                    __rpf_result = Some(Self::LookupResponse {
+                        lookup_id: __rpf_storage_lookup_id.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: lookup_id"))?,
+                        locations: __rpf_storage_locations.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: locations"))?,
+                        closer_nodes: __rpf_storage_closer_nodes.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: closer_nodes"))?,
+                    });
+                }
                 _ => decoder.skip_field()?,
             }
         }
@@ -253,5 +364,7 @@ pub const MAX_ANNOUNCE_NODE_PROFILES: u32 = 32;
 pub const MAX_ANNOUNCE_ASSET_KEYS: u32 = 1024;
 
 pub const MAX_LOCATION_NODE_PROFILES: u32 = 8;
+
+pub const MAX_CLOSER_NODES: u32 = 8;
 
 pub const MAX_MESSAGE_LENGTH: u32 = 262144;

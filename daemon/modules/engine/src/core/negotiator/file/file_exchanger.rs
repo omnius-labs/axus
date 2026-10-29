@@ -315,6 +315,7 @@ mod tests {
                             connect: Duration::from_millis(100),
                             compute: Duration::from_millis(100),
                             communicate: Duration::from_millis(500),
+                            lookup: Duration::from_millis(100),
                         },
                     },
                 )

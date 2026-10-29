@@ -165,6 +165,7 @@ impl NodeFinder {
                 self.connected_node_profiles.clone(),
                 self.connecting_ids.clone(),
                 self.node_profile_repo.clone(),
+                self.clock.clone(),
                 self.sleeper.clone(),
                 self.rng.clone(),
                 self.option.clone(),

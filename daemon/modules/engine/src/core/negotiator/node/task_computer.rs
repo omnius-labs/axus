@@ -112,7 +112,7 @@ impl TaskComputer {
     pub async fn set_initial_node_profile(&self) -> Result<()> {
         let node_profiles = self.node_profile_fetcher.fetch().await?;
         let node_profiles: Vec<&NodeProfile> = node_profiles.iter().collect();
-        self.node_profile_repo.insert_or_update_node_profiles(&node_profiles, 0).await?;
+        self.node_profile_repo.insert_or_update_node_profiles(&node_profiles).await?;
 
         Ok(())
     }
@@ -125,7 +125,13 @@ impl TaskComputer {
     async fn announce(&self) -> Result<()> {
         let my_node_profile = Arc::new(self.my_node_profile.lock().clone());
         self.node_profile_repo.shrink(1024).await?;
-        let cloud_node_profiles: Vec<Arc<NodeProfile>> = self.node_profile_repo.fetch_node_profiles().await?.into_iter().map(Arc::new).collect();
+        let cloud_node_profiles: Vec<Arc<NodeProfile>> = self
+            .node_profile_repo
+            .fetch_node_profiles()
+            .await?
+            .into_iter()
+            .map(|known| Arc::new(known.profile))
+            .collect();
 
         let my_want_asset_keys: Vec<Arc<AssetKey>> = self.get_want_asset_keys_fn.call(&()).into_iter().flatten().map(Arc::new).collect();
         let my_push_asset_keys: HashSet<Arc<AssetKey>> = self.get_push_asset_keys_fn.call(&()).into_iter().flatten().map(Arc::new).collect();

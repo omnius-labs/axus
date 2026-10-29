@@ -133,6 +133,8 @@ impl TaskCommunicator {
         };
 
         let other_node_profile_uri = other_node_profile.to_uri()?;
+        // handshake まで終えた相手は到達可能なので、次に繋ぐときの失敗回数を戻す
+        self.node_profile_repo.mark_reachable(other_node_profile.id()).await?;
         *status.node_profile.lock() = Some(other_node_profile.clone());
         let other_node_id = other_node_profile.id().to_vec();
 
@@ -270,7 +272,7 @@ impl TaskCommunicator {
                     .filter(|profile| profile.is_updated_within_skew(now))
                     .map(|profile| profile.as_ref())
                     .collect();
-                self.node_profile_repo.insert_or_update_node_profiles(&node_profiles, 0).await?;
+                self.node_profile_repo.insert_or_update_node_profiles(&node_profiles).await?;
             }
             NodeMessage::AnnounceLocations { locations } => {
                 let mut relayed: HashMap<Arc<AssetKey>, AnnounceLocation> = HashMap::new();

@@ -294,7 +294,7 @@ mod tests {
             let repo_dir = dir.path().join("repo");
             tokio::fs::create_dir_all(&repo_dir).await?;
             let node_profile_repo = Arc::new(NodeFinderRepo::new(repo_dir.to_str().unwrap(), clock.clone()).await?);
-            node_profile_repo.insert_or_update_node_profiles(bootstrap, 0).await?;
+            node_profile_repo.insert_or_update_node_profiles(bootstrap).await?;
             let finder_dir = dir.path().join("finder");
             tokio::fs::create_dir_all(&finder_dir).await?;
             let node_finder = Arc::new(

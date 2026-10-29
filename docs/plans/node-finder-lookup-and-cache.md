@@ -87,7 +87,7 @@ The NodeFinder wire becomes incompatible with the previous daemon in both direct
 | [0](#s-0) | Frame length per Session type | | done |
 | [1](#s-1) | Location cache and receive limits | 0 | done |
 | [2](#s-2) | Message-per-purpose protocol, announcements, and Status | 1 | done |
-| [3](#s-3) | Persistence by last seen time and dial backoff | | |
+| [3](#s-3) | Persistence by last seen time and dial backoff | | done |
 | [4](#s-4) | Routing table and active lookup | 2, 3 | |
 | [5](#s-5) | Distance order, cleanup, and document close-out | 4 | |
 
@@ -142,9 +142,9 @@ Tests show an announcement relayed exactly as many times as the hop limit allows
 `node_finder_repo.rs`, `task_communicator.rs`, `task_computer.rs`, and `task_connector.rs`.
 
 **What to do**
-Migrate the table to drop `weight` and add `last_seen` and `fail_count`, with existing rows taking `last_seen` from the row update time.
+Migrate the table to drop `weight` and add `last_seen`, `fail_count`, and `last_attempt`, with existing rows taking `last_seen` from the row update time.
 Evict by `last_seen`, and update `last_seen` when a NodeProfile is received or a connection succeeds.
-Back off dialing by `fail_count` and reset it on success.
+Back off dialing from `last_attempt` and `fail_count`, doubling the wait per failure, and reset both on a successful handshake.
 Cache the verified profiles in memory instead of parsing and verifying every stored URI on each cycle, and run the shrink from the periodic task rather than from the receive path.
 
 **Completion criterion**

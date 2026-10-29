@@ -107,11 +107,11 @@ SELECT 1
         Ok(found.is_some())
     }
 
-    /// The blocks of the rank each Downloading subscription of the root hash is waiting for that are not saved yet.
-    pub async fn find_missing_block_hashes(&self, root_hash: &OmniHash) -> Result<Vec<OmniHash>> {
-        let rows: Vec<(String,)> = sqlx::query_as(
+    /// The blocks each Downloading subscription of the root hash is waiting for that are not saved yet, with their rank.
+    pub async fn find_missing_blocks(&self, root_hash: &OmniHash) -> Result<Vec<(OmniHash, u32)>> {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
             r#"
-SELECT DISTINCT blocks.block_hash
+SELECT DISTINCT blocks.block_hash, blocks.rank
     FROM blocks
     JOIN files ON files.root_hash = blocks.root_hash AND files.rank = blocks.rank
     WHERE blocks.root_hash = ? AND blocks.downloaded = 0 AND files.status = 'Downloading'
@@ -121,7 +121,7 @@ SELECT DISTINCT blocks.block_hash
         .bind(root_hash.to_string())
         .fetch_all(self.db.as_ref())
         .await?;
-        rows.into_iter().map(|(hash,)| OmniHash::from_str(&hash).map_err(Into::into)).collect()
+        rows.into_iter().map(|(hash, rank)| Ok((OmniHash::from_str(&hash)?, rank as u32))).collect()
     }
 
     pub async fn transition(&self, id: &str, expected: &SubscribedFileStatus, status: &SubscribedFileStatus, reason: Option<&str>) -> Result<bool> {

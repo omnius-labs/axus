@@ -29,11 +29,12 @@ enum ExchangeMessage {
     @1 block_hash: OmniHash;
     @2 value: bytes[..=MAX_BLOCK_LENGTH];
   };
-  @8 NotHave {
-    @1 block_hash: OmniHash;
+  @8 HaveMap {
+    @1 bits: bytes[..=MAX_HAVE_MAP_BYTES];
   };
 }
 
 const MAX_BLOCK_LENGTH: u32 = 1048576;
+const MAX_HAVE_MAP_BYTES: u32 = 8;
 const MAX_REQUEST_BLOCK_HASHES: u32 = 64;
 const MAX_PENDING_REQUESTS: u32 = 16;

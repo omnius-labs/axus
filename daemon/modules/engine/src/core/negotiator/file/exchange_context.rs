@@ -92,7 +92,7 @@ impl ExchangeContext {
             file_subscriber,
             location_finder,
             registry: ExchangeSessionRegistry::new(),
-            assigner: Mutex::new(BlockAssigner::new(intervals.not_have_retry)),
+            assigner: Mutex::new(BlockAssigner::new(intervals.rank_absent_retry)),
             wanted_refreshed_at: Mutex::new(HashMap::new()),
             choke: Mutex::new(ChokeManager::new(intervals.ranking_window, option.unchoke_count, intervals.unchoke_rotation)),
             excluded_nodes: Mutex::new(Expirations::new()),
@@ -212,9 +212,17 @@ impl ExchangeContext {
         self.file_subscriber.read_provided_block(root_hash, block_hash).await
     }
 
+    /// Whether this node provides the block, which answers a request without reading the block body.
+    pub async fn contains_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<bool> {
+        if self.file_publisher.contains_block(root_hash, block_hash).await? {
+            return Ok(true);
+        }
+        self.file_subscriber.contains_provided_block(root_hash, block_hash).await
+    }
+
     /// Assigns blocks of the root hash to the Session. The blocks to fetch are read again from the Store
     /// when nothing is assignable and the previous reading is old.
-    pub async fn assign_blocks(&self, root_hash: &OmniHash, session_id: u64, node_id: &[u8], limit: usize) -> Result<Vec<OmniHash>> {
+    pub async fn assign_blocks(&self, root_hash: &OmniHash, session_id: u64, node_id: &[u8], limit: usize) -> Result<Vec<WantedBlock>> {
         let assigned = self.assigner.lock().assign(root_hash, session_id, node_id, limit, Instant::now());
         if !assigned.is_empty() {
             return Ok(assigned);
@@ -229,7 +237,13 @@ impl ExchangeContext {
         if !due {
             return Ok(assigned);
         }
-        let wanted = self.file_subscriber.get_missing_block_hashes(root_hash).await?;
+        let wanted: Vec<WantedBlock> = self
+            .file_subscriber
+            .get_missing_blocks(root_hash)
+            .await?
+            .into_iter()
+            .map(|(block_hash, rank)| WantedBlock { block_hash, rank })
+            .collect();
         self.wanted_refreshed_at.lock().insert(root_hash.clone(), now);
         let mut assigner = self.assigner.lock();
         assigner.update_wanted(root_hash, wanted);
@@ -248,8 +262,12 @@ impl ExchangeContext {
         self.assigner.lock().release_session(root_hash, session_id);
     }
 
-    pub fn mark_not_have(&self, root_hash: &OmniHash, node_id: &[u8], block_hash: &OmniHash) {
-        self.assigner.lock().mark_not_have(root_hash, node_id, block_hash, Instant::now());
+    /// Releases the blocks the node does not hold and stops asking it for their ranks for a while.
+    pub fn mark_rank_absent(&self, root_hash: &OmniHash, node_id: &[u8], ranks: impl IntoIterator<Item = u32>, block_hashes: impl IntoIterator<Item = OmniHash>) {
+        let now = Instant::now();
+        let mut assigner = self.assigner.lock();
+        assigner.release(root_hash, block_hashes);
+        assigner.mark_rank_absent(root_hash, node_id, ranks, now);
     }
 
     pub fn is_choked(&self, node_id: &[u8]) -> bool {

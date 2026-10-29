@@ -175,7 +175,7 @@ mod tests {
             unwanted_close: Duration::from_millis(800),
             unwanted_cooldown: Duration::from_secs(2),
             reject_retry: Duration::from_millis(300),
-            not_have_retry: Duration::from_millis(200),
+            rank_absent_retry: Duration::from_millis(200),
             ranking_window: Duration::from_secs(10),
             unchoke_rotation: Duration::from_millis(300),
             violation_exclusion: Duration::from_secs(60),
@@ -403,6 +403,8 @@ mod tests {
     /// A peer that speaks the handshake of FileExchanger by hand, so that a test controls every message after it.
     struct RawPeer {
         endpoint: Endpoint,
+        /// The requests received, so that a test sees how often the peer was asked.
+        requests: Arc<std::sync::atomic::AtomicUsize>,
         _dir: tempfile::TempDir,
     }
 
@@ -412,6 +414,10 @@ mod tests {
         BadBlock,
         /// Sends a block nobody requested.
         UnrequestedBlock,
+        /// Answers every request with a presence bitmap that has no set bit.
+        NoBlocks,
+        /// Answers a request with a presence bitmap whose number of bits does not match the request.
+        ShortHaveMap,
         /// Unchokes the requester and keeps the Session alive, but never answers.
         IgnoreRequests,
         /// Finishes the handshake and then says nothing.
@@ -423,12 +429,17 @@ mod tests {
             let dir = tempfile::tempdir()?;
             Ok(Self {
                 endpoint: Endpoint::new(dir.path(), &[SessionType::FileExchanger]).await?,
+                requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 _dir: dir,
             })
         }
 
         fn id(&self) -> Vec<u8> {
             self.endpoint.profile.id().to_vec()
+        }
+
+        fn request_count(&self) -> usize {
+            self.requests.load(std::sync::atomic::Ordering::SeqCst)
         }
 
         async fn dial(&self, target: &NodeProfile, root_hash: &OmniHash) -> TestResult<Session> {
@@ -450,15 +461,15 @@ mod tests {
                     if ExchangeHandshake::accept(&session, TEST_TIMEOUT, |_| true).await.is_err() {
                         continue;
                     }
-                    let token = token.clone();
+                    let (token, requests) = (token.clone(), this.requests.clone());
                     tokio::spawn(async move {
-                        let _ = Self::play(session, behavior, token).await;
+                        let _ = Self::play(session, behavior, token, requests).await;
                     });
                 }
             })
         }
 
-        async fn play(session: Session, behavior: Behavior, token: CancellationToken) -> Result<()> {
+        async fn play(session: Session, behavior: Behavior, token: CancellationToken, requests: Arc<std::sync::atomic::AtomicUsize>) -> Result<()> {
             if matches!(behavior, Behavior::Silent) {
                 token.cancelled().await;
                 return Ok(());
@@ -480,10 +491,19 @@ mod tests {
                 tokio::select! {
                     _ = token.cancelled() => return Ok(()),
                     _ = tick.tick() => Self::send(&session, &status).await?,
-                    message = Self::receive(&session) => {
-                        if let (Behavior::BadBlock, ExchangeMessage::Request { block_hashes }) = (behavior, message?) {
+                    message = Self::receive(&session) => match (behavior, message?) {
+                        (Behavior::BadBlock, ExchangeMessage::Request { block_hashes }) => {
                             Self::send(&session, &ExchangeMessage::Block { block_hash: block_hashes[0].clone(), value: vec![0; 10] }).await?;
                         }
+                        (Behavior::NoBlocks, ExchangeMessage::Request { block_hashes }) => {
+                            requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            let bits = vec![0u8; block_hashes.len().div_ceil(8)];
+                            Self::send(&session, &ExchangeMessage::HaveMap { bits }).await?;
+                        }
+                        (Behavior::ShortHaveMap, ExchangeMessage::Request { .. }) => {
+                            Self::send(&session, &ExchangeMessage::HaveMap { bits: vec![0b0000_0001] }).await?;
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -592,6 +612,48 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_presence_bitmap_that_does_not_match_the_request_is_a_violation() -> TestResult {
+        expect_exclusion_then_transfer(Behavior::ShortHaveMap, true).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_peer_that_holds_nothing_is_not_asked_again_for_the_rank_and_the_file_completes_from_another_peer() -> TestResult {
+        let publisher = TestNode::new().await?;
+        let subscriber = TestNode::new().await?;
+        let peer = Arc::new(RawPeer::new().await?);
+        let token = CancellationToken::new();
+        let serving = peer.serve(Behavior::NoBlocks, token.clone());
+        let content = content(16 * 1024);
+        let root_hash = publisher.publish(&content).await?;
+
+        let (id, output) = subscriber.subscribe(&root_hash, "output.bin").await?;
+        subscriber.knows(&[&peer.endpoint.profile]);
+        let requests = peer.requests.clone();
+        wait_for(|| {
+            let requests = requests.clone();
+            async move { requests.load(std::sync::atomic::Ordering::SeqCst) > 0 }
+        })
+        .await?;
+
+        // The answer with no set bit releases the request and stops asking the peer for that rank for a while.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert_eq!(peer.request_count(), 1);
+        // Holding nothing is not a violation.
+        assert!(!subscriber.ctx().is_excluded(&peer.id()));
+
+        subscriber.knows(&[&peer.endpoint.profile, &publisher.endpoint.profile]);
+        subscriber.wait_completed(&id).await?;
+        assert_eq!(tokio::fs::read(&output).await?, content);
+
+        token.cancel();
+        let _ = serving.await;
+        publisher.shutdown().await;
+        subscriber.shutdown().await;
+        peer.endpoint.session_accepter.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_peer_that_does_not_answer_requests_is_closed_at_the_request_deadline() -> TestResult {
         expect_exclusion_then_transfer(Behavior::IgnoreRequests, false).await
     }
@@ -683,7 +745,7 @@ mod tests {
         loop {
             match RawPeer::receive(&session).await? {
                 ExchangeMessage::Status { choke: false, .. } => break,
-                ExchangeMessage::Block { .. } | ExchangeMessage::NotHave { .. } => panic!("a choked requester was answered"),
+                ExchangeMessage::Block { .. } | ExchangeMessage::HaveMap { .. } => panic!("a choked requester was answered"),
                 _ => {}
             }
         }
@@ -709,7 +771,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn a_requested_hash_the_node_does_not_hold_gets_a_do_not_have_response() -> TestResult {
+    async fn a_requested_hash_the_node_does_not_hold_is_answered_by_the_presence_bitmap() -> TestResult {
         let publisher = TestNode::new().await?;
         let peer = RawPeer::new().await?;
         let root_hash = publisher.publish(&content(4 * 1024)).await?;
@@ -729,12 +791,14 @@ mod tests {
             },
         )
         .await?;
-        let (mut not_have, mut block) = (false, false);
-        while !(not_have && block) {
+        // The bitmap answers the whole request before the blocks: the first hash is absent, the second present.
+        let mut have_map = false;
+        let mut block = false;
+        while !(have_map && block) {
             match RawPeer::receive(&session).await? {
-                ExchangeMessage::NotHave { block_hash } => {
-                    assert_eq!(block_hash, missing);
-                    not_have = true;
+                ExchangeMessage::HaveMap { bits } => {
+                    assert_eq!(bits, vec![0b0000_0010]);
+                    have_map = true;
                 }
                 ExchangeMessage::Block { block_hash, .. } => {
                     assert_eq!(block_hash, root_hash);

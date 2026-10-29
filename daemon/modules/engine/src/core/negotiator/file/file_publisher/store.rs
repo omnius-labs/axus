@@ -345,6 +345,11 @@ impl FilePublisherStore {
         Ok(self.blocks_storage.get_value(util::gen_committed_block_path(root_hash, block_hash)).await?.map(Bytes::from))
     }
 
+    /// Whether the block is part of a committed file, which answers a request without reading the block body.
+    pub async fn contains_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<bool> {
+        self.repo.contains_committed_block(root_hash, block_hash).await
+    }
+
     pub async fn get_published_root_hashes(&self) -> Result<Vec<OmniHash>> {
         Ok(self
             .repo

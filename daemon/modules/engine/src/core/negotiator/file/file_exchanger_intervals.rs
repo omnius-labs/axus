@@ -14,8 +14,8 @@ pub struct FileExchangerIntervals {
     pub unwanted_cooldown: Duration,
     /// How long a pair rejected by the peer is kept out of the dialing candidates.
     pub reject_retry: Duration,
-    /// How long a node that answered do-not-have is not asked for the same block.
-    pub not_have_retry: Duration,
+    /// How long a node that answered a rank with no present bit is not asked for that rank.
+    pub rank_absent_retry: Duration,
     /// The period of the received bytes that ranks the nodes to unchoke.
     pub ranking_window: Duration,
     /// How often the node unchoked at random is chosen again.
@@ -47,7 +47,7 @@ impl Default for FileExchangerIntervals {
             unwanted_close: Duration::from_secs(60),
             unwanted_cooldown: Duration::from_secs(10 * 60),
             reject_retry: Duration::from_secs(30),
-            not_have_retry: Duration::from_secs(30),
+            rank_absent_retry: Duration::from_secs(30),
             ranking_window: Duration::from_secs(10 * 60),
             unchoke_rotation: Duration::from_secs(30),
             violation_exclusion: Duration::from_secs(30 * 60),

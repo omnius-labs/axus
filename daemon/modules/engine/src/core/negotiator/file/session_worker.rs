@@ -30,6 +30,52 @@ enum Closing {
     Unwanted,
 }
 
+/// A request waiting for its presence bitmap and blocks.
+/// The bitmap indexes the blocks in the order of the request, so the order is kept until the request ends.
+struct PendingRequest {
+    blocks: Vec<(OmniHash, u32)>,
+    remaining: HashSet<OmniHash>,
+}
+
+impl PendingRequest {
+    fn new(blocks: Vec<(OmniHash, u32)>) -> Self {
+        let remaining = blocks.iter().map(|(hash, _)| hash.clone()).collect();
+        Self { blocks, remaining }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.remaining.is_empty()
+    }
+
+    /// The rank of the block, when the request is still waiting for it.
+    fn take(&mut self, block_hash: &OmniHash) -> Option<u32> {
+        if !self.remaining.remove(block_hash) {
+            return None;
+        }
+        self.blocks.iter().find(|(hash, _)| hash == block_hash).map(|(_, rank)| *rank)
+    }
+}
+
+/// The presence bitmap of a request: one bit per requested hash in the order of the request,
+/// where a set bit means the peer holds the block. Bit `i` of hash `i` is the bit `i % 8` of byte `i / 8`.
+struct PresenceBitmap;
+
+impl PresenceBitmap {
+    fn encode(present: &[bool]) -> Vec<u8> {
+        let mut bits = vec![0u8; present.len().div_ceil(8)];
+        for (index, present) in present.iter().enumerate() {
+            if *present {
+                bits[index / 8] |= 1 << (index % 8);
+            }
+        }
+        bits
+    }
+
+    fn decode(bits: &[u8], count: usize) -> Vec<bool> {
+        (0..count).map(|index| bits.get(index / 8).is_some_and(|byte| byte & (1 << (index % 8)) != 0)).collect()
+    }
+}
+
 /// What the receiving side of a worker remembers about the peer and the requests in flight.
 struct WorkerState {
     peer_choking: bool,
@@ -37,7 +83,7 @@ struct WorkerState {
     conveyed_want: bool,
     conveyed_choke: bool,
     status_sent_at: Option<Instant>,
-    pending: Vec<HashSet<OmniHash>>,
+    pending: Vec<PendingRequest>,
     last_progress: Instant,
     unwanted_since: Option<Instant>,
 }
@@ -118,10 +164,16 @@ impl SessionWorker {
                 _ = token.cancelled() => break,
                 _ = self.ctx.cancellation_token.cancelled() => break,
                 control = control_rx.recv() => match control {
-                    Some(message) => message,
+                    Some(message) => Some(message),
                     None => break,
                 },
-                block_hash = self.serve_queue.next() => self.answer(block_hash).await,
+                item = self.serve_queue.next() => match item {
+                    ServeItem::Presence(bits) => Some(ExchangeMessage::HaveMap { bits }),
+                    ServeItem::Block(block_hash) => self.answer(block_hash).await,
+                },
+            };
+            let Some(message) = message else {
+                continue;
             };
             let bytes = match &message {
                 ExchangeMessage::Block { value, .. } => Some(value.len() as u64),
@@ -139,14 +191,15 @@ impl SessionWorker {
         token.cancel();
     }
 
-    /// The block for the requested hash, or the do-not-have response.
-    async fn answer(&self, block_hash: OmniHash) -> ExchangeMessage {
+    /// The block for the requested hash. Nothing is sent when the block cannot be read, although the presence
+    /// bitmap named it, and the requester retries it later.
+    async fn answer(&self, block_hash: OmniHash) -> Option<ExchangeMessage> {
         match self.ctx.read_block(&self.session.root_hash, &block_hash).await {
-            Ok(Some(value)) => ExchangeMessage::Block { block_hash, value },
-            Ok(None) => ExchangeMessage::NotHave { block_hash },
+            Ok(Some(value)) => Some(ExchangeMessage::Block { block_hash, value }),
+            Ok(None) => None,
             Err(error) => {
                 warn!(error_message = error.to_string(), "reading a block to provide failed");
-                ExchangeMessage::NotHave { block_hash }
+                None
             }
         }
     }
@@ -243,16 +296,55 @@ impl SessionWorker {
             if assigned.is_empty() {
                 return;
             }
-            let request = ExchangeMessage::Request { block_hashes: assigned.clone() };
+            let blocks: Vec<(OmniHash, u32)> = assigned.into_iter().map(|wanted| (wanted.block_hash, wanted.rank)).collect();
+            let request = ExchangeMessage::Request {
+                block_hashes: blocks.iter().map(|(hash, _)| hash.clone()).collect(),
+            };
             if control_tx.try_send(request).is_err() {
-                self.ctx.release_blocks(&self.session.root_hash, assigned);
+                self.ctx.release_blocks(&self.session.root_hash, blocks.into_iter().map(|(hash, _)| hash));
                 return;
             }
             if state.pending.is_empty() {
                 state.last_progress = Instant::now();
             }
-            state.pending.push(assigned.into_iter().collect());
+            state.pending.push(PendingRequest::new(blocks));
         }
+    }
+
+    /// Applies the bitmap of the oldest request and releases the blocks the peer does not hold.
+    fn on_have_map(&self, state: &mut WorkerState, bits: &[u8]) -> Option<Closing> {
+        let (request_count, absent) = {
+            let Some(request) = state.pending.first() else {
+                return Some(Closing::Violation("presence bitmap without a request"));
+            };
+            if bits.len() != request.blocks.len().div_ceil(8) {
+                return Some(Closing::Violation("presence bitmap that does not match the request"));
+            }
+            let present = PresenceBitmap::decode(bits, request.blocks.len());
+            let absent: Vec<(OmniHash, u32)> = request
+                .blocks
+                .iter()
+                .zip(present)
+                .filter(|(_, present)| !present)
+                .map(|((hash, rank), _)| (hash.clone(), *rank))
+                .collect();
+            (request.blocks.len(), absent)
+        };
+
+        state.last_progress = Instant::now();
+        if absent.len() == request_count {
+            // The peer holds none of this request, so it is not asked for these ranks for a while.
+            let ranks: Vec<u32> = absent.iter().map(|(_, rank)| *rank).collect();
+            let block_hashes: Vec<OmniHash> = absent.into_iter().map(|(hash, _)| hash).collect();
+            self.ctx.mark_rank_absent(&self.session.root_hash, &self.session.node_id, ranks, block_hashes);
+            state.pending.remove(0);
+        } else {
+            for (hash, _) in &absent {
+                state.pending[0].remaining.remove(hash);
+            }
+            self.ctx.release_blocks(&self.session.root_hash, absent.into_iter().map(|(hash, _)| hash));
+        }
+        None
     }
 
     async fn on_message(&self, state: &mut WorkerState, control_tx: &mpsc::Sender<ExchangeMessage>, message: ExchangeMessage) -> Option<Closing> {
@@ -273,9 +365,24 @@ impl SessionWorker {
                 if state.conveyed_choke {
                     return None;
                 }
-                if !self.serve_queue.push(block_hashes) {
+                if self.serve_queue.len() >= MAX_PENDING_REQUESTS as usize {
                     return Some(Closing::Violation("too many requests awaiting responses"));
                 }
+                let present = self.describe(&block_hashes).await;
+                let held: Vec<OmniHash> = block_hashes.into_iter().zip(present.iter()).filter_map(|(hash, present)| present.then_some(hash)).collect();
+                // The queue keeps the bitmap and the blocks of one request together, so the answers of two
+                // requests never interleave and the requesting node reads the bitmap of the oldest request.
+                if !self.serve_queue.push(PresenceBitmap::encode(&present), held) {
+                    return Some(Closing::Violation("too many requests awaiting responses"));
+                }
+                None
+            }
+            ExchangeMessage::HaveMap { bits } => {
+                if let Some(closing) = self.on_have_map(state, &bits) {
+                    return Some(closing);
+                }
+                let want = self.ctx.root_hashes().fetches(&self.session.root_hash);
+                self.fill_requests(state, control_tx, want).await;
                 None
             }
             ExchangeMessage::Block { block_hash, value } => {
@@ -284,13 +391,6 @@ impl SessionWorker {
                 }
                 let want = self.ctx.root_hashes().fetches(&self.session.root_hash);
                 self.fill_requests(state, control_tx, want).await;
-                None
-            }
-            ExchangeMessage::NotHave { block_hash } => {
-                if Self::take_pending(state, &block_hash) {
-                    self.ctx.mark_not_have(&self.session.root_hash, &self.session.node_id, &block_hash);
-                    state.last_progress = Instant::now();
-                }
                 None
             }
             ExchangeMessage::Hello { .. } | ExchangeMessage::Open { .. } | ExchangeMessage::Accept | ExchangeMessage::Reject => {
@@ -328,20 +428,63 @@ impl SessionWorker {
         }
     }
 
+    /// Which of the requested hashes this node provides, which the presence bitmap answers without reading them.
+    async fn describe(&self, block_hashes: &[OmniHash]) -> Vec<bool> {
+        let mut present = Vec::with_capacity(block_hashes.len());
+        for block_hash in block_hashes {
+            match self.ctx.contains_block(&self.session.root_hash, block_hash).await {
+                Ok(found) => present.push(found),
+                Err(error) => {
+                    warn!(error_message = error.to_string(), "checking a block to provide failed");
+                    present.push(false);
+                }
+            }
+        }
+        present
+    }
+
     /// Removes the hash from the request awaiting its response. Returns false when no request is awaiting it.
     fn take_pending(state: &mut WorkerState, block_hash: &OmniHash) -> bool {
-        let Some(index) = state.pending.iter().position(|request| request.contains(block_hash)) else {
-            return false;
-        };
-        state.pending[index].remove(block_hash);
-        if state.pending[index].is_empty() {
-            state.pending.remove(index);
+        for index in 0..state.pending.len() {
+            if state.pending[index].take(block_hash).is_some() {
+                if state.pending[index].is_empty() {
+                    state.pending.remove(index);
+                }
+                return true;
+            }
         }
-        true
+        false
     }
 
     fn release_pending(&self, state: &mut WorkerState) {
-        let released: Vec<OmniHash> = state.pending.drain(..).flatten().collect();
+        let released: Vec<OmniHash> = state.pending.drain(..).flat_map(|request| request.blocks.into_iter().map(|(hash, _)| hash)).collect();
         self.ctx.release_blocks(&self.session.root_hash, released);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PresenceBitmap;
+
+    #[test]
+    fn the_bitmap_of_64_hashes_is_8_bytes_and_round_trips() {
+        let mut present = vec![false; 64];
+        present[0] = true;
+        present[7] = true;
+        present[63] = true;
+
+        let bits = PresenceBitmap::encode(&present);
+        assert_eq!(bits.len(), 8);
+        assert_eq!(bits[0], 0b1000_0001);
+        assert_eq!(bits[7], 0b1000_0000);
+        assert_eq!(PresenceBitmap::decode(&bits, 64), present);
+    }
+
+    #[test]
+    fn a_bitmap_shorter_than_the_request_reads_the_missing_bits_as_absent() {
+        let bits = PresenceBitmap::encode(&[true, false, true]);
+
+        assert_eq!(bits, vec![0b0000_0101]);
+        assert_eq!(PresenceBitmap::decode(&bits, 5), vec![true, false, true, false, false]);
     }
 }

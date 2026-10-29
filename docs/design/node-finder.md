@@ -39,21 +39,19 @@ A lookup is a request and an answer on the same Session, so its result does not 
 
 ```mermaid
 flowchart LR
-    Want[want_asset_keys]
-    Give[give_asset_key_locations]
-    Push[push_asset_key_locations]
-    Nodes[push_node_profiles]
+    Announce[AnnounceLocations]
+    Nodes[AnnounceProfiles]
     Near[Nodes near the AssetKey]
     Asker[Requester node]
     All[Connected peers]
     Repo[(NodeFinderRepo)]
 
-    Want --> Near
-    Push --> Near
-    Near --> Give
-    Give --> Asker
+    Announce --> Near
+    Near --> Announce
     Nodes --> All
     All --> Repo
+    Asker -->|LookupRequest| Near
+    Near -->|LookupResponse| Asker
 ```
 
 Announcements are edged toward nodes close in XOR distance and relayed with a decreasing hop count, while a lookup answer returns to the requester on the Session that carried the request.
@@ -61,7 +59,7 @@ Received information is given a lifetime and count limit so old location info an
 
 ## 4. Separation of decision and communication
 
-[TaskComputer](../../daemon/modules/engine/src/core/negotiator/node/task_computer.rs) looks at the receive state of all Sessions and the requests of higher-level components and computes the next DataMessage to send.
+[TaskComputer](../../daemon/modules/engine/src/core/negotiator/node/task_computer.rs) reads the AssetKeys the higher layer provides and the known nodes, and queues the announcements of one cycle; [TaskLookup](../../daemon/modules/engine/src/core/negotiator/node/task_lookup.rs) turns the wanted AssetKeys into lookups.
 [TaskCommunicator](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs) handles only the per-Session handshake and send/receive.
 Consolidating the decision into one place keeps routing policy from scattering across per-connection workers.
 Each Session has an outbox and a writer task, so a message produced outside the cycle is sent without waiting for it, and the writer sends a Status when a cycle passes with nothing to send.
@@ -123,26 +121,26 @@ A design that has the connection target return the source address it saw through
 **Decision**
 NodeFinder closes a Session when it receives no message from the peer, including the Hello/Profile exchange, for 3 times the communication cycle.
 The communication cycle is taken from `NodeFinderIntervals::communicate`; with the default of 20 seconds the receive deadline is 60 seconds.
-The deadline is held by FramedStream ([session.md](./session.md#post-establishment-receive-deadline)), updated on each Hello, Profile, and DataMessage reception, and not extended by the local node's sends.
-After establishment, a DataMessage is always sent every communication cycle, even when empty.
+The deadline is held by FramedStream ([session.md](./session.md#post-establishment-receive-deadline)), updated on each message reception, and not extended by the local node's sends.
+After establishment, a Status is sent every communication cycle when nothing else is sent.
 Shutdown ends the send/receive task with the cancellation token without waiting for the receive deadline, and waits for its termination.
 
 **Rationale**
-Since the peer sends a DataMessage every cycle, a 3-cycle grace period still prevents an unresponsive Session from permanently occupying connection resources.
+Since the peer sends a Status every cycle, a 3-cycle grace period still prevents an unresponsive Session from permanently occupying connection resources.
 Deriving the deadline from the communication cycle keeps the ratio of grace to send frequency even when the cycle setting changes.
 Applying it to the Hello/Profile exchange also closes connections that finish Session authentication and use selection but then do not respond.
 
-#### Element counts of DataMessage and NodeProfile
+#### Element counts of NodeMessage and NodeProfile
 
 **Decision**
-The element counts of DataMessages sent and received are kept within the following ranges.
+The element counts of NodeMessages sent and received are kept within the following ranges.
 
 | Target | Limit per message |
 | --- | --- |
 | `push_node_profiles` | 32 |
-| `want_asset_keys` | 1024 |
-| `give_asset_key_locations` | 1024 |
-| `push_asset_key_locations` | 1024 |
+| `AnnounceLocations` AssetKeys | 1024 |
+| `LookupResponse` locations | 8 |
+| `LookupResponse` closer nodes | 8 |
 | NodeProfiles per AssetKey | 8 |
 | NodeProfile `addrs` | 8 |
 
@@ -164,13 +162,13 @@ Random selection when narrowing the count reduces the bias of always propagating
 **Decision**
 NodeFinderRepo keeps one NodeProfile per node ID.
 When a NodeProfile of the same node ID is received, it replaces the held value only when its update time is greater; an equal or smaller value is ignored.
-Replacement does not change the row's weight.
+Replacement does not change the row's `last_seen` or failure count.
 The signature mechanism is the source of [trust-security.md](./trust-security.md#nodeprofile-binds-reachable-addresses-with-the-nodes-own-signature).
 
 **Rationale**
 Using the whole URI as a key leaves a separate row every time the same node's addresses change, increasing connection attempts to unreachable addresses.
 With a signed NodeProfile, a larger update time can be verified as the owner's newer reachable addresses, so the node ID can be the key and only the newer value kept.
-The weight is the priority attached to a NodeProfile's origin and does not change as reachable addresses update.
+Whether the node is reachable is decided by a finished handshake, not by receiving its profile.
 
 **Rejected**
 Keeping the URI as the key and returning only the newest value per node ID at read time avoids changing the storage format, but the old rows keep consuming the count limit.

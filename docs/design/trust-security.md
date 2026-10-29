@@ -50,10 +50,10 @@ Connections over the limit are closed without reading or writing, and connection
 The frame limits are 16 KiB during the handshake, 256 KiB for NodeFinder after use selection, and a value based on FileExchanger's maximum block length of 1 MiB; a Session whose reception exceeds the limit is closed.
 These are constraints for curbing the receiving side's resource consumption by pre- and post-authentication peers, and the details and rationale are the source of [session.md](./session.md#51-decided).
 NodeFinder closes a Session that receives nothing, both during the Hello/Profile exchange and after establishment, for 3 times the communication cycle.
-With the default communication cycle of 20 seconds the receive deadline is 60 seconds, and the peer sends a DataMessage every cycle even when empty.
+With the default communication cycle of 20 seconds the receive deadline is 60 seconds, and the peer sends a Status every cycle even when it has nothing else to send.
 This send promise is the basis for limiting connection-resource occupation by an unresponsive peer, and the deadline is derived from the cycle setting ([node-finder.md](./node-finder.md#61-decided)).
 
-At the wire decode of DataMessage and NodeProfile, the following element counts are checked before allocating collections, and a Session over the limit is closed.
+At the wire decode of NodeMessage and NodeProfile, the following element counts are checked before allocating collections, and a Session over the limit is closed.
 
 | Target | Limit per message |
 | --- | --- |
@@ -104,7 +104,7 @@ The signature is made once at startup, not on every connection.
 
 The NodeProfile type can only be created through the path that signs with the local node's key, or the path that verifies the signature from the wire or a URI.
 A signature mismatch and malformed format become a decode failure and close the Session.
-Of the NodeProfiles received in a DataMessage, one whose update time is more than 5 minutes ahead of the receive time is discarded on its own, keeping the Session.
+Of the NodeProfiles received in an AnnounceProfiles message, one whose update time is more than 5 minutes ahead of the receive time is discarded on its own, keeping the Session.
 The NodeProfile in the handshake ProfileMessage is not subject to the time check.
 Refusal for being too old is not done.
 Only signed URIs can be specified as configured bootstrap nodes.
@@ -166,11 +166,11 @@ Session verifies the peer's signature and key through the secure channel and enc
 The signing key is stored in the state directory, the node ID is derived from the public key, and the NodeFinder handshake reconciles it.
 The handshake deadline and concurrency and the frame limits during the handshake and after use selection are implemented.
 The receive deadlines for NodeFinder's Hello/Profile exchange and after establishment are implemented as 3 times the communication cycle.
-The wire decode of DataMessage and NodeProfile checks the element count limits, and the sending side stays within the same limits.
-NodeFinder's frame and DataMessage are limited to 256 KiB or less, and the variable-length field constraints and the send candidate budget selection are implemented.
+The wire decode of NodeMessage and NodeProfile checks the element count limits, and the sending side stays within the same limits.
+NodeFinder's frame and NodeMessage are limited to 256 KiB or less, and the variable-length field constraints and the send candidate budget selection are implemented.
 Tests confirm disconnection on each over-limit, acceptance exactly at limits, and round trips of large information.
 NodeProfile is generated with a signature and verified through the paths built from the wire and a URI.
-It is signed at startup with the local node's key, and of the NodeProfiles received in a DataMessage, those whose update time is ahead by more than the tolerance are discarded.
+It is signed at startup with the local node's key, and of the NodeProfiles received in an AnnounceProfiles message, those whose update time is ahead by more than the tolerance are discarded.
 Tests confirm signature verification, rejection of tampering, fixed signed bytes, and replacement by update time.
 The Web of Trust policy is undecided.
 The process in which the dialing side reconciles a connection candidate's public key with the Session's cert is listed as a known bug in [issues.md](../issues.md).

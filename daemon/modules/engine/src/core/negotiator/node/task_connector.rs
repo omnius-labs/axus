@@ -9,7 +9,7 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use chrono::Utc;
 
@@ -99,7 +99,12 @@ impl TaskConnector {
                         this.sleeper.sleep(this.option.intervals.connect).await;
                         let res = this.connect().await;
                         if let Err(e) = res {
-                            warn!(error_message = e.to_string(), "connect failed");
+                            // 候補が無いのは小さな network では常態なので、警告にしない
+                            if e.kind() == &ErrorKind::NotFound {
+                                debug!(error_message = e.to_string(), "no node profile to connect");
+                            } else {
+                                warn!(error_message = e.to_string(), "connect failed");
+                            }
                         }
                     } => {}
                     _ = this.token.cancelled() => break,

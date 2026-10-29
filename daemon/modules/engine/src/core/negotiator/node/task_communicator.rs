@@ -641,6 +641,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_relayed_announcement_carries_one_hop_less_to_the_other_session() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let intervals = NodeFinderIntervals {
+            communicate: Duration::from_secs(30),
+            ..NodeFinderIntervals::default()
+        };
+        let (task, session_sender) = create_task_communicator(dir.path().to_str().unwrap(), intervals).await?;
+
+        // 送信元と中継先の 2 Session を確立する
+        let (session_a, peer_a, profile_a) = session_pair()?;
+        let (session_b, peer_b, profile_b) = session_pair()?;
+        let answer_a = answer_handshake(peer_a.clone(), profile_a);
+        let answer_b = answer_handshake(peer_b.clone(), profile_b);
+        session_sender.send(SessionStatus::new(session_a)).await?;
+        session_sender.send(SessionStatus::new(session_b)).await?;
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
+            answer_a.await?;
+            answer_b.await?;
+            while task.sessions.statuses().await.len() != 2 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Ok::<(), Error>(())
+        })
+        .await??;
+
+        let asset_key = asset_key(1);
+        peer_a
+            .sender
+            .lock()
+            .await
+            .send_message_with::<NodeMessageCodec>(&NodeMessage::AnnounceLocations {
+                locations: HashMap::from([(
+                    asset_key.clone(),
+                    AnnounceLocation {
+                        hops: MAX_HOPS,
+                        node_profiles: vec![Arc::new(node_profile())],
+                    },
+                )]),
+            })
+            .await?;
+
+        // 中継先は 1 つ減った hop で受け取り、0 になったらそれ以上中継しない
+        let relayed: NodeMessage = tokio::time::timeout(Duration::from_secs(2), peer_b.receiver.lock().await.recv_message_with::<NodeMessageCodec>()).await??;
+        let NodeMessage::AnnounceLocations { locations } = relayed else {
+            panic!("the other Session receives the relayed announcement");
+        };
+        assert_eq!(locations[&asset_key].hops, MAX_HOPS - 1);
+
+        task.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_profile_announcement_is_not_relayed() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let intervals = NodeFinderIntervals {
+            communicate: Duration::from_secs(30),
+            ..NodeFinderIntervals::default()
+        };
+        let (task, session_sender) = create_task_communicator(dir.path().to_str().unwrap(), intervals).await?;
+
+        let (session_a, peer_a, profile_a) = session_pair()?;
+        let (session_b, peer_b, profile_b) = session_pair()?;
+        let answer_a = answer_handshake(peer_a.clone(), profile_a);
+        let answer_b = answer_handshake(peer_b.clone(), profile_b);
+        session_sender.send(SessionStatus::new(session_a)).await?;
+        session_sender.send(SessionStatus::new(session_b)).await?;
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
+            answer_a.await?;
+            answer_b.await?;
+            while task.sessions.statuses().await.len() != 2 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Ok::<(), Error>(())
+        })
+        .await??;
+
+        peer_a
+            .sender
+            .lock()
+            .await
+            .send_message_with::<NodeMessageCodec>(&NodeMessage::AnnounceProfiles {
+                node_profiles: vec![Arc::new(node_profile())],
+            })
+            .await?;
+
+        // 送信元以外の Session には何も届かない
+        let leaked = tokio::time::timeout(Duration::from_millis(300), peer_b.receiver.lock().await.recv_message_with::<NodeMessageCodec>()).await;
+        assert!(leaked.is_err(), "a profile announcement is not relayed to another Session");
+
+        task.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn an_announcement_is_relayed_with_one_less_hop_and_stops_at_zero() -> TestResult {
         let dir = tempfile::tempdir()?;
         let intervals = NodeFinderIntervals {

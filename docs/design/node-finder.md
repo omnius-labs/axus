@@ -83,6 +83,16 @@ Storing a URI as an opaque value avoids changing the table schema on every forma
 
 The separation of NodeFinder and FileExchanger is the source of [design.md](../design.md#51-decided).
 
+#### Count the connected and accepted Session limits separately
+
+**Decision**
+`max_connected_session_count` limits the Sessions this node dialed (`Connected`) and `max_accepted_session_count` limits the Sessions a peer dialed (`Accepted`).
+The node may therefore hold up to the sum of the two, and the defaults are eight and eight.
+
+**Rationale**
+A node that only dials and a node that only accepts need different room, and the connector and the accepter decide their next action from the count of their own direction.
+A single total would make one direction starve the other.
+
 #### Keep the Session established by the smaller node ID when duplicates occur
 
 **Decision**

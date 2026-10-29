@@ -134,6 +134,7 @@ Give each Session a send queue and a writer task, so a task can send outside the
 
 **Completion criterion**
 Tests show an announcement relayed exactly as many times as the hop limit allows, a zero-hop entry not relayed, a profile announcement not relayed, an idle Session kept open by Status, and a silent peer closed after three cycles.
+`task_communicator::tests::a_relayed_announcement_carries_one_hop_less_to_the_other_session` observes the relayed hop count on the other Session, and `a_profile_announcement_is_not_relayed` observes that a profile announcement reaches no other Session.
 
 <a id="s-3"></a>
 ### Step 3. Persistence by last seen time and dial backoff
@@ -143,7 +144,7 @@ Tests show an announcement relayed exactly as many times as the hop limit allows
 
 **What to do**
 Migrate the table to drop `weight` and add `last_seen`, `fail_count`, and `last_attempt`, with existing rows taking `last_seen` from the row update time.
-Evict by `last_seen`, and update `last_seen` when a NodeProfile is received or a connection succeeds.
+Evict by `last_seen`, and update it only when a handshake with the node finishes, because a received profile does not prove that the node is reachable.
 Back off dialing from `last_attempt` and `fail_count`, doubling the wait per failure, and reset both on a successful handshake.
 Cache the verified profiles in memory instead of parsing and verifying every stored URI on each cycle, and run the shrink from the periodic task rather than from the receive path.
 

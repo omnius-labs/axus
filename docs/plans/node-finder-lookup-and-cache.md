@@ -86,7 +86,7 @@ The NodeFinder wire becomes incompatible with the previous daemon in both direct
 | --- | --- | --- | --- |
 | [0](#s-0) | Frame length per Session type | | done |
 | [1](#s-1) | Location cache and receive limits | 0 | done |
-| [2](#s-2) | Message-per-purpose protocol, announcements, and Status | 1 | |
+| [2](#s-2) | Message-per-purpose protocol, announcements, and Status | 1 | done |
 | [3](#s-3) | Persistence by last seen time and dial backoff | | |
 | [4](#s-4) | Routing table and active lookup | 2, 3 | |
 | [5](#s-5) | Distance order, cleanup, and document close-out | 4 | |
@@ -125,7 +125,7 @@ A test shows an advertisement received as a push is returned by `find_node_profi
 `daemon/rpfs/node.rpf` and its generated code, `protocol/node.rs`, `core/negotiator/node/message.rs`, `task_communicator.rs`, `task_computer.rs`, and `session_status.rs`.
 
 **What to do**
-Replace `DataMessage` with an enum carrying `Hello`, `Profile`, `LookupRequest`, `LookupResponse`, `AnnounceProfiles`, `AnnounceLocations`, and `Status`.
+Replace `DataMessage` with an enum carrying `Hello`, `Profile`, `Status`, `AnnounceProfiles`, and `AnnounceLocations`. Step 4 adds the lookup variants to the same enum.
 Remove the want and answer fields from the wire; a want stays local.
 Send the location announcements to the three connected nodes closest to the AssetKey, and relay a received announcement with one hop less until the hop count reaches zero.
 Send the profile announcements to every connected Session without relaying.
@@ -188,6 +188,7 @@ Four tests of `task_communicator` already fail on `262ac14` and on `8dd1377`: `p
 The first three wait 300 ms for a Session to close after an over-limit frame, but the receive loop reads that frame only after it finishes the rest of the communication cycle, so the close is measured at about 490 ms.
 The fourth waits for the peer's receive state to reach the computed counts and times out.
 All four are built on `DataMessage`, which Step 2 replaces, so the criterion for Steps 1 to 4 is that no failure other than these four is added, and Step 2 replaces the tests and closes them.
+Step 2 removes the want and answer traffic, so `service::tests::node_finds_asset_key_owner_through_bootstrap_node` and `service::tests::node_finds_and_dials_an_owner_known_only_through_another_node` fail until Step 4 adds the lookup that replaces propagation.
 
 | Criterion | Command | Expected result |
 | --- | --- | --- |

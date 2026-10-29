@@ -1,10 +1,7 @@
-use crate::protocol::{
-    MessageCodec,
-    node::{DataMessageCodec, HelloMessageCodec, ProfileMessageCodec},
-};
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use chrono::Utc;
 use enumflags2::make_bitflags;
 use parking_lot::Mutex;
 use tokio::{
@@ -14,8 +11,7 @@ use tokio::{
     time::{Instant, timeout_at},
 };
 use tokio_util::sync::CancellationToken;
-
-use chrono::Utc;
+use tracing::{debug, info, warn};
 
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 
@@ -24,9 +20,13 @@ use crate::{
         connection::{FramedRecvExt as _, FramedSendExt as _},
         runtime::Shutdown,
     },
-    core::session::model::Session,
-    model::NodeProfile,
+    core::{
+        negotiator::node::{AnnounceLocation, NodeFinderVersion, NodeMessage},
+        session::model::Session,
+    },
+    model::{AssetKey, NodeProfile},
     prelude::*,
+    protocol::node::NodeMessageCodec,
 };
 
 use super::*;
@@ -37,7 +37,6 @@ pub struct TaskCommunicator {
     sessions: Arc<SessionRegistry>,
     node_profile_repo: Arc<NodeFinderRepo>,
     location_cache: Arc<Mutex<LocationCache>>,
-    want_cache: Arc<Mutex<WantCache>>,
     session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
@@ -63,13 +62,15 @@ impl Shutdown for TaskCommunicator {
 }
 
 impl TaskCommunicator {
+    /// The nodes one advertisement is relayed to, and the nodes one lookup asks at a time.
+    pub const FAN_OUT: usize = 3;
+
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         my_node_profile: Arc<Mutex<NodeProfile>>,
         sessions: Arc<SessionRegistry>,
         node_profile_repo: Arc<NodeFinderRepo>,
         location_cache: Arc<Mutex<LocationCache>>,
-        want_cache: Arc<Mutex<WantCache>>,
         session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
         clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
@@ -82,7 +83,6 @@ impl TaskCommunicator {
             sessions,
             node_profile_repo,
             location_cache,
-            want_cache,
             session_receiver,
             clock,
             sleeper,
@@ -159,85 +159,85 @@ impl TaskCommunicator {
 
     pub async fn handshake(session: &Session, node_profile: &NodeProfile, receive_timeout: Duration) -> Result<NodeProfile> {
         session.stream.set_receive_timeout(receive_timeout);
-        let send_hello_message = HelloMessage {
+        let send_hello_message = NodeMessage::Hello {
             version: make_bitflags!(NodeFinderVersion::V1),
         };
-        let received_hello_message = Self::exchange_message::<HelloMessageCodec>(session, &send_hello_message).await?;
+        let received_hello_message = Self::exchange_message(session, &send_hello_message).await?;
 
-        let version = send_hello_message.version & received_hello_message.version;
+        let NodeMessage::Hello { version } = received_hello_message else {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("expected the Hello message"));
+        };
+        let version = make_bitflags!(NodeFinderVersion::V1) & version;
 
         if version.contains(NodeFinderVersion::V1) {
-            let send_profile_message = ProfileMessage {
+            let send_profile_message = NodeMessage::Profile {
                 node_profile: node_profile.clone(),
             };
-            let received_profile_message = Self::exchange_message::<ProfileMessageCodec>(session, &send_profile_message).await?;
+            let received_profile_message = Self::exchange_message(session, &send_profile_message).await?;
+            let NodeMessage::Profile { node_profile: received } = received_profile_message else {
+                return Err(Error::new(ErrorKind::InvalidFormat).with_message("expected the Profile message"));
+            };
 
-            if received_profile_message.node_profile.id() == node_profile.id() {
+            if received.id() == node_profile.id() {
                 return Err(Error::new(ErrorKind::Reject).with_message("connected to self"));
             }
 
             // node ID は公開鍵から導出するため、Session で署名を確かめた鍵と一致すれば ID も相手のものと確定する
-            if received_profile_message.node_profile.public_key() != session.cert.public_key.as_slice() {
+            if received.public_key() != session.cert.public_key.as_slice() {
                 return Err(Error::new(ErrorKind::Reject).with_message("node profile does not match the session certificate"));
             }
 
-            Ok(received_profile_message.node_profile)
+            Ok(received)
         } else {
             Err(Error::new(ErrorKind::UnsupportedType).with_message(format!("invalid version: {}", version.bits())))
         }
     }
 
-    async fn exchange_message<C: MessageCodec>(session: &Session, message: &C::Message) -> Result<C::Message>
-    where
-        C::Message: Send + Sync,
-    {
-        session.stream.sender.lock().await.send_message_with::<C>(message).await?;
-        session.stream.receiver.lock().await.recv_message_with::<C>().await
+    async fn exchange_message(session: &Session, message: &NodeMessage) -> Result<NodeMessage> {
+        session.stream.sender.lock().await.send_message_with::<NodeMessageCodec>(message).await?;
+        session.stream.receiver.lock().await.recv_message_with::<NodeMessageCodec>().await
     }
 
     async fn send(self: Arc<Self>, status: Arc<SessionStatus>) -> JoinHandle<()> {
         let this = self.clone();
         tokio::spawn(async move {
-            let sender = TaskSender { status };
+            let mut outbox = status.take_outbox_receiver().await.expect("the writer owns the outbox");
             let f = async {
                 loop {
-                    this.sleeper.sleep(this.option.intervals.communicate).await;
-                    let res = sender.send().await;
-                    if let Err(e) = res {
-                        warn!(error_message = e.to_string(), "send failed",);
-                        return;
-                    }
+                    // 送るものが無い周期は Status で生存を知らせる
+                    let message = select! {
+                        message = outbox.recv() => match message {
+                            Some(message) => message,
+                            None => return Ok::<(), Error>(()),
+                        },
+                        _ = this.sleeper.sleep(this.option.intervals.communicate) => NodeMessage::Status,
+                    };
+                    status.session.stream.sender.lock().await.send_message_with::<NodeMessageCodec>(&message).await?;
                 }
             };
-            select! {
-                _ = f => {}
-                _ = this.cancellation_token.cancelled() => {}
-                _ = sender.status.cancellation_token.cancelled() => {}
-            };
-            sender.status.cancellation_token.cancel();
+            if let Err(e) = select! {
+                res = f => res,
+                _ = this.cancellation_token.cancelled() => Ok(()),
+                _ = status.cancellation_token.cancelled() => Ok(()),
+            } {
+                warn!(error_message = e.to_string(), "send failed");
+            }
+            status.cancellation_token.cancel();
         })
     }
 
     async fn receive(self: Arc<Self>, status: Arc<SessionStatus>, peer_id: Vec<u8>) -> JoinHandle<()> {
         let this = self.clone();
         tokio::spawn(async move {
-            let receiver = TaskReceiver {
-                status,
-                peer_id,
-                node_profile_repo: this.node_profile_repo.clone(),
-                location_cache: this.location_cache.clone(),
-                want_cache: this.want_cache.clone(),
-                clock: this.clock.clone(),
-            };
             let f = async {
                 let communicate = this.option.intervals.communicate;
                 let receive_timeout = this.option.intervals.receive_timeout();
                 loop {
                     let res = async {
-                        let data_message = receiver.receive().await?;
+                        let message = status.session.stream.receiver.lock().await.recv_message_with::<NodeMessageCodec>().await?;
                         // 受信した時点を基準にし、保存処理にかかった時間で期限を延ばさない
                         let received_at = Instant::now();
-                        timeout_at(received_at + receive_timeout, receiver.apply(data_message))
+                        timeout_at(received_at + receive_timeout, this.dispatch(&peer_id, message))
                             .await
                             .map_err(|e| Error::from_error(e, ErrorKind::NetworkError).with_message("NodeFinder receive timed out"))??;
                         // 周期より速く送る相手に、保存処理を繰り返させない
@@ -246,7 +246,7 @@ impl TaskCommunicator {
                     }
                     .await;
                     if let Err(e) = res {
-                        warn!(error_message = e.to_string(), "receive failed",);
+                        warn!(error_message = e.to_string(), "receive failed");
                         return;
                     }
                 }
@@ -254,936 +254,128 @@ impl TaskCommunicator {
             select! {
                 _ = f => {}
                 _ = this.cancellation_token.cancelled() => {}
-                _ = receiver.status.cancellation_token.cancelled() => {}
+                _ = status.cancellation_token.cancelled() => {}
             }
-            receiver.status.cancellation_token.cancel();
+            status.cancellation_token.cancel();
         })
     }
-}
 
-struct TaskSender {
-    status: Arc<SessionStatus>,
-}
-
-impl TaskSender {
-    async fn send(&self) -> Result<()> {
-        let data_message = {
-            let mut sending_data_message = self.status.sending_data_message.lock();
-            DataMessage {
-                push_node_profiles: sending_data_message.push_node_profiles.drain(..).collect(),
-                want_asset_keys: sending_data_message.want_asset_keys.drain(..).collect(),
-                give_asset_key_locations: sending_data_message.give_asset_key_locations.drain().collect(),
-                push_asset_key_locations: sending_data_message.push_asset_key_locations.drain().collect(),
+    async fn dispatch(&self, peer_id: &[u8], message: NodeMessage) -> Result<()> {
+        match message {
+            NodeMessage::Status => {}
+            NodeMessage::AnnounceProfiles { node_profiles } => {
+                let now = self.clock.now();
+                let node_profiles: Vec<&NodeProfile> = node_profiles
+                    .iter()
+                    .filter(|profile| profile.is_updated_within_skew(now))
+                    .map(|profile| profile.as_ref())
+                    .collect();
+                self.node_profile_repo.insert_or_update_node_profiles(&node_profiles, 0).await?;
             }
-        };
-
-        self.status.session.stream.sender.lock().await.send_message_with::<DataMessageCodec>(&data_message).await?;
-
-        Ok(())
-    }
-}
-
-struct TaskReceiver {
-    status: Arc<SessionStatus>,
-    peer_id: Vec<u8>,
-    node_profile_repo: Arc<NodeFinderRepo>,
-    location_cache: Arc<Mutex<LocationCache>>,
-    want_cache: Arc<Mutex<WantCache>>,
-    clock: Arc<dyn Clock<Utc> + Send + Sync>,
-}
-
-impl TaskReceiver {
-    async fn receive(&self) -> Result<DataMessage> {
-        self.status.session.stream.receiver.lock().await.recv_message_with::<DataMessageCodec>().await
-    }
-
-    async fn apply(&self, mut data_message: DataMessage) -> Result<()> {
-        let removed = data_message.remove_future_node_profiles(self.clock.now());
-        if removed > 0 {
-            debug!(removed, "dropped node profiles updated later than the allowed clock skew");
-        }
-
-        let push_node_profiles: Vec<&NodeProfile> = data_message.push_node_profiles.iter().map(|n| n.as_ref()).collect();
-        self.node_profile_repo.insert_or_update_node_profiles(&push_node_profiles, 0).await?;
-        self.node_profile_repo.shrink(1024).await?;
-
-        self.want_cache.lock().insert_relayed(&self.peer_id, data_message.want_asset_keys);
-
-        {
-            let mut location_cache = self.location_cache.lock();
-            for (asset_key, locations) in data_message.give_asset_key_locations {
-                location_cache.insert(asset_key, locations, LocationSource::Answer);
+            NodeMessage::AnnounceLocations { locations } => {
+                let mut relayed: HashMap<Arc<AssetKey>, AnnounceLocation> = HashMap::new();
+                {
+                    let mut location_cache = self.location_cache.lock();
+                    for (asset_key, location) in locations {
+                        location_cache.insert(asset_key.clone(), location.node_profiles.iter().cloned());
+                        // A hop of zero ends the advertisement; otherwise relay it once to the nodes closest to the key.
+                        if location.hops > 0 {
+                            relayed.insert(
+                                asset_key,
+                                AnnounceLocation {
+                                    hops: location.hops - 1,
+                                    node_profiles: location.node_profiles,
+                                },
+                            );
+                        }
+                    }
+                }
+                self.relay_locations(relayed, peer_id).await;
             }
-            for (asset_key, locations) in data_message.push_asset_key_locations {
-                location_cache.insert(asset_key, locations, LocationSource::Advertisement);
+            NodeMessage::Hello { .. } | NodeMessage::Profile { .. } => {
+                return Err(Error::new(ErrorKind::InvalidFormat).with_message("unexpected handshake message"));
             }
         }
 
         Ok(())
+    }
+
+    /// Relays an advertisement to the connected nodes closest to the AssetKey, never back to the sender.
+    pub async fn relay_locations(&self, locations: HashMap<Arc<AssetKey>, AnnounceLocation>, from: &[u8]) {
+        if locations.is_empty() {
+            return;
+        }
+
+        let statuses = self.sessions.statuses().await;
+        let ids: Vec<&[u8]> = statuses.iter().map(|(id, _)| id.as_slice()).collect();
+        let my_node_profile = self.my_node_profile.lock().clone();
+
+        let mut per_session: HashMap<Vec<u8>, HashMap<Arc<AssetKey>, AnnounceLocation>> = HashMap::new();
+        for (asset_key, location) in locations {
+            for id in Kadex::find(my_node_profile.id(), &asset_key.hash.value, &ids, Self::FAN_OUT) {
+                if id == from {
+                    continue;
+                }
+                per_session.entry(id.to_vec()).or_default().insert(asset_key.clone(), location.clone());
+            }
+        }
+
+        for (id, locations) in per_session {
+            if let Some((_, status)) = statuses.iter().find(|(session_id, _)| session_id == &id) {
+                let locations = AnnounceLocationsBudget::select(locations);
+                if let Err(e) = status.outbox.send(NodeMessage::AnnounceLocations { locations }).await {
+                    debug!(error_message = e.to_string(), "dropped an advertisement because the outbox is closed");
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc, time::Duration};
+    use std::time::Duration;
 
-    use async_trait::async_trait;
-    use chrono::Utc;
-    use enumflags2::{BitFlags, make_bitflags};
-    use parking_lot::Mutex;
     use testresult::TestResult;
-    use tokio::{
-        sync::{Mutex as TokioMutex, mpsc},
-        time::Instant,
-    };
+    use tokio::sync::Mutex as TokioMutex;
     use tokio_util::bytes::Bytes;
 
-    use omnius_core_base::{
-        clock::{Clock, ClockUtc},
-        sleeper::{Sleeper, SleeperImpl},
-    };
+    use omnius_core_base::{clock::ClockUtc, sleeper::SleeperImpl};
     use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
     use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
     use crate::{
-        base::{
-            connection::{FramedRecvExt as _, FramedSendExt as _, FramedStream},
-            runtime::Shutdown as _,
-        },
+        base::connection::FramedStream,
         core::session::model::{Session, SessionHandshakeType, SessionType},
         model::{AssetKey, NodeProfile},
-        prelude::*,
-        protocol::{
-            MessageCodec,
-            node::{DataMessageCodec, HelloMessageCodec, MAX_FRAME_LENGTH, ProfileMessageCodec},
-        },
+        protocol::node::MAX_FRAME_LENGTH,
     };
 
-    use super::{
-        DataMessage, HelloMessage, LocationCache, LocationSource, NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, NodeFinderVersion, ProfileMessage, SessionRegistry,
-        SessionStatus, TaskCommunicator, WantCache,
-    };
+    use super::*;
 
     const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-    #[tokio::test]
-    async fn shutdown_completes_while_waiting_for_a_session() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let (task, _session_sender) = create_task_communicator(dir.path().to_str().unwrap(), Arc::new(SessionRegistry::new())).await?;
-
-        assert!(tokio::time::timeout(SHUTDOWN_TIMEOUT, task.shutdown()).await.is_ok());
-
-        Ok(())
+    fn node_profile() -> NodeProfile {
+        NodeProfile::random_for_test(vec![OmniAddr::new("addr")])
     }
 
-    #[tokio::test]
-    async fn shutdown_completes_during_handshake() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let sessions = Arc::new(SessionRegistry::new());
-        let (task, session_sender) = create_task_communicator(dir.path().to_str().unwrap(), sessions.clone()).await?;
-
-        // 相手が応答しないので、handshake の待機に入ったまま止まる
-        let (session, _peer, _) = session_pair()?;
-        session_sender.send(SessionStatus::new(session)).await?;
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        assert!(tokio::time::timeout(SHUTDOWN_TIMEOUT, task.shutdown()).await.is_ok());
-        assert_eq!(sessions.len().await, 0);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn shutdown_removes_the_registered_session() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let sessions = Arc::new(SessionRegistry::new());
-        let (task, session_sender) = create_task_communicator(dir.path().to_str().unwrap(), sessions.clone()).await?;
-
-        // peer を保持し続けることで、Session は相手の切断では終わらず shutdown まで残る
-        let (session, peer, peer_node_profile) = session_pair()?;
-        let peer_task = tokio::spawn(answer_handshake(peer.clone(), peer_node_profile));
-        session_sender.send(SessionStatus::new(session)).await?;
-        peer_task.await??;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
-            while sessions.len().await == 0 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await?;
-
-        assert!(tokio::time::timeout(SHUTDOWN_TIMEOUT, task.shutdown()).await.is_ok());
-        assert_eq!(sessions.len().await, 0);
-        drop(peer);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn oversized_node_finder_frame_closes_both_workers_and_removes_the_session() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let sessions = Arc::new(SessionRegistry::new());
-        let intervals = NodeFinderIntervals {
-            communicate: Duration::from_millis(10),
-            ..NodeFinderIntervals::default()
-        };
-        let (task, session_sender) = create_task_communicator_with_intervals(dir.path().to_str().unwrap(), sessions.clone(), intervals).await?;
-        let (session, peer, peer_node_profile) = session_pair()?;
-        session.stream.set_max_frame_length(MAX_FRAME_LENGTH).await;
-        let answer = answer_handshake(peer.clone(), peer_node_profile);
-        session_sender.send(SessionStatus::new(session)).await?;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
-            while sessions.len().await == 0 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await?;
-
-        // 送信側だけが動き続けないことを、相手からの EOF と登録解除で確かめる
-        let send = async { peer.sender.lock().await.send(Bytes::from(vec![0; MAX_FRAME_LENGTH + 1])).await };
-        let receive = async {
-            loop {
-                if peer.receiver.lock().await.recv().await.is_err() {
-                    break;
-                }
-            }
-        };
-        let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, async { tokio::join!(send, receive) }).await?;
-        assert_eq!(sessions.len().await, 0);
-        task.shutdown().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn silent_session_closes_after_three_communicate_intervals() -> TestResult {
-        for interval in [Duration::from_millis(50), Duration::from_millis(100)] {
-            let dir = tempfile::tempdir()?;
-            let fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), interval).await?;
-            fixture.answer_handshake().await?;
-            let start = Instant::now();
-            fixture.wait_registered().await?;
-            let count = fixture.wait_closed(interval * 4).await?;
-            assert!(start.elapsed() >= interval * 2);
-            // 受信がなくても、期限が来るまでは空の DataMessage を毎周期送る
-            assert!(count >= 2);
-            fixture.task.shutdown().await;
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn data_received_before_the_deadline_keeps_the_session_open_and_resets_the_timeout() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let interval = Duration::from_millis(50);
-        let fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), interval).await?;
-        fixture.answer_handshake().await?;
-        fixture.wait_registered().await?;
-
-        // 3 周期より長く交換し、受信のたびに期限が更新されることを確かめる
-        for _ in 0..6 {
-            fixture.peer.sender.lock().await.send_message_with::<DataMessageCodec>(&DataMessage::default()).await?;
-            let received: DataMessage = tokio::time::timeout(interval * 2, fixture.peer.receiver.lock().await.recv_message_with::<DataMessageCodec>()).await??;
-            assert_eq!(received, DataMessage::default());
-            assert_eq!(fixture.sessions.len().await, 1);
-        }
-        fixture.wait_closed(interval * 4).await?;
-        fixture.task.shutdown().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn receive_waits_for_the_rest_of_the_interval_after_each_message() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let interval = Duration::from_millis(400);
-        let intervals = NodeFinderIntervals {
-            communicate: interval,
-            ..NodeFinderIntervals::default()
-        };
-        let sleeper = Arc::new(RecordingSleeper {
-            requested: Mutex::new(Vec::new()),
-        });
-        let sessions = Arc::new(SessionRegistry::new());
-        let (task, session_sender) = create_task_communicator_with_sleeper(dir.path().to_str().unwrap(), sessions.clone(), node_profile(), intervals, sleeper.clone()).await?;
-        let (session, peer, node_profile) = session_pair()?;
-        session.stream.set_max_frame_length(MAX_FRAME_LENGTH).await;
-        session_sender
-            .send(SessionStatus::new(session))
-            .await
-            .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))?;
-        answer_handshake(peer.clone(), node_profile).await?;
-
-        peer.sender.lock().await.send_message_with::<DataMessageCodec>(&DataMessage::default()).await?;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
-            // 送信側は周期ちょうどを、受信側は周期から処理にかかった分を引いた時間を要求する
-            while !sleeper.requested.lock().iter().any(|d| *d > interval / 2 && *d < interval) {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await?;
-
-        task.shutdown().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn silent_hello_exchange_closes_on_the_receive_deadline() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let interval = Duration::from_millis(50);
-        let fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), interval).await?;
-        let _: HelloMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>()).await??;
-        fixture.wait_closed(interval * 4).await?;
-        fixture.task.shutdown().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn profile_exchange_has_a_receive_deadline_that_is_reset_by_hello() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let interval = Duration::from_millis(100);
-        let fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), interval).await?;
-        let _: HelloMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>()).await??;
-        tokio::time::sleep(interval * 2).await;
-        fixture.send_hello().await?;
-        let _: ProfileMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<ProfileMessageCodec>()).await??;
-
-        // Hello の受信で更新されるので、handshake 開始から 3 周期を過ぎても閉じない
-        assert!(tokio::time::timeout(interval * 3 / 2, fixture.peer.receiver.lock().await.recv()).await.is_err());
-        fixture.wait_closed(interval * 2).await?;
-        fixture.task.shutdown().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn profile_received_before_the_deadline_establishes_the_session_and_resets_the_timeout() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let interval = Duration::from_millis(100);
-        let fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), interval).await?;
-        fixture.send_hello().await?;
-        let _: HelloMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>()).await??;
-        let _: ProfileMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<ProfileMessageCodec>()).await??;
-        tokio::time::sleep(interval * 2).await;
-        fixture
-            .peer
-            .sender
-            .lock()
-            .await
-            .send_message_with::<ProfileMessageCodec>(&ProfileMessage {
-                node_profile: fixture.node_profile.clone(),
-            })
-            .await?;
-        fixture.wait_registered().await?;
-
-        // Profile の受信前の期限を引き継ぐと、2 周期目の DataMessage を受け取れない
-        for _ in 0..2 {
-            let received: DataMessage = tokio::time::timeout(interval * 2, fixture.peer.receiver.lock().await.recv_message_with::<DataMessageCodec>()).await??;
-            assert_eq!(received, DataMessage::default());
-        }
-        fixture.wait_closed(interval * 2).await?;
-        fixture.task.shutdown().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn shutdown_cancels_receive_deadlines_in_hello_profile_and_established_phases() -> TestResult {
-        for phase in 0..3 {
-            let dir = tempfile::tempdir()?;
-            let fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), Duration::from_secs(3600)).await?;
-            let _: HelloMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>()).await??;
-            if phase >= 1 {
-                fixture.send_hello().await?;
-                let _: ProfileMessage = tokio::time::timeout(SHUTDOWN_TIMEOUT, fixture.peer.receiver.lock().await.recv_message_with::<ProfileMessageCodec>()).await??;
-            }
-            if phase == 2 {
-                fixture
-                    .peer
-                    .sender
-                    .lock()
-                    .await
-                    .send_message_with::<ProfileMessageCodec>(&ProfileMessage {
-                        node_profile: fixture.node_profile.clone(),
-                    })
-                    .await?;
-                fixture.wait_registered().await?;
-            }
-            tokio::time::timeout(Duration::from_millis(300), fixture.task.shutdown()).await?;
-            fixture.wait_closed(Duration::from_millis(300)).await?;
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn push_node_profile_count_limit_closes_the_session_on_overflow() -> TestResult {
-        check_message_count_limit(0, DataMessage::MAX_PUSH_NODE_PROFILES).await
-    }
-
-    #[tokio::test]
-    async fn want_asset_key_count_limit_closes_the_session_on_overflow() -> TestResult {
-        check_message_count_limit(1, DataMessage::MAX_WANT_ASSET_KEYS).await
-    }
-
-    #[tokio::test]
-    async fn give_asset_key_location_count_limit_closes_the_session_on_overflow() -> TestResult {
-        check_message_count_limit(2, DataMessage::MAX_GIVE_ASSET_KEY_LOCATIONS).await
-    }
-
-    #[tokio::test]
-    async fn push_asset_key_location_count_limit_closes_the_session_on_overflow() -> TestResult {
-        check_message_count_limit(3, DataMessage::MAX_PUSH_ASSET_KEY_LOCATIONS).await
-    }
-
-    #[tokio::test]
-    async fn location_node_profile_count_limits_close_the_session_on_overflow() -> TestResult {
-        for field in [4, 5] {
-            check_message_count_limit(field, DataMessage::MAX_LOCATION_NODE_PROFILES).await?;
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn data_message_address_limit_closes_the_session_on_overflow() -> TestResult {
-        check_message_count_limit(6, NodeProfile::MAX_WIRE_ADDRS).await
-    }
-
-    async fn check_message_count_limit(field: u8, max: usize) -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), Duration::from_millis(500)).await?;
-        fixture.answer_handshake().await?;
-        fixture.wait_registered().await?;
-        let message = boundary_message(field, max);
-        assert_eq!(DataMessageCodec::decode(&DataMessageCodec::encode(&message)?)?, message);
-        fixture.peer.sender.lock().await.send_message_with::<DataMessageCodec>(&message).await?;
-        // 上限ちょうどの message を受けても、次の周期の送信が続く
-        let received: DataMessage = tokio::time::timeout(Duration::from_secs(1), fixture.peer.receiver.lock().await.recv_message_with::<DataMessageCodec>()).await??;
-        assert_eq!(received, DataMessage::default());
-        assert_eq!(fixture.sessions.len().await, 1);
-        // 旧 pack は送信上限を検査しないため、不正な peer の受信テストに使う。
-        let bytes = if field == 6 {
-            // 上限を超える件数の NodeProfile は署名で作れないため、署名を検証しない旧形式で作る
-            let addrs = (0..=max).map(|i| OmniAddr::new(format!("addr-{i}"))).collect();
-            let oversized = crate::protocol::tests::legacy::NodeProfile::new(fixture.node_profile.public_key().to_vec(), addrs, Utc::now().timestamp(), vec![0; 64]);
-            crate::protocol::tests::legacy::DataMessage {
-                push_node_profiles: vec![Arc::new(oversized)],
-                ..Default::default()
-            }
-            .export()?
-        } else {
-            let oversized = boundary_message(field, max + 1);
-            assert!(DataMessageCodec::encode(&oversized).is_err());
-            crate::protocol::tests::legacy_data(&oversized).export()?
-        };
-        fixture.peer.sender.lock().await.send(bytes.into()).await?;
-        // 受信期限の 1.5 秒より前に、decode error によって閉じる
-        fixture.wait_closed(Duration::from_millis(300)).await?;
-        fixture.task.shutdown().await;
-        Ok(())
-    }
-
-    fn boundary_message(field: u8, count: usize) -> DataMessage {
-        let profile = Arc::new(node_profile());
-        let mut message = DataMessage::default();
-        match field {
-            0 => message.push_node_profiles = vec![profile; count],
-            1 => message.want_asset_keys = (0..count).map(|i| Arc::new(asset_key(i, b"asset"))).collect(),
-            2 | 3 => {
-                let locations = (0..count).map(|i| (Arc::new(asset_key(i, b"asset")), vec![profile.clone()])).collect();
-                if field == 2 {
-                    message.give_asset_key_locations = locations;
-                } else {
-                    message.push_asset_key_locations = locations;
-                }
-            }
-            4 | 5 => {
-                let locations = HashMap::from([(Arc::new(asset_key(0, b"asset")), vec![profile; count])]);
-                if field == 4 {
-                    message.give_asset_key_locations = locations;
-                } else {
-                    message.push_asset_key_locations = locations;
-                }
-            }
-            6 => message.push_node_profiles = vec![Arc::new(NodeProfile::random_for_test((0..count).map(|i| OmniAddr::new(format!("addr-{i}"))).collect()))],
-            _ => unreachable!(),
-        }
-        message
-    }
-
-    fn asset_key(i: usize, hash: &[u8]) -> AssetKey {
-        AssetKey {
-            typ: format!("asset-{i}"),
+    fn asset_key(value: u8) -> Arc<AssetKey> {
+        Arc::new(AssetKey {
+            typ: "test".to_string(),
             hash: omnius_core_omnikit::generated::omni_hash::OmniHash {
                 typ: omnius_core_omnikit::generated::omni_hash::OmniHashAlgorithmType::Sha3_256,
-                value: hash.to_vec(),
+                value: vec![value; 32],
             },
-        }
-    }
-
-    #[tokio::test]
-    async fn profile_message_address_limit_accepts_eight_and_closes_on_nine() -> TestResult {
-        for count in [NodeProfile::MAX_WIRE_ADDRS, NodeProfile::MAX_WIRE_ADDRS + 1] {
-            let dir = tempfile::tempdir()?;
-            let mut fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), Duration::from_millis(500)).await?;
-            let addrs: Vec<_> = (0..count).map(|i| OmniAddr::new(format!("addr-{i}"))).collect();
-            if count == NodeProfile::MAX_WIRE_ADDRS {
-                fixture.node_profile = NodeProfile::sign(&fixture.signer, addrs, Utc::now())?;
-                fixture.answer_handshake().await?;
-            } else {
-                // 署名を作れない件数は、署名の検証より前の件数の検査で拒否される
-                let oversized = crate::protocol::tests::legacy::NodeProfile::new(fixture.node_profile.public_key().to_vec(), addrs, Utc::now().timestamp(), vec![0; 64]);
-                answer_handshake_with_legacy_profile(fixture.peer.clone(), oversized).await?;
-            }
-            if count == NodeProfile::MAX_WIRE_ADDRS {
-                fixture.wait_registered().await?;
-                assert_eq!(fixture.sessions.statuses().await[0].1.node_profile.lock().as_ref().unwrap().addrs().len(), count);
-                fixture.task.shutdown().await;
-            }
-            fixture.wait_closed(Duration::from_millis(300)).await?;
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn received_node_profiles_are_stored_by_update_time_and_future_ones_are_dropped() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let fixture = CommunicatingSession::new(dir.path().to_str().unwrap(), Duration::from_millis(500)).await?;
-        fixture.answer_handshake().await?;
-        fixture.wait_registered().await?;
-
-        let now = Utc::now();
-        let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?;
-        let skew = chrono::Duration::from_std(NodeProfile::MAX_FUTURE_UPDATE_SKEW)?;
-        let current = Arc::new(NodeProfile::sign(&signer, vec![OmniAddr::new("current")], now)?);
-        let older = Arc::new(NodeProfile::sign(&signer, vec![OmniAddr::new("older")], now - chrono::Duration::seconds(60))?);
-        let future_signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "future")?;
-        let future = Arc::new(NodeProfile::sign(&future_signer, vec![], now + skew + chrono::Duration::seconds(60))?);
-
-        let send = |profiles: Vec<Arc<NodeProfile>>| async {
-            let message = DataMessage {
-                push_node_profiles: profiles,
-                ..DataMessage::default()
-            };
-            fixture.peer.sender.lock().await.send_message_with::<DataMessageCodec>(&message).await
-        };
-        let stored = || async { fixture.task.node_profile_repo.fetch_node_profiles().await };
-        let wait_for = |expected: Arc<NodeProfile>| async move {
-            tokio::time::timeout(SHUTDOWN_TIMEOUT, async move {
-                while !stored().await?.contains(expected.as_ref()) {
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
-                Result::Ok(())
-            })
-            .await
-            .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))?
-        };
-
-        send(vec![future.clone(), current.clone()]).await?;
-        wait_for(current.clone()).await?;
-        assert!(!stored().await?.contains(future.as_ref()));
-
-        // 同じ node の古い NodeProfile では置き換わらない
-        send(vec![older.clone()]).await?;
-        let barrier = Arc::new(NodeProfile::random_for_test(vec![]));
-        send(vec![barrier.clone()]).await?;
-        wait_for(barrier).await?;
-        let stored = stored().await?;
-        assert!(stored.contains(current.as_ref()));
-        assert!(!stored.contains(older.as_ref()));
-
-        assert_eq!(fixture.sessions.len().await, 1);
-        fixture.task.shutdown().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn large_computed_messages_roundtrip_without_closing_sessions() -> TestResult {
-        use super::super::{NodeProfileFetcherMock, TaskComputer};
-        use crate::base::sync::FnHub;
-        use rand::{SeedableRng, rngs::ChaCha20Rng};
-
-        let dir = tempfile::tempdir()?;
-        tokio::fs::create_dir_all(dir.path().join("a")).await?;
-        tokio::fs::create_dir_all(dir.path().join("b")).await?;
-        let (a_session, a_profile, b_session, b_profile) = authenticated_session_pair()?;
-        a_session.stream.set_max_frame_length(MAX_FRAME_LENGTH).await;
-        b_session.stream.set_max_frame_length(MAX_FRAME_LENGTH).await;
-        let intervals = NodeFinderIntervals {
-            communicate: Duration::from_secs(1),
-            ..NodeFinderIntervals::default()
-        };
-        let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
-        let a_location_cache = Arc::new(Mutex::new(LocationCache::new(clock.clone())));
-        let a_want_cache = Arc::new(Mutex::new(WantCache::new(clock.clone())));
-        let b_location_cache = Arc::new(Mutex::new(LocationCache::new(clock.clone())));
-        let b_want_cache = Arc::new(Mutex::new(WantCache::new(clock.clone())));
-        let a_sessions = Arc::new(SessionRegistry::new());
-        let b_sessions = Arc::new(SessionRegistry::new());
-        let (a_task, _a_sender) = create_task_communicator_with_caches(
-            dir.path().join("a").to_str().unwrap(),
-            a_sessions.clone(),
-            a_profile.clone(),
-            intervals.clone(),
-            a_location_cache.clone(),
-            a_want_cache.clone(),
-        )
-        .await?;
-        let (b_task, _b_sender) = create_task_communicator_with_caches(
-            dir.path().join("b").to_str().unwrap(),
-            b_sessions.clone(),
-            b_profile.clone(),
-            intervals.clone(),
-            b_location_cache.clone(),
-            b_want_cache.clone(),
-        )
-        .await?;
-        _a_sender.send(SessionStatus::new(a_session)).await?;
-        _b_sender.send(SessionStatus::new(b_session)).await?;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
-            while a_sessions.len().await != 1 || b_sessions.len().await != 1 {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
         })
-        .await?;
-
-        // URI 上限内の既知 node を、1 message の件数上限より多く用意する
-        let known: Vec<_> = (0..96)
-            .map(|i| {
-                Arc::new(NodeProfile::random_for_test(
-                    (0..NodeProfile::MAX_WIRE_ADDRS).map(|j| OmniAddr::new(format!("addr-{j}-of-{i}"))).collect(),
-                ))
-            })
-            .collect();
-        a_task
-            .node_profile_repo
-            .insert_or_update_node_profiles(&known.iter().map(|p| p.as_ref()).collect::<Vec<_>>(), 0)
-            .await?;
-        let keys: Vec<_> = (0..2048).map(|i| asset_key(i, b_profile.id())).collect();
-        {
-            // 複数 message 分を集約した候補は、送信時に schema の件数上限へ収める
-            a_want_cache.lock().insert_relayed(b"peer", keys.iter().cloned().map(Arc::new));
-            let mut locations = a_location_cache.lock();
-            for key in &keys {
-                locations.insert(Arc::new(key.clone()), known[..12].iter().cloned(), LocationSource::Advertisement);
-            }
-        }
-        let want = FnHub::new();
-        let push = FnHub::new();
-        let _want_handle = want.listener().listen({
-            let keys = keys.clone();
-            move |_| keys.clone()
-        });
-        let _push_handle = push.listener().listen({
-            let keys = keys.clone();
-            move |_| keys.clone()
-        });
-        let a_computer = TaskComputer::new(
-            Arc::new(Mutex::new(a_profile)),
-            a_task.node_profile_repo.clone(),
-            Arc::new(NodeProfileFetcherMock { node_profiles: vec![] }),
-            a_sessions.clone(),
-            a_location_cache.clone(),
-            a_want_cache.clone(),
-            want.caller(),
-            push.caller(),
-            Arc::new(SleeperImpl),
-            Arc::new(Mutex::new(ChaCha20Rng::seed_from_u64(1))),
-            NodeFinderOption {
-                state_dir: "".to_string(),
-                max_connected_session_count: 3,
-                max_accepted_session_count: 3,
-                intervals: intervals.clone(),
-            },
-        )
-        .await?;
-        a_computer.compute().await?;
-        let sent_counts;
-        {
-            let a_status = a_sessions.statuses().await[0].1.clone();
-            let sending = a_status.sending_data_message.lock();
-            sent_counts = (
-                sending.want_asset_keys.len(),
-                sending.give_asset_key_locations.len(),
-                sending.push_asset_key_locations.len(),
-            );
-            assert!(!sending.push_node_profiles.is_empty());
-            assert!(sent_counts.0 > 0 && sent_counts.1 > 0 && sent_counts.2 > 0);
-            assert!(sent_counts.1 < DataMessage::MAX_GIVE_ASSET_KEY_LOCATIONS);
-            let message = DataMessage {
-                push_node_profiles: sending.push_node_profiles.clone(),
-                want_asset_keys: sending.want_asset_keys.clone(),
-                give_asset_key_locations: sending.give_asset_key_locations.clone(),
-                push_asset_key_locations: sending.push_asset_key_locations.clone(),
-            };
-            assert!(DataMessageCodec::encode(&message)?.len() <= MAX_FRAME_LENGTH);
-            assert!(sending.push_node_profiles.iter().all(|p| p.addrs().len() <= NodeProfile::MAX_WIRE_ADDRS));
-            for profiles in sending.give_asset_key_locations.values().chain(sending.push_asset_key_locations.values()) {
-                assert_eq!(profiles.len(), DataMessage::MAX_LOCATION_NODE_PROFILES);
-                assert!(profiles.iter().all(|p| p.addrs().len() <= NodeProfile::MAX_WIRE_ADDRS));
-            }
-        }
-        // 大きい message が相手の cache へ届く
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
-            loop {
-                let ready = !b_want_cache.lock().relayed_keys().is_empty() && b_location_cache.lock().len() > 0;
-                if ready {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await?;
-        // 相手の cache から回答を計算し、同じ Session で戻す
-        a_location_cache.lock().clear();
-        let empty = FnHub::new();
-        // 回答側も全 AssetKey を提供し、無作為に選ばれた要求すべてへ回答できるようにする
-        let b_push = FnHub::new();
-        let _b_push_handle = b_push.listener().listen(move |_| keys.clone());
-        let b_computer = TaskComputer::new(
-            Arc::new(Mutex::new(b_profile)),
-            b_task.node_profile_repo.clone(),
-            Arc::new(NodeProfileFetcherMock { node_profiles: vec![] }),
-            b_sessions.clone(),
-            b_location_cache.clone(),
-            b_want_cache.clone(),
-            empty.caller(),
-            b_push.caller(),
-            Arc::new(SleeperImpl),
-            Arc::new(Mutex::new(ChaCha20Rng::seed_from_u64(2))),
-            NodeFinderOption {
-                state_dir: "".to_string(),
-                max_connected_session_count: 3,
-                max_accepted_session_count: 3,
-                intervals,
-            },
-        )
-        .await?;
-        b_computer.compute().await?;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
-            while a_location_cache.lock().len() == 0 {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await?;
-        assert_eq!(a_sessions.len().await, 1);
-        assert_eq!(b_sessions.len().await, 1);
-        a_computer.shutdown().await;
-        b_computer.shutdown().await;
-        a_task.shutdown().await;
-        b_task.shutdown().await;
-        Ok(())
     }
 
-    fn authenticated_session_pair() -> Result<(Session, NodeProfile, Session, NodeProfile)> {
-        let a_signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "a")?;
-        let b_signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "b")?;
-        let a_cert = a_signer.sign(b"test")?;
-        let b_cert = b_signer.sign(b"test")?;
-        let a_profile = NodeProfile::sign(&a_signer, vec![], Utc::now())?;
-        let b_profile = NodeProfile::sign(&b_signer, vec![], Utc::now())?;
-        let (a, b) = tokio::io::duplex(64 * 1024);
-        let (a_reader, a_writer) = tokio::io::split(a);
-        let (b_reader, b_writer) = tokio::io::split(b);
-        let a_session = Session {
-            typ: SessionType::NodeFinder,
-            address: OmniAddr::new("a"),
-            handshake_type: SessionHandshakeType::Connected,
-            cert: b_cert,
-            stream: FramedStream::new(a_reader, a_writer, SessionType::FileExchanger.max_frame_length()),
-        };
-        let b_session = Session {
-            typ: SessionType::NodeFinder,
-            address: OmniAddr::new("b"),
-            handshake_type: SessionHandshakeType::Accepted,
-            cert: a_cert,
-            stream: FramedStream::new(b_reader, b_writer, SessionType::FileExchanger.max_frame_length()),
-        };
-        Ok((a_session, a_profile, b_session, b_profile))
-    }
-
-    struct CommunicatingSession {
-        task: Arc<TaskCommunicator>,
-        sessions: Arc<SessionRegistry>,
-        _session_sender: mpsc::Sender<SessionStatus>,
-        peer: FramedStream,
-        signer: OmniSigner,
-        node_profile: NodeProfile,
-    }
-
-    impl CommunicatingSession {
-        async fn new(state_dir: &str, interval: Duration) -> Result<Self> {
-            let sessions = Arc::new(SessionRegistry::new());
-            let intervals = NodeFinderIntervals {
-                communicate: interval,
-                ..NodeFinderIntervals::default()
-            };
-            let (task, session_sender) = create_task_communicator_with_intervals(state_dir, sessions.clone(), intervals).await?;
-            let (session, peer, signer, node_profile) = session_pair_with_signer()?;
-            session.stream.set_max_frame_length(MAX_FRAME_LENGTH).await;
-            session_sender
-                .send(SessionStatus::new(session))
-                .await
-                .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))?;
-            Ok(Self {
-                task,
-                sessions,
-                _session_sender: session_sender,
-                peer,
-                signer,
-                node_profile,
-            })
-        }
-
-        async fn answer_handshake(&self) -> Result<()> {
-            answer_handshake(self.peer.clone(), self.node_profile.clone()).await
-        }
-
-        async fn send_hello(&self) -> Result<()> {
-            self.peer
-                .sender
-                .lock()
-                .await
-                .send_message_with::<HelloMessageCodec>(&HelloMessage {
-                    version: make_bitflags!(NodeFinderVersion::V1),
-                })
-                .await
-        }
-
-        async fn wait_registered(&self) -> Result<()> {
-            tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
-                while self.sessions.len().await == 0 {
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
-            })
-            .await
-            .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))?;
-            Ok(())
-        }
-
-        async fn wait_closed(&self, timeout: Duration) -> Result<usize> {
-            let count = tokio::time::timeout(timeout, async {
-                let mut count = 0;
-                loop {
-                    match self.peer.receiver.lock().await.recv().await {
-                        Ok(frame) => {
-                            assert_eq!(DataMessageCodec::decode(&frame)?, DataMessage::default());
-                            count += 1;
-                        }
-                        Err(e) => {
-                            assert_eq!(e.kind(), &omnius_core_omnikit::ErrorKind::EndOfStream);
-                            break;
-                        }
-                    }
-                }
-                Result::Ok(count)
-            })
-            .await
-            .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))??;
-            assert_eq!(self.sessions.len().await, 0);
-            Ok(count)
-        }
-    }
-
-    #[tokio::test]
-    async fn handshake_succeeds_with_common_version() -> TestResult {
-        let (session, peer, peer_node_profile) = session_pair()?;
-
-        let peer_task = tokio::spawn(answer_handshake(peer, peer_node_profile.clone()));
-
-        let received = TaskCommunicator::handshake(&session, &node_profile(), NodeFinderIntervals::default().receive_timeout()).await?;
-        assert_eq!(received, peer_node_profile);
-        peer_task.await??;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn handshake_rejects_peer_without_common_version() -> TestResult {
-        let (session, peer, _) = session_pair()?;
-
-        let peer_task = tokio::spawn(async move {
-            peer.sender
-                .lock()
-                .await
-                .send_message_with::<HelloMessageCodec>(&HelloMessage { version: BitFlags::empty() })
-                .await?;
-            let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
-            Result::Ok(())
-        });
-
-        let err = TaskCommunicator::handshake(&session, &node_profile(), NodeFinderIntervals::default().receive_timeout())
-            .await
-            .unwrap_err();
-        assert_eq!(err.kind(), &ErrorKind::UnsupportedType);
-        peer_task.await??;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn handshake_rejects_peer_with_own_id() -> TestResult {
-        let (session, peer, peer_node_profile) = session_pair()?;
-
-        let peer_task = tokio::spawn(answer_handshake(peer, peer_node_profile.clone()));
-
-        let err = TaskCommunicator::handshake(&session, &peer_node_profile, NodeFinderIntervals::default().receive_timeout())
-            .await
-            .unwrap_err();
-        assert_eq!(err.kind(), &ErrorKind::Reject);
-        peer_task.await??;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn handshake_rejects_profile_that_does_not_match_the_certificate() -> TestResult {
-        let (session, peer, _) = session_pair()?;
-
-        let peer_task = tokio::spawn(answer_handshake(peer, node_profile()));
-
-        let err = TaskCommunicator::handshake(&session, &node_profile(), NodeFinderIntervals::default().receive_timeout())
-            .await
-            .unwrap_err();
-        assert_eq!(err.kind(), &ErrorKind::Reject);
-        peer_task.await??;
-
-        Ok(())
-    }
-
-    async fn create_task_communicator(state_dir: &str, sessions: Arc<SessionRegistry>) -> Result<(Arc<TaskCommunicator>, mpsc::Sender<SessionStatus>)> {
-        create_task_communicator_with_intervals(state_dir, sessions, NodeFinderIntervals::default()).await
-    }
-
-    async fn create_task_communicator_with_intervals(
-        state_dir: &str,
-        sessions: Arc<SessionRegistry>,
-        intervals: NodeFinderIntervals,
-    ) -> Result<(Arc<TaskCommunicator>, mpsc::Sender<SessionStatus>)> {
-        create_task_communicator_with_profile(state_dir, sessions, node_profile(), intervals).await
-    }
-
-    async fn create_task_communicator_with_profile(
-        state_dir: &str,
-        sessions: Arc<SessionRegistry>,
-        my_node_profile: NodeProfile,
-        intervals: NodeFinderIntervals,
-    ) -> Result<(Arc<TaskCommunicator>, mpsc::Sender<SessionStatus>)> {
-        create_task_communicator_with_sleeper(state_dir, sessions, my_node_profile, intervals, Arc::new(SleeperImpl)).await
-    }
-
-    async fn create_task_communicator_with_caches(
-        state_dir: &str,
-        sessions: Arc<SessionRegistry>,
-        my_node_profile: NodeProfile,
-        intervals: NodeFinderIntervals,
-        location_cache: Arc<Mutex<LocationCache>>,
-        want_cache: Arc<Mutex<WantCache>>,
-    ) -> Result<(Arc<TaskCommunicator>, mpsc::Sender<SessionStatus>)> {
+    async fn create_task_communicator(state_dir: &str, intervals: NodeFinderIntervals) -> Result<(Arc<TaskCommunicator>, mpsc::Sender<SessionStatus>)> {
         let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
         let (session_sender, session_receiver) = mpsc::channel(20);
-
         let task = TaskCommunicator::new(
-            Arc::new(Mutex::new(my_node_profile)),
-            sessions,
+            Arc::new(Mutex::new(node_profile())),
+            Arc::new(SessionRegistry::new()),
             Arc::new(NodeFinderRepo::new(state_dir, clock.clone()).await?),
-            location_cache,
-            want_cache,
+            Arc::new(Mutex::new(LocationCache::new(clock.clone()))),
             Arc::new(TokioMutex::new(session_receiver)),
             clock,
             Arc::new(SleeperImpl),
@@ -1195,107 +387,212 @@ mod tests {
             },
         )
         .await?;
-
         Ok((task, session_sender))
     }
 
-    async fn create_task_communicator_with_sleeper(
-        state_dir: &str,
-        sessions: Arc<SessionRegistry>,
-        my_node_profile: NodeProfile,
-        intervals: NodeFinderIntervals,
-        sleeper: Arc<dyn Sleeper + Send + Sync>,
-    ) -> Result<(Arc<TaskCommunicator>, mpsc::Sender<SessionStatus>)> {
-        let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
-        let (session_sender, session_receiver) = mpsc::channel(20);
-        let location_cache = Arc::new(Mutex::new(LocationCache::new(clock.clone())));
-        let want_cache = Arc::new(Mutex::new(WantCache::new(clock.clone())));
-
-        let task = TaskCommunicator::new(
-            Arc::new(Mutex::new(my_node_profile)),
-            sessions,
-            Arc::new(NodeFinderRepo::new(state_dir, clock.clone()).await?),
-            location_cache,
-            want_cache,
-            Arc::new(TokioMutex::new(session_receiver)),
-            clock,
-            sleeper,
-            NodeFinderOption {
-                state_dir: state_dir.to_string(),
-                max_connected_session_count: 3,
-                max_accepted_session_count: 3,
-                intervals,
-            },
-        )
-        .await?;
-
-        Ok((task, session_sender))
-    }
-
-    /// 要求された待ち時間を記録して、実際に待つ Sleeper。
-    struct RecordingSleeper {
-        requested: Mutex<Vec<Duration>>,
-    }
-
-    #[async_trait]
-    impl Sleeper for RecordingSleeper {
-        async fn sleep(&self, duration: Duration) {
-            self.requested.lock().push(duration);
-            tokio::time::sleep(duration).await;
-        }
-    }
-
-    async fn answer_handshake(peer: FramedStream, node_profile: NodeProfile) -> Result<()> {
-        answer_handshake_with_legacy_profile(peer, crate::protocol::tests::legacy_profile(&node_profile)).await
-    }
-
-    /// 署名を検証しない旧形式の pack で、仕様外の NodeProfile も送る
-    async fn answer_handshake_with_legacy_profile(peer: FramedStream, node_profile: crate::protocol::tests::legacy::NodeProfile) -> Result<()> {
-        peer.sender
-            .lock()
-            .await
-            .send_message_with::<HelloMessageCodec>(&HelloMessage {
-                version: make_bitflags!(NodeFinderVersion::V1),
-            })
-            .await?;
-        let _: HelloMessage = peer.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
-        let message = crate::protocol::tests::legacy::node::ProfileMessage { node_profile };
-        peer.sender.lock().await.send(message.export()?.into()).await?;
-        let _: ProfileMessage = peer.receiver.lock().await.recv_message_with::<ProfileMessageCodec>().await?;
-        Ok(())
-    }
-
-    /// local 側の Session と、相手側の stream および Session の cert と一致する相手の NodeProfile を返す
     fn session_pair() -> Result<(Session, FramedStream, NodeProfile)> {
-        let (session, peer, _, node_profile) = session_pair_with_signer()?;
-        Ok((session, peer, node_profile))
-    }
-
-    fn session_pair_with_signer() -> Result<(Session, FramedStream, OmniSigner, NodeProfile)> {
+        let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "peer")?;
+        let peer_cert = signer.sign(b"test")?;
+        let peer_node_profile = NodeProfile::sign(&signer, vec![], Utc::now())?;
         let (local, peer) = tokio::io::duplex(64 * 1024);
         let (local_reader, local_writer) = tokio::io::split(local);
         let (peer_reader, peer_writer) = tokio::io::split(peer);
-
-        let peer_signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?;
-        let peer_cert = peer_signer.sign(b"test")?;
-        let peer_node_profile = NodeProfile::sign(&peer_signer, vec![], Utc::now())?;
         let session = Session {
             typ: SessionType::NodeFinder,
             address: OmniAddr::create_tcp("127.0.0.1".parse()?, 1),
             handshake_type: SessionHandshakeType::Connected,
             cert: peer_cert,
-            stream: FramedStream::new(local_reader, local_writer, SessionType::FileExchanger.max_frame_length()),
+            stream: FramedStream::new(local_reader, local_writer, MAX_FRAME_LENGTH),
         };
-
-        Ok((
-            session,
-            FramedStream::new(peer_reader, peer_writer, SessionType::FileExchanger.max_frame_length()),
-            peer_signer,
-            peer_node_profile,
-        ))
+        Ok((session, FramedStream::new(peer_reader, peer_writer, MAX_FRAME_LENGTH), peer_node_profile))
     }
 
-    fn node_profile() -> NodeProfile {
-        NodeProfile::random_for_test(vec![])
+    async fn answer_handshake(peer: FramedStream, node_profile: NodeProfile) -> Result<()> {
+        let hello: NodeMessage = peer.receiver.lock().await.recv_message_with::<NodeMessageCodec>().await?;
+        assert!(matches!(hello, NodeMessage::Hello { .. }));
+        peer.sender
+            .lock()
+            .await
+            .send_message_with::<NodeMessageCodec>(&NodeMessage::Hello {
+                version: make_bitflags!(NodeFinderVersion::V1),
+            })
+            .await?;
+        let profile: NodeMessage = peer.receiver.lock().await.recv_message_with::<NodeMessageCodec>().await?;
+        assert!(matches!(profile, NodeMessage::Profile { .. }));
+        peer.sender
+            .lock()
+            .await
+            .send_message_with::<NodeMessageCodec>(&NodeMessage::Profile { node_profile })
+            .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_idle_session_stays_open_through_status() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let intervals = NodeFinderIntervals {
+            communicate: Duration::from_millis(200),
+            ..NodeFinderIntervals::default()
+        };
+        let (task, session_sender) = create_task_communicator(dir.path().to_str().unwrap(), intervals).await?;
+        let (session, peer, peer_node_profile) = session_pair()?;
+        let answer = answer_handshake(peer.clone(), peer_node_profile);
+        session_sender.send(SessionStatus::new(session)).await?;
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
+
+        let status: NodeMessage = tokio::time::timeout(Duration::from_secs(1), peer.receiver.lock().await.recv_message_with::<NodeMessageCodec>()).await??;
+        assert_eq!(status, NodeMessage::Status);
+
+        task.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_silent_peer_closes_after_the_receive_deadline() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let intervals = NodeFinderIntervals {
+            communicate: Duration::from_millis(200),
+            ..NodeFinderIntervals::default()
+        };
+        let (task, session_sender) = create_task_communicator(dir.path().to_str().unwrap(), intervals).await?;
+        let (session, peer, peer_node_profile) = session_pair()?;
+        let answer = answer_handshake(peer.clone(), peer_node_profile);
+        session_sender.send(SessionStatus::new(session)).await?;
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
+
+        // Status は届くが、相手からは何も送らないので受信期限で閉じる
+        let closed = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match peer.receiver.lock().await.recv().await {
+                    Ok(_) => continue,
+                    Err(e) => {
+                        assert_eq!(e.kind(), &omnius_core_omnikit::ErrorKind::EndOfStream);
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
+        assert!(closed.is_ok(), "the silent Session is closed by the receive deadline");
+
+        task.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_lookup_answer_can_be_sent_outside_the_cycle() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let intervals = NodeFinderIntervals {
+            communicate: Duration::from_secs(30),
+            ..NodeFinderIntervals::default()
+        };
+        let (task, session_sender) = create_task_communicator(dir.path().to_str().unwrap(), intervals).await?;
+        let (session, peer, peer_node_profile) = session_pair()?;
+        let answer = answer_handshake(peer.clone(), peer_node_profile);
+        session_sender.send(SessionStatus::new(session)).await?;
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
+
+        // 周期が 30 秒でも、outbox に積んだ広告はすぐ送られる
+        let statuses = wait_for_session(&task).await?;
+        let announcement = NodeMessage::AnnounceProfiles {
+            node_profiles: vec![Arc::new(node_profile())],
+        };
+        statuses.outbox.send(announcement.clone()).await?;
+        let received: NodeMessage = tokio::time::timeout(Duration::from_secs(1), peer.receiver.lock().await.recv_message_with::<NodeMessageCodec>()).await??;
+        assert_eq!(received, announcement);
+
+        task.shutdown().await;
+        Ok(())
+    }
+
+    async fn wait_for_session(task: &Arc<TaskCommunicator>) -> Result<Arc<SessionStatus>> {
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
+            loop {
+                if let Some((_, status)) = task.sessions.statuses().await.into_iter().next() {
+                    break status;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))
+    }
+
+    #[tokio::test]
+    async fn an_announcement_is_relayed_with_one_less_hop_and_stops_at_zero() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let intervals = NodeFinderIntervals {
+            communicate: Duration::from_secs(30),
+            ..NodeFinderIntervals::default()
+        };
+        let (task, session_sender) = create_task_communicator(dir.path().to_str().unwrap(), intervals).await?;
+        let (session, peer, peer_node_profile) = session_pair()?;
+        let answer = answer_handshake(peer.clone(), peer_node_profile);
+        session_sender.send(SessionStatus::new(session)).await?;
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
+        let status = wait_for_session(&task).await?;
+
+        // 自分が sender しかいないので、hop が 1 なら中継先が無い。hop 0 なら中継もしない。
+        let key = asset_key(1);
+        let announcement = NodeMessage::AnnounceLocations {
+            locations: HashMap::from([(
+                key.clone(),
+                AnnounceLocation {
+                    hops: 0,
+                    node_profiles: vec![Arc::new(node_profile())],
+                },
+            )]),
+        };
+        peer.sender.lock().await.send_message_with::<NodeMessageCodec>(&announcement).await?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let locations = task.location_cache.lock().get(&key).to_vec();
+        assert_eq!(locations.len(), 1, "a zero-hop advertisement is kept but not relayed");
+        assert!(status.outbox.capacity() > 0);
+
+        task.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_hop_limit_is_enforced_on_receive() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let intervals = NodeFinderIntervals {
+            communicate: Duration::from_secs(30),
+            ..NodeFinderIntervals::default()
+        };
+        let (task, session_sender) = create_task_communicator(dir.path().to_str().unwrap(), intervals).await?;
+        let (session, peer, peer_node_profile) = session_pair()?;
+        let answer = answer_handshake(peer.clone(), peer_node_profile);
+        session_sender.send(SessionStatus::new(session)).await?;
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
+
+        // 上限を超える hop は wire の段階で拒否され、Session が閉じる
+        let bytes = crate::generated::axus::node::NodeMessage::AnnounceLocations {
+            locations: [(
+                (*asset_key(1)).clone(),
+                crate::generated::axus::node::LocationEntry {
+                    hops: MAX_HOPS + 1,
+                    node_profiles: vec![],
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }
+        .export()?;
+        peer.sender.lock().await.send(Bytes::from(bytes)).await?;
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match peer.receiver.lock().await.recv().await {
+                    Ok(_) => continue,
+                    Err(_) => break,
+                }
+            }
+        })
+        .await?;
+
+        task.shutdown().await;
+        Ok(())
     }
 }

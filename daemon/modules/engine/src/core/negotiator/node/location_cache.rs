@@ -5,19 +5,8 @@ use omnius_core_base::clock::Clock;
 
 use crate::model::{AssetKey, NodeProfile};
 
-/// How a location entry arrived.
-///
-/// An answer is only sent back to the node that asked for it, while an advertisement may be relayed to other nodes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocationSource {
-    Answer,
-    Advertisement,
-}
-
 struct Entry {
     locations: Vec<Arc<NodeProfile>>,
-    /// Whether this entry may be relayed as an advertisement.
-    relayable: bool,
     last_seen: DateTime<Utc>,
 }
 
@@ -51,16 +40,14 @@ impl LocationCache {
     /// Adds the locations of one AssetKey, keeping one entry per node ID.
     ///
     /// The entry's `last_seen` moves to now even when every profile is already known, because receiving the advertisement again is what keeps it alive.
-    pub fn insert(&mut self, key: Arc<AssetKey>, locations: impl IntoIterator<Item = Arc<NodeProfile>>, source: LocationSource) {
+    pub fn insert(&mut self, key: Arc<AssetKey>, locations: impl IntoIterator<Item = Arc<NodeProfile>>) {
         let now = self.clock.now();
         let entry = self.entries.entry(key).or_insert_with(|| Entry {
             locations: Vec::new(),
-            relayable: false,
             last_seen: now,
         });
 
         entry.last_seen = now;
-        entry.relayable |= source == LocationSource::Advertisement;
 
         for location in locations {
             if entry.locations.len() >= Self::MAX_LOCATIONS_PER_KEY {
@@ -82,21 +69,6 @@ impl LocationCache {
             Some(entry) if self.is_live(entry) => &entry.locations,
             _ => &[],
         }
-    }
-
-    /// The live entries that arrived as an advertisement and may be relayed.
-    pub fn advertisements(&self) -> impl Iterator<Item = (&Arc<AssetKey>, &[Arc<NodeProfile>])> {
-        self.entries
-            .iter()
-            .filter(|(_, entry)| entry.relayable && self.is_live(entry))
-            .map(|(key, entry)| (key, entry.locations.as_slice()))
-    }
-
-    /// Drops every entry.
-    #[cfg(test)]
-    pub fn clear(&mut self) {
-        self.entries.clear();
-        self.profile_count = 0;
     }
 
     #[cfg(test)]
@@ -167,10 +139,6 @@ mod tests {
 
     use super::*;
 
-    fn cache(clock: Arc<FakeClockUtc>) -> LocationCache {
-        LocationCache::new(clock)
-    }
-
     fn seconds(value: i64) -> std::time::Duration {
         std::time::Duration::from_secs(u64::try_from(value).unwrap())
     }
@@ -195,10 +163,11 @@ mod tests {
     }
 
     #[test]
-    fn an_advertisement_is_visible_to_a_lookup() -> TestResult {
-        let mut cache = cache(clock());
+    fn a_location_survives_the_session_that_carried_it() -> TestResult {
+        // The cache has no Session at all, so a value that was inserted is still there when every Session is gone.
+        let mut cache = LocationCache::new(clock());
         let profile = profile("a");
-        cache.insert(key("asset"), [profile.clone()], LocationSource::Advertisement);
+        cache.insert(key("asset"), [profile.clone()]);
 
         assert_eq!(cache.get(&key("asset")), &[profile]);
         Ok(())
@@ -207,16 +176,16 @@ mod tests {
     #[test]
     fn the_same_node_is_kept_once_and_the_entry_is_refreshed() -> TestResult {
         let clock = clock();
-        let mut cache = cache(clock.clone());
+        let mut cache = LocationCache::new(clock.clone());
         let profile = profile("a");
-        cache.insert(key("asset"), [profile.clone()], LocationSource::Answer);
-        cache.insert(key("asset"), [profile.clone()], LocationSource::Answer);
+        cache.insert(key("asset"), [profile.clone()]);
+        cache.insert(key("asset"), [profile.clone()]);
 
         assert_eq!(cache.get(&key("asset")).len(), 1);
         assert_eq!(cache.profile_count(), 1);
 
         clock.advance(seconds(LocationCache::LIFETIME.num_seconds() - 1));
-        cache.insert(key("asset"), [], LocationSource::Answer);
+        cache.insert(key("asset"), []);
         clock.advance(seconds(2));
         assert_eq!(cache.get(&key("asset")).len(), 1, "receiving the entry again keeps it alive");
 
@@ -227,9 +196,9 @@ mod tests {
 
     #[test]
     fn one_key_keeps_at_most_the_wire_limit() -> TestResult {
-        let mut cache = cache(clock());
+        let mut cache = LocationCache::new(clock());
         let locations: Vec<Arc<NodeProfile>> = (0..LocationCache::MAX_LOCATIONS_PER_KEY + 2).map(|i| profile(&format!("a{i}"))).collect();
-        cache.insert(key("asset"), locations, LocationSource::Answer);
+        cache.insert(key("asset"), locations);
 
         assert_eq!(cache.get(&key("asset")).len(), LocationCache::MAX_LOCATIONS_PER_KEY);
         assert_eq!(cache.profile_count(), LocationCache::MAX_LOCATIONS_PER_KEY);
@@ -237,29 +206,18 @@ mod tests {
     }
 
     #[test]
-    fn only_an_advertisement_is_relayable() -> TestResult {
-        let mut cache = cache(clock());
-        cache.insert(key("answered"), [profile("a")], LocationSource::Answer);
-        cache.insert(key("advertised"), [profile("b")], LocationSource::Advertisement);
-
-        let relayed: Vec<&Arc<AssetKey>> = cache.advertisements().map(|(key, _)| key).collect();
-        assert_eq!(relayed, vec![&key("advertised")]);
-        Ok(())
-    }
-
-    #[test]
     fn the_oldest_entry_is_evicted_first() -> TestResult {
         let clock = clock();
-        let mut cache = cache(clock.clone());
+        let mut cache = LocationCache::new(clock.clone());
         for i in 0..LocationCache::MAX_ASSET_KEYS {
-            cache.insert(key(&format!("asset-{i:05}")), [profile(&format!("node-{i}"))], LocationSource::Answer);
+            cache.insert(key(&format!("asset-{i:05}")), [profile(&format!("node-{i}"))]);
             clock.advance(std::time::Duration::from_millis(1));
         }
         assert_eq!(cache.len(), LocationCache::MAX_ASSET_KEYS);
 
         // The oldest entry is refreshed, so the second oldest becomes the eviction target.
-        cache.insert(key("asset-00000"), [profile("node-0")], LocationSource::Answer);
-        cache.insert(key("late"), [profile("late")], LocationSource::Answer);
+        cache.insert(key("asset-00000"), [profile("node-0")]);
+        cache.insert(key("late"), [profile("late")]);
 
         assert_eq!(cache.len(), LocationCache::MAX_ASSET_KEYS);
         assert!(!cache.get(&key("asset-00000")).is_empty());

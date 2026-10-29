@@ -1,5 +1,4 @@
-mod data_message;
-mod data_message_budget;
+mod announce_budget;
 mod kadx;
 mod location_cache;
 mod message;
@@ -14,8 +13,7 @@ mod task_computer;
 mod task_connector;
 mod want_cache;
 
-pub(crate) use data_message::*;
-use data_message_budget::DataMessageBudget;
+pub(crate) use announce_budget::AnnounceLocationsBudget;
 use kadx::*;
 pub(crate) use location_cache::*;
 pub(crate) use message::*;

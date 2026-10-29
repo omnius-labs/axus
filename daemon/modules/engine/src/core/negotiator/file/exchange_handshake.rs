@@ -103,14 +103,14 @@ mod tests {
             address: OmniAddr::new("a"),
             handshake_type: SessionHandshakeType::Connected,
             cert: signer.sign(b"test")?,
-            stream: FramedStream::new(a_reader, a_writer),
+            stream: FramedStream::new(a_reader, a_writer, SessionType::FileExchanger.max_frame_length()),
         };
         let accepting = Session {
             typ: SessionType::FileExchanger,
             address: OmniAddr::new("b"),
             handshake_type: SessionHandshakeType::Accepted,
             cert: signer.sign(b"test")?,
-            stream: FramedStream::new(b_reader, b_writer),
+            stream: FramedStream::new(b_reader, b_writer, SessionType::FileExchanger.max_frame_length()),
         };
         Ok((dialing, accepting))
     }

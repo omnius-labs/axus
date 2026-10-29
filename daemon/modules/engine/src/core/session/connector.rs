@@ -72,8 +72,7 @@ impl SessionConnector {
             .cloned()
             .ok_or_else(|| Error::new(ErrorKind::InvalidFormat).with_message("Missing peer signature"))?;
         let (reader, writer) = tokio::io::split(stream);
-        let stream = FramedStream::new(reader, writer);
-        stream.set_max_frame_length(self.option.handshake_max_frame_length).await;
+        let stream = FramedStream::new(reader, writer, self.option.handshake_max_frame_length);
 
         let send_hello_message = HelloMessage { version: SessionVersion::V1 };
         stream.sender.lock().await.send_message_with::<HelloMessageCodec>(&send_hello_message).await?;

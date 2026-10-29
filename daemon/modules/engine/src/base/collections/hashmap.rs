@@ -1,6 +1,4 @@
-use std::borrow::Borrow;
-use std::hash::Hash;
-use std::{collections::HashMap, sync::Arc};
+use std::{borrow::Borrow, collections::HashMap, hash::Hash, sync::Arc};
 
 use chrono::{DateTime, Duration, Utc};
 

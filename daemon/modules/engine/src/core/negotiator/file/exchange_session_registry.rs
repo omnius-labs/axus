@@ -122,7 +122,7 @@ mod tests {
                 address: OmniAddr::new("test"),
                 handshake_type,
                 cert: signer.sign(b"test").unwrap(),
-                stream: FramedStream::new(reader, writer),
+                stream: FramedStream::new(reader, writer, SessionType::FileExchanger.max_frame_length()),
             },
         ))
     }

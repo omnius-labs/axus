@@ -340,7 +340,7 @@ mod tests {
         prelude::*,
         protocol::{
             MessageCodec,
-            node::{DataMessageCodec, HelloMessageCodec, ProfileMessageCodec},
+            node::{DataMessageCodec, HelloMessageCodec, MAX_FRAME_LENGTH, ProfileMessageCodec},
         },
     };
 
@@ -412,7 +412,7 @@ mod tests {
         };
         let (task, session_sender) = create_task_communicator_with_intervals(dir.path().to_str().unwrap(), sessions.clone(), intervals).await?;
         let (session, peer, peer_node_profile) = session_pair()?;
-        session.stream.set_max_frame_length(FramedStream::NODE_FINDER_MAX_FRAME_LENGTH).await;
+        session.stream.set_max_frame_length(MAX_FRAME_LENGTH).await;
         let answer = answer_handshake(peer.clone(), peer_node_profile);
         session_sender.send(SessionStatus::new(session, Arc::new(ClockUtc))).await?;
         tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
@@ -424,7 +424,7 @@ mod tests {
         .await?;
 
         // 送信側だけが動き続けないことを、相手からの EOF と登録解除で確かめる
-        let send = async { peer.sender.lock().await.send(Bytes::from(vec![0; FramedStream::NODE_FINDER_MAX_FRAME_LENGTH + 1])).await };
+        let send = async { peer.sender.lock().await.send(Bytes::from(vec![0; MAX_FRAME_LENGTH + 1])).await };
         let receive = async {
             loop {
                 if peer.receiver.lock().await.recv().await.is_err() {
@@ -489,7 +489,7 @@ mod tests {
         let sessions = Arc::new(SessionRegistry::new());
         let (task, session_sender) = create_task_communicator_with_sleeper(dir.path().to_str().unwrap(), sessions.clone(), node_profile(), intervals, sleeper.clone()).await?;
         let (session, peer, node_profile) = session_pair()?;
-        session.stream.set_max_frame_length(FramedStream::NODE_FINDER_MAX_FRAME_LENGTH).await;
+        session.stream.set_max_frame_length(MAX_FRAME_LENGTH).await;
         session_sender
             .send(SessionStatus::new(session, Arc::new(ClockUtc)))
             .await
@@ -786,8 +786,8 @@ mod tests {
         tokio::fs::create_dir_all(dir.path().join("a")).await?;
         tokio::fs::create_dir_all(dir.path().join("b")).await?;
         let (a_session, a_profile, b_session, b_profile) = authenticated_session_pair()?;
-        a_session.stream.set_max_frame_length(FramedStream::NODE_FINDER_MAX_FRAME_LENGTH).await;
-        b_session.stream.set_max_frame_length(FramedStream::NODE_FINDER_MAX_FRAME_LENGTH).await;
+        a_session.stream.set_max_frame_length(MAX_FRAME_LENGTH).await;
+        b_session.stream.set_max_frame_length(MAX_FRAME_LENGTH).await;
         let intervals = NodeFinderIntervals {
             communicate: Duration::from_secs(1),
             ..NodeFinderIntervals::default()
@@ -874,7 +874,7 @@ mod tests {
                 give_asset_key_locations: sending.give_asset_key_locations.clone(),
                 push_asset_key_locations: sending.push_asset_key_locations.clone(),
             };
-            assert!(DataMessageCodec::encode(&message)?.len() <= FramedStream::NODE_FINDER_MAX_FRAME_LENGTH);
+            assert!(DataMessageCodec::encode(&message)?.len() <= MAX_FRAME_LENGTH);
             assert!(sending.push_node_profiles.iter().all(|p| p.addrs().len() <= NodeProfile::MAX_WIRE_ADDRS));
             for profiles in sending.give_asset_key_locations.values().chain(sending.push_asset_key_locations.values()) {
                 assert_eq!(profiles.len(), DataMessage::MAX_LOCATION_NODE_PROFILES);
@@ -948,14 +948,14 @@ mod tests {
             address: OmniAddr::new("a"),
             handshake_type: SessionHandshakeType::Connected,
             cert: b_cert,
-            stream: FramedStream::new(a_reader, a_writer),
+            stream: FramedStream::new(a_reader, a_writer, SessionType::FileExchanger.max_frame_length()),
         };
         let b_session = Session {
             typ: SessionType::NodeFinder,
             address: OmniAddr::new("b"),
             handshake_type: SessionHandshakeType::Accepted,
             cert: a_cert,
-            stream: FramedStream::new(b_reader, b_writer),
+            stream: FramedStream::new(b_reader, b_writer, SessionType::FileExchanger.max_frame_length()),
         };
         Ok((a_session, a_profile, b_session, b_profile))
     }
@@ -978,7 +978,7 @@ mod tests {
             };
             let (task, session_sender) = create_task_communicator_with_intervals(state_dir, sessions.clone(), intervals).await?;
             let (session, peer, signer, node_profile) = session_pair_with_signer()?;
-            session.stream.set_max_frame_length(FramedStream::NODE_FINDER_MAX_FRAME_LENGTH).await;
+            session.stream.set_max_frame_length(MAX_FRAME_LENGTH).await;
             session_sender
                 .send(SessionStatus::new(session, Arc::new(ClockUtc)))
                 .await
@@ -1211,10 +1211,15 @@ mod tests {
             address: OmniAddr::create_tcp("127.0.0.1".parse()?, 1),
             handshake_type: SessionHandshakeType::Connected,
             cert: peer_cert,
-            stream: FramedStream::new(local_reader, local_writer),
+            stream: FramedStream::new(local_reader, local_writer, SessionType::FileExchanger.max_frame_length()),
         };
 
-        Ok((session, FramedStream::new(peer_reader, peer_writer), peer_signer, peer_node_profile))
+        Ok((
+            session,
+            FramedStream::new(peer_reader, peer_writer, SessionType::FileExchanger.max_frame_length()),
+            peer_signer,
+            peer_node_profile,
+        ))
     }
 
     fn node_profile() -> NodeProfile {

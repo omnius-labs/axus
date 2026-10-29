@@ -132,11 +132,11 @@ Tests show a mismatched block leaves neither row nor body, a Canceled subscripti
 ### Step 4. Wire definition and frame limit
 
 **Locations to change**
-`daemon/rpfs/file.rpf`, `modules/engine/src/generated`, `base/connection/stream/framed.rs`, `core/session/model.rs`.
+`daemon/rpfs/file.rpf`, `modules/engine/src/generated`, `protocol/file.rs`, `core/session/model.rs`.
 
 **What to do**
 Define the version, root hash, accept and reject, status, request, block, and do-not-have messages as one enum with the constants of §5.8.
-Regenerate the code and lower `FILE_EXCHANGER_MAX_FRAME_LENGTH` to 1 MiB plus the block overhead.
+Regenerate the code and lower `protocol::file::MAX_FRAME_LENGTH` to 1 MiB plus the block overhead.
 
 **Completion criterion**
 Round-trip tests of every message pass, a block of exactly 1 MiB passes the frame limit, and a larger one is rejected.

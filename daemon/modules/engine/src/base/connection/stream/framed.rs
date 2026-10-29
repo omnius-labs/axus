@@ -15,21 +15,17 @@ pub struct FramedStream {
 }
 
 impl FramedStream {
-    pub const NODE_FINDER_MAX_FRAME_LENGTH: usize = crate::generated::axus::node::MAX_MESSAGE_LENGTH as usize;
-    /// The maximum block length plus the hash and the tags a block message carries.
-    pub const FILE_EXCHANGER_MAX_FRAME_LENGTH: usize = crate::generated::axus::file::MAX_BLOCK_LENGTH as usize + 256;
-
-    pub fn new<R, W>(reader: R, writer: W) -> Self
+    pub fn new<R, W>(reader: R, writer: W, max_frame_length: usize) -> Self
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
         let receive_deadline = ReceiveDeadline::default();
         let receiver = Arc::new(TokioMutex::new(DeadlineReceiver::new(
-            FramedReceiver::new(reader, Self::FILE_EXCHANGER_MAX_FRAME_LENGTH),
+            FramedReceiver::new(reader, max_frame_length),
             receive_deadline.clone(),
         )));
-        let sender = Arc::new(TokioMutex::new(FramedSender::new(writer, Self::FILE_EXCHANGER_MAX_FRAME_LENGTH)));
+        let sender = Arc::new(TokioMutex::new(FramedSender::new(writer, max_frame_length)));
         Self {
             receiver,
             sender,
@@ -135,6 +131,6 @@ mod tests {
         let (local, peer) = tokio::io::duplex(128);
         let (local_reader, local_writer) = tokio::io::split(local);
         let (peer_reader, peer_writer) = tokio::io::split(peer);
-        (FramedStream::new(local_reader, local_writer), FramedStream::new(peer_reader, peer_writer))
+        (FramedStream::new(local_reader, local_writer, 1024), FramedStream::new(peer_reader, peer_writer, 1024))
     }
 }

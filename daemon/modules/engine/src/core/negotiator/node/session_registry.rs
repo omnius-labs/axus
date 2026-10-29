@@ -198,7 +198,7 @@ mod tests {
             address: OmniAddr::create_tcp("127.0.0.1".parse()?, 1),
             handshake_type,
             cert: signer.sign(b"test")?,
-            stream: FramedStream::new(reader, writer),
+            stream: FramedStream::new(reader, writer, SessionType::NodeFinder.max_frame_length()),
         };
 
         let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);

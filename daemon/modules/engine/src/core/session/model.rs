@@ -6,7 +6,11 @@ use omnius_core_omnikit::generated::{
 };
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
-use crate::{base::connection::FramedStream, model::NodeProfile};
+use crate::{
+    base::connection::FramedStream,
+    model::NodeProfile,
+    protocol::{file, node},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SessionType {
@@ -17,8 +21,8 @@ pub enum SessionType {
 impl SessionType {
     pub fn max_frame_length(&self) -> usize {
         match self {
-            Self::NodeFinder => FramedStream::NODE_FINDER_MAX_FRAME_LENGTH,
-            Self::FileExchanger => FramedStream::FILE_EXCHANGER_MAX_FRAME_LENGTH,
+            Self::NodeFinder => node::MAX_FRAME_LENGTH,
+            Self::FileExchanger => file::MAX_FRAME_LENGTH,
         }
     }
 }

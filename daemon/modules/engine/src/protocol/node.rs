@@ -15,6 +15,9 @@ use crate::{
 
 use super::{EncodedSize, MessageCodec, NodeProfileCodec};
 
+/// The largest frame a NodeFinder message may be.
+pub const MAX_FRAME_LENGTH: usize = wire::MAX_MESSAGE_LENGTH as usize;
+
 type WireLocations = BTreeMap<AssetKey, Vec<WireNodeProfile>>;
 type DomainLocations = HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>>;
 

@@ -1,6 +1,9 @@
 use super::MessageCodec;
 use crate::{generated::axus::file as wire, prelude::*};
 
+/// The largest frame a FileExchanger message may be: the largest block plus the hash and the tags a block message carries.
+pub const MAX_FRAME_LENGTH: usize = wire::MAX_BLOCK_LENGTH as usize + 256;
+
 /// The FileExchanger message is a generated type as it is, so the codec only fixes the wire it travels on.
 pub(crate) struct ExchangeMessageCodec;
 
@@ -28,12 +31,11 @@ mod tests {
     use testresult::TestResult;
 
     use crate::{
-        base::connection::FramedStream,
         generated::axus::file::{ExchangeMessage, MAX_BLOCK_LENGTH, MAX_REQUEST_BLOCK_HASHES},
         protocol::MessageCodec as _,
     };
 
-    use super::ExchangeMessageCodec;
+    use super::{ExchangeMessageCodec, MAX_FRAME_LENGTH};
 
     fn hash(value: u8) -> OmniHash {
         OmniHash {
@@ -75,8 +77,8 @@ mod tests {
         let largest_request = ExchangeMessage::Request {
             block_hashes: vec![hash(1); MAX_REQUEST_BLOCK_HASHES as usize],
         };
-        assert!(ExchangeMessageCodec::encode(&largest_block)?.len() <= FramedStream::FILE_EXCHANGER_MAX_FRAME_LENGTH);
-        assert!(ExchangeMessageCodec::encode(&largest_request)?.len() <= FramedStream::FILE_EXCHANGER_MAX_FRAME_LENGTH);
+        assert!(ExchangeMessageCodec::encode(&largest_block)?.len() <= MAX_FRAME_LENGTH);
+        assert!(ExchangeMessageCodec::encode(&largest_request)?.len() <= MAX_FRAME_LENGTH);
         assert!(
             ExchangeMessageCodec::encode(&ExchangeMessage::Block {
                 block_hash: hash(1),

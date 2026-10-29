@@ -32,9 +32,9 @@ mod tests {
         let connected_stream = connector.connect(&OmniAddr::new("tcp(ip4(127.0.0.1),50000)")).await?;
         let (accepted_stream, _) = accepter.accept().await?;
         let (reader, writer) = tokio::io::split(connected_stream);
-        let connected_stream = FramedStream::new(reader, writer);
+        let connected_stream = FramedStream::new(reader, writer, 64 * 1024);
         let (reader, writer) = tokio::io::split(accepted_stream);
-        let accepted_stream = FramedStream::new(reader, writer);
+        let accepted_stream = FramedStream::new(reader, writer, 64 * 1024);
 
         connected_stream
             .sender

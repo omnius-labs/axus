@@ -708,12 +708,12 @@ mod tests {
         )
         .await?;
         let (reader, writer) = tokio::io::split(stream);
-        Ok(FramedStream::new(reader, writer))
+        Ok(FramedStream::new(reader, writer, SessionType::FileExchanger.max_frame_length()))
     }
 
     fn framed_stream(stream: TcpStream) -> FramedStream {
         let (reader, writer) = tokio::io::split(stream);
-        FramedStream::new(reader, writer)
+        FramedStream::new(reader, writer, SessionType::FileExchanger.max_frame_length())
     }
 
     fn test_addr() -> OmniAddr {
@@ -776,7 +776,7 @@ mod tests {
         )
         .await?;
         let (reader, writer) = tokio::io::split(stream);
-        let stream = FramedStream::new(reader, writer);
+        let stream = FramedStream::new(reader, writer, SessionType::FileExchanger.max_frame_length());
 
         stream
             .sender

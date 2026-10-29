@@ -31,7 +31,10 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 | output reservation | file-transfer | - | - | Unique constraint on the subscription row that prevents other in-progress subscriptions from using the same output destination | - |
 | choke | file-transfer | - | - | State of not responding to a peer's block requests; judged per node, and lifting it is called unchoke | - |
 | status message | file-transfer | - | - | FileExchanger message that tells whether the remote's blocks are wanted and whether the remote is choked | - |
-| do-not-have response | file-transfer | - | - | FileExchanger message that tells the requested hash's block is not held | - |
+| presence bitmap | file-transfer | `HaveMap` | - | FileExchanger message that starts the answer to a request and tells, one bit per requested hash, which blocks are held | - |
+| cancel message | file-transfer | `Cancel` | - | FileExchanger message that retracts requested hashes whose blocks are no longer needed | - |
+| tail duplication | file-transfer | - | - | Assignment of the same block to two Sessions when few blocks remain, where the first block stored completes it | endgame |
+| fetch throughput | file-transfer | - | - | Received bytes per period of the blocks whose content hash matched, recorded per node ID and used to order the dialing candidates and to set the requests awaiting responses | - |
 | committed file | file-transfer | `PublishedCommittedFile` | - | Publisher-side file whose root hash is finalized and which can be advertised to the network; identified by the pair of root hash and file name | - |
 | uncommitted file | file-transfer | `PublishedUncommittedFile` | - | Publisher-side file from import until its root hash is finalized; identified by a temporary ID | - |
 | temporary output | file-transfer | - | `.<entry name>.axus-<subscription ID>.part` | File created in the same directory as the output destination with a conventional name per subscription, into which the decoded result is written | - |

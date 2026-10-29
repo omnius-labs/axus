@@ -89,7 +89,7 @@ The NodeFinder wire becomes incompatible with the previous daemon in both direct
 | [2](#s-2) | Message-per-purpose protocol, announcements, and Status | 1 | done |
 | [3](#s-3) | Persistence by last seen time and dial backoff | | done |
 | [4](#s-4) | Routing table and active lookup | 2, 3 | done |
-| [5](#s-5) | Distance order, cleanup, and document close-out | 4 | |
+| [5](#s-5) | Distance order, cleanup, and document close-out | 4 | done |
 
 <a id="s-0"></a>
 ### Step 0. Frame length per Session type

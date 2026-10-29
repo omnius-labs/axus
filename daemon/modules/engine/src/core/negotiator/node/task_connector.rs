@@ -1,7 +1,6 @@
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
-use chrono::Utc;
 use parking_lot::Mutex;
 use rand::seq::IndexedRandom;
 use tokio::{
@@ -12,7 +11,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use omnius_core_base::{clock::Clock, sleeper::Sleeper};
+use omnius_core_base::sleeper::Sleeper;
 
 use crate::{
     base::{collections::VolatileHashSet, runtime::Shutdown},
@@ -35,7 +34,6 @@ pub struct TaskConnector {
     connected_node_profiles: Arc<Mutex<VolatileHashSet<NodeProfile>>>,
     connecting_ids: Arc<Mutex<HashSet<Vec<u8>>>>,
     node_profile_repo: Arc<NodeFinderRepo>,
-    clock: Arc<dyn Clock<Utc> + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
     option: NodeFinderOption,
@@ -63,7 +61,6 @@ impl TaskConnector {
         connected_node_profiles: Arc<Mutex<VolatileHashSet<NodeProfile>>>,
         connecting_ids: Arc<Mutex<HashSet<Vec<u8>>>>,
         node_profile_repo: Arc<NodeFinderRepo>,
-        clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
         rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         option: NodeFinderOption,
@@ -76,7 +73,6 @@ impl TaskConnector {
             connected_node_profiles,
             connecting_ids,
             node_profile_repo,
-            clock,
             sleeper,
             option,
             rng,
@@ -160,7 +156,7 @@ impl TaskConnector {
                     warn!(address = addr.to_string(), "the peer's key does not match the node profile");
                     continue;
                 }
-                let status = SessionStatus::new(session, self.clock.clone());
+                let status = SessionStatus::new(session);
                 self.session_sender
                     .lock()
                     .await
@@ -322,7 +318,6 @@ mod tests {
             connected_node_profiles.clone(),
             Arc::new(Mutex::new(HashSet::new())),
             node_profile_repo,
-            clock,
             Arc::new(SleeperImpl),
             rng,
             NodeFinderOption {
@@ -367,7 +362,6 @@ mod tests {
             Arc::new(Mutex::new(VolatileHashSet::new(chrono::Duration::seconds(180), clock.clone()))),
             connecting_ids,
             node_profile_repo,
-            clock,
             Arc::new(SleeperImpl),
             rng,
             NodeFinderOption {

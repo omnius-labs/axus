@@ -36,6 +36,8 @@ pub struct TaskCommunicator {
     my_node_profile: Arc<Mutex<NodeProfile>>,
     sessions: Arc<SessionRegistry>,
     node_profile_repo: Arc<NodeFinderRepo>,
+    location_cache: Arc<Mutex<LocationCache>>,
+    want_cache: Arc<Mutex<WantCache>>,
     session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
@@ -61,10 +63,13 @@ impl Shutdown for TaskCommunicator {
 }
 
 impl TaskCommunicator {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         my_node_profile: Arc<Mutex<NodeProfile>>,
         sessions: Arc<SessionRegistry>,
         node_profile_repo: Arc<NodeFinderRepo>,
+        location_cache: Arc<Mutex<LocationCache>>,
+        want_cache: Arc<Mutex<WantCache>>,
         session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
         clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
@@ -76,6 +81,8 @@ impl TaskCommunicator {
             my_node_profile,
             sessions,
             node_profile_repo,
+            location_cache,
+            want_cache,
             session_receiver,
             clock,
             sleeper,
@@ -127,6 +134,7 @@ impl TaskCommunicator {
 
         let other_node_profile_uri = other_node_profile.to_uri()?;
         *status.node_profile.lock() = Some(other_node_profile.clone());
+        let other_node_id = other_node_profile.id().to_vec();
 
         let status = Arc::new(status);
 
@@ -139,7 +147,7 @@ impl TaskCommunicator {
         info!(node_profile = other_node_profile_uri, "Session established");
 
         let s = self.clone().send(status.clone()).await;
-        let r = self.clone().receive(status.clone()).await;
+        let r = self.clone().receive(status.clone(), other_node_id).await;
         let _ = tokio::join!(s, r);
 
         info!(node_profile = other_node_profile_uri, "Session closed");
@@ -210,12 +218,15 @@ impl TaskCommunicator {
         })
     }
 
-    async fn receive(self: Arc<Self>, status: Arc<SessionStatus>) -> JoinHandle<()> {
+    async fn receive(self: Arc<Self>, status: Arc<SessionStatus>, peer_id: Vec<u8>) -> JoinHandle<()> {
         let this = self.clone();
         tokio::spawn(async move {
             let receiver = TaskReceiver {
                 status,
+                peer_id,
                 node_profile_repo: this.node_profile_repo.clone(),
+                location_cache: this.location_cache.clone(),
+                want_cache: this.want_cache.clone(),
                 clock: this.clock.clone(),
             };
             let f = async {
@@ -274,7 +285,10 @@ impl TaskSender {
 
 struct TaskReceiver {
     status: Arc<SessionStatus>,
+    peer_id: Vec<u8>,
     node_profile_repo: Arc<NodeFinderRepo>,
+    location_cache: Arc<Mutex<LocationCache>>,
+    want_cache: Arc<Mutex<WantCache>>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
 }
 
@@ -293,15 +307,16 @@ impl TaskReceiver {
         self.node_profile_repo.insert_or_update_node_profiles(&push_node_profiles, 0).await?;
         self.node_profile_repo.shrink(1024).await?;
 
-        {
-            let mut received_data_message = self.status.received_data_message.lock();
-            received_data_message.want_asset_keys.extend(data_message.want_asset_keys);
-            received_data_message.give_asset_key_locations.extend(data_message.give_asset_key_locations);
-            received_data_message.push_asset_key_locations.extend(data_message.push_asset_key_locations);
+        self.want_cache.lock().insert_relayed(&self.peer_id, data_message.want_asset_keys);
 
-            received_data_message.want_asset_keys.shrink(1024 * 256);
-            received_data_message.give_asset_key_locations.shrink(1024 * 256);
-            received_data_message.push_asset_key_locations.shrink(1024 * 256);
+        {
+            let mut location_cache = self.location_cache.lock();
+            for (asset_key, locations) in data_message.give_asset_key_locations {
+                location_cache.insert(asset_key, locations, LocationSource::Answer);
+            }
+            for (asset_key, locations) in data_message.push_asset_key_locations {
+                location_cache.insert(asset_key, locations, LocationSource::Advertisement);
+            }
         }
 
         Ok(())
@@ -345,7 +360,8 @@ mod tests {
     };
 
     use super::{
-        DataMessage, HelloMessage, NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, NodeFinderVersion, ProfileMessage, SessionRegistry, SessionStatus, TaskCommunicator,
+        DataMessage, HelloMessage, LocationCache, LocationSource, NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, NodeFinderVersion, ProfileMessage, SessionRegistry,
+        SessionStatus, TaskCommunicator, WantCache,
     };
 
     const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -368,7 +384,7 @@ mod tests {
 
         // 相手が応答しないので、handshake の待機に入ったまま止まる
         let (session, _peer, _) = session_pair()?;
-        session_sender.send(SessionStatus::new(session, Arc::new(ClockUtc))).await?;
+        session_sender.send(SessionStatus::new(session)).await?;
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         assert!(tokio::time::timeout(SHUTDOWN_TIMEOUT, task.shutdown()).await.is_ok());
@@ -386,7 +402,7 @@ mod tests {
         // peer を保持し続けることで、Session は相手の切断では終わらず shutdown まで残る
         let (session, peer, peer_node_profile) = session_pair()?;
         let peer_task = tokio::spawn(answer_handshake(peer.clone(), peer_node_profile));
-        session_sender.send(SessionStatus::new(session, Arc::new(ClockUtc))).await?;
+        session_sender.send(SessionStatus::new(session)).await?;
         peer_task.await??;
         tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
             while sessions.len().await == 0 {
@@ -414,7 +430,7 @@ mod tests {
         let (session, peer, peer_node_profile) = session_pair()?;
         session.stream.set_max_frame_length(MAX_FRAME_LENGTH).await;
         let answer = answer_handshake(peer.clone(), peer_node_profile);
-        session_sender.send(SessionStatus::new(session, Arc::new(ClockUtc))).await?;
+        session_sender.send(SessionStatus::new(session)).await?;
         tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
         tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
             while sessions.len().await == 0 {
@@ -491,7 +507,7 @@ mod tests {
         let (session, peer, node_profile) = session_pair()?;
         session.stream.set_max_frame_length(MAX_FRAME_LENGTH).await;
         session_sender
-            .send(SessionStatus::new(session, Arc::new(ClockUtc)))
+            .send(SessionStatus::new(session))
             .await
             .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))?;
         answer_handshake(peer.clone(), node_profile).await?;
@@ -778,7 +794,7 @@ mod tests {
 
     #[tokio::test]
     async fn large_computed_messages_roundtrip_without_closing_sessions() -> TestResult {
-        use super::super::{NodeProfileFetcherMock, ReceivedDataMessage, TaskComputer};
+        use super::super::{NodeProfileFetcherMock, TaskComputer};
         use crate::base::sync::FnHub;
         use rand::{SeedableRng, rngs::ChaCha20Rng};
 
@@ -792,20 +808,39 @@ mod tests {
             communicate: Duration::from_secs(1),
             ..NodeFinderIntervals::default()
         };
+        let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
+        let a_location_cache = Arc::new(Mutex::new(LocationCache::new(clock.clone())));
+        let a_want_cache = Arc::new(Mutex::new(WantCache::new(clock.clone())));
+        let b_location_cache = Arc::new(Mutex::new(LocationCache::new(clock.clone())));
+        let b_want_cache = Arc::new(Mutex::new(WantCache::new(clock.clone())));
         let a_sessions = Arc::new(SessionRegistry::new());
         let b_sessions = Arc::new(SessionRegistry::new());
-        let (a_task, _a_sender) = create_task_communicator_with_profile(dir.path().join("a").to_str().unwrap(), a_sessions.clone(), a_profile.clone(), intervals.clone()).await?;
-        let (b_task, _b_sender) = create_task_communicator_with_profile(dir.path().join("b").to_str().unwrap(), b_sessions.clone(), b_profile.clone(), intervals.clone()).await?;
-        _a_sender.send(SessionStatus::new(a_session, Arc::new(ClockUtc))).await?;
-        _b_sender.send(SessionStatus::new(b_session, Arc::new(ClockUtc))).await?;
+        let (a_task, _a_sender) = create_task_communicator_with_caches(
+            dir.path().join("a").to_str().unwrap(),
+            a_sessions.clone(),
+            a_profile.clone(),
+            intervals.clone(),
+            a_location_cache.clone(),
+            a_want_cache.clone(),
+        )
+        .await?;
+        let (b_task, _b_sender) = create_task_communicator_with_caches(
+            dir.path().join("b").to_str().unwrap(),
+            b_sessions.clone(),
+            b_profile.clone(),
+            intervals.clone(),
+            b_location_cache.clone(),
+            b_want_cache.clone(),
+        )
+        .await?;
+        _a_sender.send(SessionStatus::new(a_session)).await?;
+        _b_sender.send(SessionStatus::new(b_session)).await?;
         tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
             while a_sessions.len().await != 1 || b_sessions.len().await != 1 {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
         .await?;
-        let a_status = a_sessions.statuses().await[0].1.clone();
-        let b_status = b_sessions.statuses().await[0].1.clone();
 
         // URI 上限内の既知 node を、1 message の件数上限より多く用意する
         let known: Vec<_> = (0..96)
@@ -822,11 +857,10 @@ mod tests {
         let keys: Vec<_> = (0..2048).map(|i| asset_key(i, b_profile.id())).collect();
         {
             // 複数 message 分を集約した候補は、送信時に schema の件数上限へ収める
-            let mut received = a_status.received_data_message.lock();
-            received.want_asset_keys.extend(keys.iter().cloned().map(Arc::new));
+            a_want_cache.lock().insert_relayed(b"peer", keys.iter().cloned().map(Arc::new));
+            let mut locations = a_location_cache.lock();
             for key in &keys {
-                received.give_asset_key_locations.insert(Arc::new(key.clone()), known[..12].to_vec());
-                received.push_asset_key_locations.insert(Arc::new(key.clone()), known[..12].to_vec());
+                locations.insert(Arc::new(key.clone()), known[..12].iter().cloned(), LocationSource::Advertisement);
             }
         }
         let want = FnHub::new();
@@ -844,6 +878,8 @@ mod tests {
             a_task.node_profile_repo.clone(),
             Arc::new(NodeProfileFetcherMock { node_profiles: vec![] }),
             a_sessions.clone(),
+            a_location_cache.clone(),
+            a_want_cache.clone(),
             want.caller(),
             push.caller(),
             Arc::new(SleeperImpl),
@@ -859,6 +895,7 @@ mod tests {
         a_computer.compute().await?;
         let sent_counts;
         {
+            let a_status = a_sessions.statuses().await[0].1.clone();
             let sending = a_status.sending_data_message.lock();
             sent_counts = (
                 sending.want_asset_keys.len(),
@@ -881,12 +918,10 @@ mod tests {
                 assert!(profiles.iter().all(|p| p.addrs().len() <= NodeProfile::MAX_WIRE_ADDRS));
             }
         }
+        // 大きい message が相手の cache へ届く
         tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
             loop {
-                let ready = {
-                    let data = b_status.received_data_message.lock();
-                    data.want_asset_keys.len() == sent_counts.0 && data.give_asset_key_locations.len() == sent_counts.1 && data.push_asset_key_locations.len() == sent_counts.2
-                };
+                let ready = !b_want_cache.lock().relayed_keys().is_empty() && b_location_cache.lock().len() > 0;
                 if ready {
                     break;
                 }
@@ -894,8 +929,8 @@ mod tests {
             }
         })
         .await?;
-        // 相手の受信状態から回答を計算し、同じ Session で戻す
-        *a_status.received_data_message.lock() = ReceivedDataMessage::new(Arc::new(ClockUtc));
+        // 相手の cache から回答を計算し、同じ Session で戻す
+        a_location_cache.lock().clear();
         let empty = FnHub::new();
         // 回答側も全 AssetKey を提供し、無作為に選ばれた要求すべてへ回答できるようにする
         let b_push = FnHub::new();
@@ -905,6 +940,8 @@ mod tests {
             b_task.node_profile_repo.clone(),
             Arc::new(NodeProfileFetcherMock { node_profiles: vec![] }),
             b_sessions.clone(),
+            b_location_cache.clone(),
+            b_want_cache.clone(),
             empty.caller(),
             b_push.caller(),
             Arc::new(SleeperImpl),
@@ -919,7 +956,7 @@ mod tests {
         .await?;
         b_computer.compute().await?;
         tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
-            while a_status.received_data_message.lock().give_asset_key_locations.is_empty() {
+            while a_location_cache.lock().len() == 0 {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
@@ -980,7 +1017,7 @@ mod tests {
             let (session, peer, signer, node_profile) = session_pair_with_signer()?;
             session.stream.set_max_frame_length(MAX_FRAME_LENGTH).await;
             session_sender
-                .send(SessionStatus::new(session, Arc::new(ClockUtc)))
+                .send(SessionStatus::new(session))
                 .await
                 .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))?;
             Ok(Self {
@@ -1130,6 +1167,38 @@ mod tests {
         create_task_communicator_with_sleeper(state_dir, sessions, my_node_profile, intervals, Arc::new(SleeperImpl)).await
     }
 
+    async fn create_task_communicator_with_caches(
+        state_dir: &str,
+        sessions: Arc<SessionRegistry>,
+        my_node_profile: NodeProfile,
+        intervals: NodeFinderIntervals,
+        location_cache: Arc<Mutex<LocationCache>>,
+        want_cache: Arc<Mutex<WantCache>>,
+    ) -> Result<(Arc<TaskCommunicator>, mpsc::Sender<SessionStatus>)> {
+        let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
+        let (session_sender, session_receiver) = mpsc::channel(20);
+
+        let task = TaskCommunicator::new(
+            Arc::new(Mutex::new(my_node_profile)),
+            sessions,
+            Arc::new(NodeFinderRepo::new(state_dir, clock.clone()).await?),
+            location_cache,
+            want_cache,
+            Arc::new(TokioMutex::new(session_receiver)),
+            clock,
+            Arc::new(SleeperImpl),
+            NodeFinderOption {
+                state_dir: state_dir.to_string(),
+                max_connected_session_count: 3,
+                max_accepted_session_count: 3,
+                intervals,
+            },
+        )
+        .await?;
+
+        Ok((task, session_sender))
+    }
+
     async fn create_task_communicator_with_sleeper(
         state_dir: &str,
         sessions: Arc<SessionRegistry>,
@@ -1139,11 +1208,15 @@ mod tests {
     ) -> Result<(Arc<TaskCommunicator>, mpsc::Sender<SessionStatus>)> {
         let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
         let (session_sender, session_receiver) = mpsc::channel(20);
+        let location_cache = Arc::new(Mutex::new(LocationCache::new(clock.clone())));
+        let want_cache = Arc::new(Mutex::new(WantCache::new(clock.clone())));
 
         let task = TaskCommunicator::new(
             Arc::new(Mutex::new(my_node_profile)),
             sessions,
             Arc::new(NodeFinderRepo::new(state_dir, clock.clone()).await?),
+            location_cache,
+            want_cache,
             Arc::new(TokioMutex::new(session_receiver)),
             clock,
             sleeper,

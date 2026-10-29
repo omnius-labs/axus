@@ -37,6 +37,8 @@ pub struct NodeFinder {
     session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
     session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
     sessions: Arc<SessionRegistry>,
+    location_cache: Arc<Mutex<LocationCache>>,
+    want_cache: Arc<Mutex<WantCache>>,
     connected_node_profiles: Arc<Mutex<VolatileHashSet<NodeProfile>>>,
     connecting_ids: Arc<Mutex<HashSet<Vec<u8>>>>,
     get_want_asset_keys_fn: Arc<FnHub<Vec<AssetKey>, ()>>,
@@ -110,6 +112,8 @@ impl NodeFinder {
             session_receiver: Arc::new(TokioMutex::new(rx)),
             session_sender: Arc::new(TokioMutex::new(tx)),
             sessions: Arc::new(SessionRegistry::new()),
+            location_cache: Arc::new(Mutex::new(LocationCache::new(clock.clone()))),
+            want_cache: Arc::new(Mutex::new(WantCache::new(clock.clone()))),
             connected_node_profiles: Arc::new(Mutex::new(VolatileHashSet::new(Duration::seconds(180), clock))),
             connecting_ids: Arc::new(Mutex::new(HashSet::new())),
             get_want_asset_keys_fn: Arc::new(FnHub::new()),
@@ -161,7 +165,6 @@ impl NodeFinder {
                 self.connected_node_profiles.clone(),
                 self.connecting_ids.clone(),
                 self.node_profile_repo.clone(),
-                self.clock.clone(),
                 self.sleeper.clone(),
                 self.rng.clone(),
                 self.option.clone(),
@@ -175,7 +178,6 @@ impl NodeFinder {
                 self.sessions.clone(),
                 self.session_sender.clone(),
                 self.session_accepter.clone(),
-                self.clock.clone(),
                 self.sleeper.clone(),
                 self.option.clone(),
             )
@@ -188,6 +190,8 @@ impl NodeFinder {
             self.node_profile_repo.clone(),
             self.node_profile_fetcher.clone(),
             self.sessions.clone(),
+            self.location_cache.clone(),
+            self.want_cache.clone(),
             self.get_want_asset_keys_fn.caller(),
             self.get_push_asset_keys_fn.caller(),
             self.sleeper.clone(),
@@ -201,6 +205,8 @@ impl NodeFinder {
             self.my_node_profile.clone(),
             self.sessions.clone(),
             self.node_profile_repo.clone(),
+            self.location_cache.clone(),
+            self.want_cache.clone(),
             self.session_receiver.clone(),
             self.clock.clone(),
             self.sleeper.clone(),
@@ -213,16 +219,9 @@ impl NodeFinder {
     }
 
     pub async fn find_node_profile(&self, key: &AssetKey) -> Result<Vec<Arc<NodeProfile>>> {
-        let mut results: Vec<Arc<NodeProfile>> = Vec::new();
+        let locations = self.location_cache.lock().get(key).to_vec();
 
-        for (_, status) in self.sessions.statuses().await {
-            let received_data_message = status.received_data_message.lock();
-            if let Some(node_profiles) = received_data_message.give_asset_key_locations.get(key) {
-                results.extend(node_profiles.clone());
-            }
-        }
-
-        Ok(results)
+        Ok(locations)
     }
 }
 

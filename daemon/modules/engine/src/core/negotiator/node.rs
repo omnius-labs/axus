@@ -1,6 +1,7 @@
 mod data_message;
 mod data_message_budget;
 mod kadx;
+mod location_cache;
 mod message;
 mod node_finder;
 mod node_finder_repo;
@@ -11,10 +12,12 @@ mod task_accepter;
 mod task_communicator;
 mod task_computer;
 mod task_connector;
+mod want_cache;
 
 pub(crate) use data_message::*;
 use data_message_budget::DataMessageBudget;
 use kadx::*;
+pub(crate) use location_cache::*;
 pub(crate) use message::*;
 pub use node_finder::*;
 pub use node_finder_repo::*;
@@ -25,3 +28,4 @@ use task_accepter::*;
 use task_communicator::*;
 use task_computer::*;
 use task_connector::*;
+pub(crate) use want_cache::*;

@@ -26,6 +26,8 @@ pub struct TaskComputer {
     node_profile_repo: Arc<NodeFinderRepo>,
     node_profile_fetcher: Arc<dyn NodeProfileFetcher + Send + Sync>,
     sessions: Arc<SessionRegistry>,
+    location_cache: Arc<Mutex<LocationCache>>,
+    want_cache: Arc<Mutex<WantCache>>,
     get_want_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
     get_push_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
@@ -52,6 +54,8 @@ impl TaskComputer {
         node_profile_repo: Arc<NodeFinderRepo>,
         node_profile_fetcher: Arc<dyn NodeProfileFetcher + Send + Sync>,
         sessions: Arc<SessionRegistry>,
+        location_cache: Arc<Mutex<LocationCache>>,
+        want_cache: Arc<Mutex<WantCache>>,
         get_want_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
         get_push_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
@@ -63,6 +67,8 @@ impl TaskComputer {
             node_profile_repo,
             node_profile_fetcher,
             sessions,
+            location_cache,
+            want_cache,
             get_want_asset_keys_fn,
             get_push_asset_keys_fn,
             sleeper,
@@ -124,93 +130,72 @@ impl TaskComputer {
         let my_node_profile = Arc::new(self.my_node_profile.lock().clone());
         let cloud_node_profile: Vec<Arc<NodeProfile>> = self.node_profile_repo.fetch_node_profiles().await?.into_iter().map(Arc::new).collect();
 
-        let my_get_want_asset_keys: HashSet<Arc<AssetKey>> = self.get_want_asset_keys_fn.call(&()).into_iter().flatten().map(Arc::new).collect();
-        let my_get_push_asset_keys: HashSet<Arc<AssetKey>> = self.get_push_asset_keys_fn.call(&()).into_iter().flatten().map(Arc::new).collect();
+        let my_want_asset_keys: Vec<Arc<AssetKey>> = self.get_want_asset_keys_fn.call(&()).into_iter().flatten().map(Arc::new).collect();
+        let my_push_asset_keys: HashSet<Arc<AssetKey>> = self.get_push_asset_keys_fn.call(&()).into_iter().flatten().map(Arc::new).collect();
 
-        let mut received_data_map: HashMap<Vec<u8>, ReceivedTempDataMessage> = HashMap::new();
-        for (id, status) in self.sessions.statuses().await {
-            let data = status.received_data_message.lock();
+        let ids: Vec<Vec<u8>> = self.sessions.ids().await;
+        let id_slices: Vec<&[u8]> = ids.iter().map(|id| id.as_slice()).collect();
 
-            let mut want_asset_keys: Vec<Arc<AssetKey>> = data.want_asset_keys.iter().cloned().collect();
-            let mut give_asset_key_locations: Vec<(Arc<AssetKey>, Vec<Arc<NodeProfile>>)> = data.give_asset_key_locations.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect();
-            let mut push_asset_key_locations: Vec<(Arc<AssetKey>, Vec<Arc<NodeProfile>>)> = data.push_asset_key_locations.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect();
-
-            {
-                let mut rng = self.rng.lock();
-                want_asset_keys.shuffle(&mut rng);
-                give_asset_key_locations.shuffle(&mut rng);
-                push_asset_key_locations.shuffle(&mut rng);
-            }
-
-            let tmp = ReceivedTempDataMessage {
-                want_asset_keys,
-                give_asset_key_locations,
-                push_asset_key_locations,
-            };
-            received_data_map.insert(id, tmp);
-        }
-
-        let ids: Vec<&[u8]> = received_data_map.keys().map(|n| n.as_slice()).collect();
+        // want と、Session ごとに答えられる want を 1 回の lock で集める
+        let (want_asset_keys, relayed_want_asset_keys, wanted_by_session) = {
+            let mut want_cache = self.want_cache.lock();
+            want_cache.set_local(my_want_asset_keys);
+            let wanted_by_session: HashMap<Vec<u8>, Vec<Arc<AssetKey>>> = ids.iter().map(|id| (id.clone(), want_cache.relayed_keys_of(id))).collect();
+            (want_cache.keys(), want_cache.relayed_keys(), wanted_by_session)
+        };
 
         // 全ノードに配布する情報
         let mut push_node_profiles: HashSet<Arc<NodeProfile>> = HashSet::new();
         push_node_profiles.insert(my_node_profile.clone());
         push_node_profiles.extend(cloud_node_profile);
 
-        // Kadexの距離が近いノードに配布する情報
-        let mut want_asset_keys: HashSet<Arc<AssetKey>> = HashSet::new();
-        want_asset_keys.extend(my_get_want_asset_keys);
-        for data in received_data_map.values() {
-            want_asset_keys.extend(data.want_asset_keys.iter().cloned());
-        }
-
-        // Wantリクエストを受けたノードに配布する情報
-        let mut give_asset_key_locations: HashMap<Arc<AssetKey>, HashSet<Arc<NodeProfile>>> = HashMap::new();
-        for asset_key in my_get_push_asset_keys.iter() {
-            give_asset_key_locations.entry(asset_key.clone()).or_default().insert(my_node_profile.clone());
-        }
-        for data in received_data_map.values() {
-            let iter1 = data.push_asset_key_locations.iter();
-            let iter2 = data.give_asset_key_locations.iter();
-            for (asset_key, node_profiles) in iter1.chain(iter2) {
-                give_asset_key_locations.entry(asset_key.clone()).or_default().extend(node_profiles.iter().cloned());
+        // 自分が提供する key と、受信済みの広告を答える候補にする
+        let (give_asset_key_locations, push_asset_key_locations) = {
+            let location_cache = self.location_cache.lock();
+            let mut give: HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>> = HashMap::new();
+            let mut push: HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>> = HashMap::new();
+            for asset_key in my_push_asset_keys.iter() {
+                give.entry(asset_key.clone()).or_default().push(my_node_profile.clone());
+                push.entry(asset_key.clone()).or_default().push(my_node_profile.clone());
             }
-        }
-
-        // Kadexの距離が近いノードに配布する情報
-        let mut push_asset_key_locations: HashMap<Arc<AssetKey>, HashSet<Arc<NodeProfile>>> = HashMap::new();
-        for asset_key in my_get_push_asset_keys.iter() {
-            push_asset_key_locations.entry(asset_key.clone()).or_default().insert(my_node_profile.clone());
-        }
-        for data in received_data_map.values() {
-            for (asset_key, node_profiles) in data.push_asset_key_locations.iter() {
-                push_asset_key_locations.entry(asset_key.clone()).or_default().extend(node_profiles.iter().cloned());
+            for asset_key in relayed_want_asset_keys.iter() {
+                Self::extend_locations(give.entry(asset_key.clone()).or_default(), location_cache.get(asset_key).iter().cloned());
             }
-        }
+            for (asset_key, locations) in location_cache.advertisements() {
+                Self::extend_locations(push.entry(asset_key.clone()).or_default(), locations.iter().cloned());
+            }
+            (give, push)
+        };
 
-        // Kadexの距離が近いノードにwant_asset_keyを配布する
-        let mut sending_want_asset_key_map: HashMap<&[u8], Vec<Arc<AssetKey>>> = HashMap::new();
+        // Kadex の距離が近いノードに want を配布する
+        let mut sending_want_asset_key_map: HashMap<Vec<u8>, Vec<Arc<AssetKey>>> = HashMap::new();
         for target_key in want_asset_keys.iter() {
-            for id in Kadex::find(my_node_profile.id(), &target_key.hash.value, &ids, 1) {
-                sending_want_asset_key_map.entry(id).or_default().push(target_key.clone());
+            for id in Kadex::find(my_node_profile.id(), &target_key.hash.value, &id_slices, 1) {
+                sending_want_asset_key_map.entry(id.to_vec()).or_default().push(target_key.clone());
             }
         }
 
-        // want_asset_keyを受け取ったノードにgive_asset_key_locationsを配布する
-        let mut sending_give_asset_key_location_map: HashMap<&[u8], HashMap<Arc<AssetKey>, &HashSet<Arc<NodeProfile>>>> = HashMap::new();
-        for (id, data) in received_data_map.iter() {
-            for target_key in data.want_asset_keys.iter() {
-                if let Some((target_key, node_profiles)) = give_asset_key_locations.get_key_value(target_key) {
-                    sending_give_asset_key_location_map.entry(id).or_default().insert(target_key.clone(), node_profiles);
-                }
-            }
-        }
-
-        // Kadexの距離が近いノードにpush_asset_key_locationsを配布する
-        let mut sending_push_asset_key_location_map: HashMap<&[u8], HashMap<Arc<AssetKey>, &HashSet<Arc<NodeProfile>>>> = HashMap::new();
+        // Kadex の距離が近いノードに広告を配布する
+        let mut sending_push_asset_key_location_map: HashMap<Vec<u8>, HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>>> = HashMap::new();
         for (target_key, node_profiles) in push_asset_key_locations.iter() {
-            for id in Kadex::find(my_node_profile.id(), &target_key.hash.value, &ids, 1) {
-                sending_push_asset_key_location_map.entry(id).or_default().insert(target_key.clone(), node_profiles);
+            for id in Kadex::find(my_node_profile.id(), &target_key.hash.value, &id_slices, 1) {
+                sending_push_asset_key_location_map
+                    .entry(id.to_vec())
+                    .or_default()
+                    .insert(target_key.clone(), node_profiles.clone());
+            }
+        }
+
+        // want を送ってきたノードにだけ、その key の所在を返す
+        let mut sending_give_asset_key_location_map: HashMap<Vec<u8>, HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>>> = HashMap::new();
+        for (id, wanted) in wanted_by_session.iter() {
+            for asset_key in wanted.iter() {
+                if let Some(node_profiles) = give_asset_key_locations.get(asset_key) {
+                    sending_give_asset_key_location_map
+                        .entry(id.clone())
+                        .or_default()
+                        .insert(asset_key.clone(), node_profiles.clone());
+                }
             }
         }
 
@@ -219,7 +204,7 @@ impl TaskComputer {
 
         let push_node_profiles = self.select_node_profiles(push_node_profiles.into_iter().collect(), DataMessage::MAX_PUSH_NODE_PROFILES);
 
-        for id in received_data_map.keys() {
+        for id in ids.iter() {
             let mut want_asset_keys = sending_want_asset_key_map.remove(id.as_slice()).unwrap_or_default();
             want_asset_keys.shuffle(&mut self.rng.lock());
             want_asset_keys.truncate(DataMessage::MAX_WANT_ASSET_KEYS);
@@ -252,25 +237,32 @@ impl TaskComputer {
         Ok(())
     }
 
+    /// Adds the locations that are not known yet, keeping the wire limit of one AssetKey.
+    fn extend_locations(known: &mut Vec<Arc<NodeProfile>>, locations: impl IntoIterator<Item = Arc<NodeProfile>>) {
+        for location in locations {
+            if known.len() >= DataMessage::MAX_LOCATION_NODE_PROFILES {
+                break;
+            }
+            if known.iter().any(|value| value.id() == location.id()) {
+                continue;
+            }
+            known.push(location);
+        }
+    }
+
     fn select_node_profiles(&self, mut profiles: Vec<Arc<NodeProfile>>, max_count: usize) -> Vec<Arc<NodeProfile>> {
         profiles.shuffle(&mut *self.rng.lock());
         profiles.truncate(max_count);
         profiles
     }
 
-    fn select_asset_key_locations(&self, locations: HashMap<Arc<AssetKey>, &HashSet<Arc<NodeProfile>>>, max_count: usize) -> HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>> {
-        let mut locations: Vec<_> = locations.into_iter().collect();
+    fn select_asset_key_locations(&self, locations: HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>>, max_count: usize) -> HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>> {
+        let mut locations: Vec<(Arc<AssetKey>, Vec<Arc<NodeProfile>>)> = locations.into_iter().collect();
         locations.shuffle(&mut self.rng.lock());
         locations.truncate(max_count);
         locations
             .into_iter()
-            .map(|(key, profiles)| (key, self.select_node_profiles(profiles.iter().cloned().collect(), DataMessage::MAX_LOCATION_NODE_PROFILES)))
+            .map(|(key, profiles)| (key, self.select_node_profiles(profiles, DataMessage::MAX_LOCATION_NODE_PROFILES)))
             .collect()
     }
-}
-
-struct ReceivedTempDataMessage {
-    pub want_asset_keys: Vec<Arc<AssetKey>>,
-    pub give_asset_key_locations: Vec<(Arc<AssetKey>, Vec<Arc<NodeProfile>>)>,
-    pub push_asset_key_locations: Vec<(Arc<AssetKey>, Vec<Arc<NodeProfile>>)>,
 }

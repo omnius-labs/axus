@@ -37,6 +37,8 @@ pub struct NodeFinder {
     session_receiver: Arc<TokioMutex<mpsc::Receiver<SessionStatus>>>,
     session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
     sessions: Arc<SessionRegistry>,
+    location_cache: Arc<Mutex<LocationCache>>,
+    want_cache: Arc<Mutex<WantCache>>,
     connected_node_profiles: Arc<Mutex<VolatileHashSet<NodeProfile>>>,
     connecting_ids: Arc<Mutex<HashSet<Vec<u8>>>>,
     get_want_asset_keys_fn: Arc<FnHub<Vec<AssetKey>, ()>>,
@@ -46,6 +48,7 @@ pub struct NodeFinder {
     task_acceptors: Arc<TokioMutex<Vec<Arc<TaskAccepter>>>>,
     task_computer: Arc<TokioMutex<Option<Arc<TaskComputer>>>>,
     task_communicator: Arc<TokioMutex<Option<Arc<TaskCommunicator>>>>,
+    task_lookup: Arc<TokioMutex<Option<Arc<TaskLookup>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +65,8 @@ pub struct NodeFinderIntervals {
     pub connect: std::time::Duration,
     pub compute: std::time::Duration,
     pub communicate: std::time::Duration,
+    /// How often the wanted AssetKeys are looked up again.
+    pub lookup: std::time::Duration,
 }
 
 impl NodeFinderIntervals {
@@ -76,6 +81,7 @@ impl Default for NodeFinderIntervals {
             connect: std::time::Duration::from_secs(20),
             compute: std::time::Duration::from_secs(60),
             communicate: std::time::Duration::from_secs(20),
+            lookup: std::time::Duration::from_secs(10),
         }
     }
 }
@@ -110,6 +116,8 @@ impl NodeFinder {
             session_receiver: Arc::new(TokioMutex::new(rx)),
             session_sender: Arc::new(TokioMutex::new(tx)),
             sessions: Arc::new(SessionRegistry::new()),
+            location_cache: Arc::new(Mutex::new(LocationCache::new(clock.clone()))),
+            want_cache: Arc::new(Mutex::new(WantCache::new())),
             connected_node_profiles: Arc::new(Mutex::new(VolatileHashSet::new(Duration::seconds(180), clock))),
             connecting_ids: Arc::new(Mutex::new(HashSet::new())),
             get_want_asset_keys_fn: Arc::new(FnHub::new()),
@@ -119,6 +127,7 @@ impl NodeFinder {
             task_acceptors: Arc::new(TokioMutex::new(Vec::new())),
             task_computer: Arc::new(TokioMutex::new(None)),
             task_communicator: Arc::new(TokioMutex::new(None)),
+            task_lookup: Arc::new(TokioMutex::new(None)),
         };
         v.start().await?;
 
@@ -175,7 +184,6 @@ impl NodeFinder {
                 self.sessions.clone(),
                 self.session_sender.clone(),
                 self.session_accepter.clone(),
-                self.clock.clone(),
                 self.sleeper.clone(),
                 self.option.clone(),
             )
@@ -188,6 +196,8 @@ impl NodeFinder {
             self.node_profile_repo.clone(),
             self.node_profile_fetcher.clone(),
             self.sessions.clone(),
+            self.location_cache.clone(),
+            self.want_cache.clone(),
             self.get_want_asset_keys_fn.caller(),
             self.get_push_asset_keys_fn.caller(),
             self.sleeper.clone(),
@@ -197,32 +207,45 @@ impl NodeFinder {
         .await?;
         self.task_computer.lock().await.replace(task);
 
-        let task = TaskCommunicator::new(
+        let lookup_registry = Arc::new(LookupRegistry::new());
+        let communicator = TaskCommunicator::new(
             self.my_node_profile.clone(),
             self.sessions.clone(),
+            self.session_connector.clone(),
             self.node_profile_repo.clone(),
+            self.location_cache.clone(),
+            lookup_registry.clone(),
             self.session_receiver.clone(),
             self.clock.clone(),
             self.sleeper.clone(),
             self.option.clone(),
         )
         .await?;
-        self.task_communicator.lock().await.replace(task);
+        self.task_communicator.lock().await.replace(communicator.clone());
+
+        let task = TaskLookup::new(
+            self.my_node_profile.clone(),
+            self.sessions.clone(),
+            communicator,
+            self.node_profile_repo.clone(),
+            self.location_cache.clone(),
+            self.want_cache.clone(),
+            lookup_registry,
+            self.clock.clone(),
+            self.sleeper.clone(),
+            self.rng.clone(),
+            self.option.clone(),
+        )
+        .await?;
+        self.task_lookup.lock().await.replace(task);
 
         Ok(())
     }
 
     pub async fn find_node_profile(&self, key: &AssetKey) -> Result<Vec<Arc<NodeProfile>>> {
-        let mut results: Vec<Arc<NodeProfile>> = Vec::new();
+        let locations = self.location_cache.lock().get(key).to_vec();
 
-        for (_, status) in self.sessions.statuses().await {
-            let received_data_message = status.received_data_message.lock();
-            if let Some(node_profiles) = received_data_message.give_asset_key_locations.get(key) {
-                results.extend(node_profiles.clone());
-            }
-        }
-
-        Ok(results)
+        Ok(locations)
     }
 }
 
@@ -245,6 +268,13 @@ impl Shutdown for NodeFinder {
             let mut task_computer = self.task_computer.lock().await;
             if let Some(task_computer) = task_computer.take() {
                 task_computer.shutdown().await;
+            }
+        }
+
+        {
+            let mut task_lookup = self.task_lookup.lock().await;
+            if let Some(task_lookup) = task_lookup.take() {
+                task_lookup.shutdown().await;
             }
         }
 

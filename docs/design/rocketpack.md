@@ -26,7 +26,7 @@ The implementation status and remaining work are consolidated in §6.
 
 Axus makes the rpf the source of truth for communication types and generates the Rust type declarations and `RocketPackStruct` implementations.
 Types that can be handled as generated types directly, such as AssetKey, FileRef, and MerkleLayer, use the generated types.
-When the Rust representation differs, such as DataMessage's `Arc` and `HashMap`, or NodeProfile's `OmniAddr` and ID cache, a hand-written domain type is kept separately.
+When the Rust representation differs, such as NodeMessage's `Arc` and `HashMap`, or NodeProfile's `OmniAddr` and ID cache, a hand-written domain type is kept separately.
 The domain types do not implement `RocketPackStruct`; the dedicated codec in the [protocol module](../../daemon/modules/engine/src/protocol) handles conversion to and from the generated types and encoding/decoding.
 The integer enums and nonce arrays of Session also keep a correspondence with generated types in the dedicated codec.
 The compiler's internal design belongs to `core-rs`; this document covers only the inputs, outputs, and migration conventions as seen from Axus.
@@ -69,9 +69,8 @@ A type's declaration and codec are not split between hand-written and generated;
 Because the rpf can express element-count and byte-length limits on a type, a migrated type can enforce the limits at decode time.
 Accept that the generated pack also checks the same limits at send time.
 
-The exception to byte-for-byte identity is DataMessage's multi-element map.
-Converting from `HashMap` to the generated type's `BTreeMap` changes the traversal order, but since the receiving side does not depend on map order, it is tolerated as wire-compatible.
-This part is verified by mutual decoding from old to new and new to old and by the identity of the map contents; single-element maps and the other communication types stay byte-fixed.
+A multi-element map is encoded from the generated type's `BTreeMap`, so its traversal order differs from the `HashMap` the earlier hand-written type used.
+The receiving side does not depend on map order, so this is tolerated; single-element maps and the other communication types stay byte-fixed.
 The accepted range of NodeProfile URIs is changed per the decision in §5.1.
 
 ## 5. Design decisions
@@ -131,12 +130,12 @@ To avoid duplicating every type while keeping Rust-side representations such as 
 **Rejected**
 Leaving a thin `RocketPackStruct` implementation on the domain types violates the policy of making the conversion between domain values and communication representations explicit at the send and receive sides, so it is not adopted.
 
-#### Accept DataMessage's map order changes and send-time checks
+#### Accept map order changes and send-time checks
 
 **Decision**
-DataMessage is also switched to the generated type. The order change of multi-element maps is tolerated as the exception in §4.
+NodeFinder's messages were also switched to the generated type. The order change of multi-element maps is tolerated as the exception in §4.
 The existing count limits are written into the schema, and it is accepted that the generated pack also rejects over-limit values at send time.
-DataMessage's byte-length limit and variable-length field limits follow the next decision.
+The byte-length limit and the variable-length field limits follow the next decision.
 
 **Rationale**
 To consolidate the source of truth for the codec into the rpf while keeping the receiving side's map interpretation and the existing count limits.
@@ -144,7 +143,7 @@ To consolidate the source of truth for the codec into the rpf while keeping the 
 #### Limit NodeFinder byte lengths at V1 input boundaries
 
 **Decision**
-NodeFinder's frame payload and the encoded result of a DataMessage are at most 256 KiB.
+NodeFinder's frame payload and the encoded result of a NodeMessage are at most 256 KiB.
 A public key is at most 256 bytes, one address's UTF-8 representation 512 bytes, and an AssetKey's kind 64 bytes.
 The per-field constraints and the overall size constant live in the rpf, and the overall size is enforced by the frame layer and the dedicated codec.
 The existing count limits are kept, but combinations within the count that exceed the byte length are rejected.
@@ -189,7 +188,7 @@ Truncating strings would change the meaning of the connect target, and deleting 
 The migration to generated types and dedicated codecs is complete.
 Regeneration reproducibility, compatibility with the old codec, and the URI boundaries and send/receive count limits are verified.
 
-NodeFinder's frame and DataMessage encoded results are limited to 256 KiB or less.
+NodeFinder's frame and NodeMessage encoded results are limited to 256 KiB or less.
 Field limits are checked by the generated pack/unpack, and the overall limit by the frame layer and the dedicated codec.
 The encoded size of a test fixture combining the maximum-count and maximum-length fields is 72,386,544 bytes, and this combination is rejected at send time.
 TaskComputer adopts candidates of each kind alternately after the count selection and fits them within the size budget.

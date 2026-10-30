@@ -39,7 +39,7 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 | Task | file-transfer | `TaskDecoder`, `TaskEncoder` | - | Component that controls encoding/decoding, cancellation before finalization, and retries of sweep and output placement; distinct from the FileExchanger connection task | - |
 | AssetKey | node-finder | `AssetKey` | - | Identifier whose location NodeFinder looks up | file reference |
 | bootstrap node | node-finder | `bootstrap_node_profiles` | `p2p.bootstrap_nodes` | NodeProfile given by configuration and added to the known nodes at startup | - |
-| location info | node-finder | `give_asset_key_locations` | - | Mapping of an AssetKey to the NodeProfiles of the nodes that advertise it | - |
+| location info | node-finder | `AnnounceLocations` | - | Mapping of an AssetKey to the NodeProfiles of the nodes that advertise it | - |
 | NodeFinder | node-finder | `NodeFinder` | - | Component that exchanges known nodes and looks up the location info of AssetKeys | - |
 | known node | node-finder | `NodeFinderRepo` | - | Set of NodeProfiles saved as connection candidates | - |
 | NodeProfile | node-finder | `NodeProfile` | `axus:node/` URI | Value binding a node's public key, reachable addresses, and update time with the node's own signature | - |

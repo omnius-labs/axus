@@ -114,7 +114,7 @@ impl AxusService {
 
         let node_profile_repo = Arc::new(NodeFinderRepo::new(node_ref_repo_dir.as_os_str().to_str().unwrap(), clock.clone()).await?);
         let bootstrap_node_profiles: Vec<&NodeProfile> = option.bootstrap_node_profiles.iter().collect();
-        node_profile_repo.insert_or_update_node_profiles(&bootstrap_node_profiles, 0).await?;
+        node_profile_repo.insert_or_update_node_profiles(&bootstrap_node_profiles).await?;
 
         let node_profile_fetcher = Arc::new(NodeProfileFetcherImpl::new(&[]));
         let node_finder_dir = state_dir.join("finder");
@@ -133,8 +133,8 @@ impl AxusService {
                 rng.clone(),
                 NodeFinderOption {
                     state_dir: node_finder_dir.as_os_str().to_str().unwrap().to_string(),
-                    max_connected_session_count: 3,
-                    max_accepted_session_count: 3,
+                    max_connected_session_count: 8,
+                    max_accepted_session_count: 8,
                     intervals: option.node_finder_intervals,
                 },
             )
@@ -472,6 +472,7 @@ mod tests {
                 compute: Duration::from_millis(100),
                 // 受理 worker の 1 秒の待機より、Hello の受信期限を長くする
                 communicate: Duration::from_millis(500),
+                lookup: Duration::from_millis(100),
             },
             ..Default::default()
         }

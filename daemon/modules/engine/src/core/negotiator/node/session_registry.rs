@@ -94,10 +94,8 @@ impl SessionRegistry {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use testresult::TestResult;
 
-    use omnius_core_base::clock::{Clock, ClockUtc};
     use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
     use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
@@ -198,10 +196,9 @@ mod tests {
             address: OmniAddr::create_tcp("127.0.0.1".parse()?, 1),
             handshake_type,
             cert: signer.sign(b"test")?,
-            stream: FramedStream::new(reader, writer),
+            stream: FramedStream::new(reader, writer, SessionType::NodeFinder.max_frame_length()),
         };
 
-        let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
-        Ok(Arc::new(SessionStatus::new(session, clock)))
+        Ok(Arc::new(SessionStatus::new(session)))
     }
 }

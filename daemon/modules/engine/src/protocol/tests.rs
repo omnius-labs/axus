@@ -1,9 +1,8 @@
 pub(crate) mod legacy;
 
-use std::{collections::HashMap, fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
 use chrono::DateTime;
-use enumflags2::BitFlags;
 use omnius_core_omnikit::{
     generated::{
         omni_hash::{OmniHash, OmniHashAlgorithmType},
@@ -67,26 +66,6 @@ fn key() -> AssetKey {
 #[cfg(test)]
 pub(crate) fn legacy_profile(value: &NodeProfile) -> legacy::NodeProfile {
     legacy::NodeProfile::new(value.public_key().to_vec(), value.addrs().to_vec(), value.updated_time(), value.signature().to_vec())
-}
-
-#[cfg(test)]
-pub(crate) fn legacy_data(value: &domain_node::DataMessage) -> legacy::DataMessage {
-    let convert_key = |key: &AssetKey| legacy::AssetKey {
-        typ: key.typ.clone(),
-        hash: key.hash.clone(),
-    };
-    let locations = |values: &HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>>| {
-        values
-            .iter()
-            .map(|(key, profiles)| (Arc::new(convert_key(key)), profiles.iter().map(|p| Arc::new(legacy_profile(p))).collect()))
-            .collect()
-    };
-    legacy::DataMessage {
-        push_node_profiles: value.push_node_profiles.iter().map(|p| Arc::new(legacy_profile(p))).collect(),
-        want_asset_keys: value.want_asset_keys.iter().map(|key| Arc::new(convert_key(key))).collect(),
-        give_asset_key_locations: locations(&value.give_asset_key_locations),
-        push_asset_key_locations: locations(&value.push_asset_key_locations),
-    }
 }
 
 #[cfg(test)]
@@ -191,19 +170,7 @@ fn all_codecs_preserve_required_unknown_null_duplicate_and_trailing_field_accept
         },
         |b| V1ResultMessageCodec::decode(b).is_ok(),
     )?;
-    acceptance_matrix(
-        &legacy::node::HelloMessage {
-            version: BitFlags::from(legacy::node::NodeFinderVersion::V1),
-        },
-        |b| super::node::HelloMessageCodec::decode(b).is_ok(),
-    )?;
-    acceptance_matrix(
-        &legacy::node::ProfileMessage {
-            node_profile: legacy_profile(&profile()),
-        },
-        |b| ProfileMessageCodec::decode(b).is_ok(),
-    )?;
-    acceptance_matrix(&legacy_data(&domain_node::DataMessage::default()), |b| DataMessageCodec::decode(b).is_ok())
+    acceptance_matrix(&axus::node::NodeMessage::Status, |b| NodeMessageCodec::decode(b).is_ok())
 }
 
 #[test]
@@ -279,87 +246,6 @@ fn all_result_values_have_fixed_bytes() -> TestResult {
         let value = domain_session::V1ResultMessage { result_type: new };
         compatible::<V1ResultMessageCodec, _>(&legacy::session::V1ResultMessage { result_type: old }, &value, true)?;
         assert_eq!(V1ResultMessageCodec::encode(&value)?, vec![0xa1, 0, new as u8]);
-    }
-    Ok(())
-}
-
-#[test]
-fn node_hello_fixed_bytes_and_unknown_bits() -> TestResult {
-    let old = legacy::node::HelloMessage {
-        version: BitFlags::from(legacy::node::NodeFinderVersion::V1),
-    };
-    let new = domain_node::HelloMessage {
-        version: BitFlags::from(domain_node::NodeFinderVersion::V1),
-    };
-    compatible::<super::node::HelloMessageCodec, _>(&old, &new, true)?;
-    assert_eq!(super::node::HelloMessageCodec::encode(&new)?, hex::decode("a10001")?);
-    for raw in [0, 1, 2, 3, u32::MAX] {
-        let bytes = axus::node::HelloMessage { version: raw }.export()?;
-        assert_eq!(
-            legacy::node::HelloMessage::import(&bytes)?.version.bits(),
-            super::node::HelloMessageCodec::decode(&bytes)?.version.bits()
-        );
-    }
-    Ok(())
-}
-
-#[test]
-fn profile_message_fixed_bytes() -> TestResult {
-    let value = profile();
-    let new = domain_node::ProfileMessage { node_profile: value.clone() };
-    compatible::<ProfileMessageCodec, _>(
-        &legacy::node::ProfileMessage {
-            node_profile: legacy_profile(&value),
-        },
-        &new,
-        true,
-    )?;
-    assert_eq!(ProfileMessageCodec::encode(&new)?, hex::decode(format!("a100{PROFILE_HEX}"))?);
-    Ok(())
-}
-
-#[test]
-fn data_message_empty_and_single_maps_have_fixed_bytes() -> TestResult {
-    let empty = domain_node::DataMessage::default();
-    compatible::<DataMessageCodec, _>(&legacy_data(&empty), &empty, true)?;
-    assert_eq!(DataMessageCodec::encode(&empty)?, hex::decode("a40080018002a003a0")?);
-    let key = Arc::new(key());
-    let profile = Arc::new(profile());
-    let locations = HashMap::from([(key.clone(), vec![profile.clone()])]);
-    let value = domain_node::DataMessage {
-        push_node_profiles: vec![profile],
-        want_asset_keys: vec![key],
-        give_asset_key_locations: locations.clone(),
-        push_asset_key_locations: locations,
-    };
-    compatible::<DataMessageCodec, _>(&legacy_data(&value), &value, true)?;
-    assert_eq!(
-        DataMessageCodec::encode(&value)?,
-        hex::decode(format!("a40081{PROFILE_HEX}0181{KEY_HEX}02a1{KEY_HEX}81{PROFILE_HEX}03a1{KEY_HEX}81{PROFILE_HEX}"))?
-    );
-    Ok(())
-}
-
-#[test]
-fn multiple_maps_are_mutually_decodable_with_equal_contents() -> TestResult {
-    for count in [2, 3, 32] {
-        let locations: HashMap<_, _> = (0..count)
-            .map(|index| {
-                let key = Arc::new(AssetKey {
-                    typ: format!("key-{index}"),
-                    hash: hash(),
-                });
-                (key, vec![Arc::new(profile())])
-            })
-            .collect();
-        let value = domain_node::DataMessage {
-            give_asset_key_locations: locations.clone(),
-            push_asset_key_locations: locations,
-            ..Default::default()
-        };
-        compatible::<DataMessageCodec, _>(&legacy_data(&value), &value, false)?;
-        let wire = DataMessageCodec::to_wire(&value);
-        assert_eq!(DataMessageCodec::from_wire(wire)?, value);
     }
     Ok(())
 }
@@ -454,40 +340,6 @@ fn bounded_fields_and_hash_variants_remain_compatible() -> TestResult {
 }
 
 #[test]
-fn duplicate_map_keys_keep_the_last_value() -> TestResult {
-    let first = legacy_profile(&profile());
-    let last_profile = NodeProfile::random_for_test(vec![]);
-    let last = legacy_profile(&last_profile);
-    let key = key();
-    for field in [2, 3] {
-        let mut bytes = Vec::new();
-        let mut encoder = RocketPackBytesEncoder::new(&mut bytes);
-        encoder.write_map(4)?;
-        encoder.write_u64(0)?;
-        encoder.write_array(0)?;
-        encoder.write_u64(1)?;
-        encoder.write_array(0)?;
-        for current in [2, 3] {
-            encoder.write_u64(current)?;
-            encoder.write_map(if field == current { 2 } else { 0 })?;
-            if field == current {
-                for profile in [&first, &last] {
-                    encoder.write_struct(&key)?;
-                    encoder.write_array(1)?;
-                    encoder.write_struct(profile)?;
-                }
-            }
-        }
-        let old = legacy::DataMessage::import(&bytes)?;
-        let new = DataMessageCodec::decode(&bytes)?;
-        assert_eq!(legacy_data(&new), old);
-        let map = if field == 2 { new.give_asset_key_locations } else { new.push_asset_key_locations };
-        assert_eq!(map[&key].as_slice()[0].public_key(), last_profile.public_key());
-    }
-    Ok(())
-}
-
-#[test]
 fn byte_length_limits_reject_old_oversized_fields() -> TestResult {
     for (addr, accepted) in [
         ("a".repeat(512), true),
@@ -520,28 +372,28 @@ fn byte_length_limits_reject_old_oversized_fields() -> TestResult {
 fn message_byte_boundary_is_checked_before_decoding() -> TestResult {
     let limit = axus::node::MAX_MESSAGE_LENGTH as usize;
     for size in [limit, limit + 1] {
-        // 上限ちょうどまで未知 field で埋めた、構造上は有効な V1 message。
-        let mut bytes = DataMessageCodec::encode(&domain_node::DataMessage::default())?;
-        bytes[0] = 0xa5;
+        // 上限ちょうどまで未知 field で埋めた、構造上は有効な message。
+        let mut bytes = NodeMessageCodec::encode(&domain_node::NodeMessage::Status)?;
+        bytes[0] = 0xa2;
         let padding = size - bytes.len() - 6;
         let mut encoder = RocketPackBytesEncoder::new(&mut bytes);
-        encoder.write_u64(4)?;
+        encoder.write_u64(9)?;
         encoder.write_bytes(&vec![0; padding])?;
         assert_eq!(bytes.len(), size);
         if size == limit {
-            assert_eq!(DataMessageCodec::decode(&bytes)?, domain_node::DataMessage::default());
+            assert_eq!(NodeMessageCodec::decode(&bytes)?, domain_node::NodeMessage::Status);
         } else {
             assert!(matches!(
-                DataMessageCodec::decode(&bytes),
-                Err(RocketPackDecoderError::LengthOutOfRange { context: "DataMessage", .. })
+                NodeMessageCodec::decode(&bytes),
+                Err(RocketPackDecoderError::LengthOutOfRange { context: "NodeMessage", .. })
             ));
         }
     }
     // 不正な構造でも、巨大入力は field を読む前にサイズ違反となる。
     let bytes = vec![0xff; limit + 1];
     assert!(matches!(
-        DataMessageCodec::decode(&bytes),
-        Err(RocketPackDecoderError::LengthOutOfRange { context: "DataMessage", .. })
+        NodeMessageCodec::decode(&bytes),
+        Err(RocketPackDecoderError::LengthOutOfRange { context: "NodeMessage", .. })
     ));
     Ok(())
 }

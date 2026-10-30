@@ -1,7 +1,6 @@
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
-use chrono::Utc;
 use parking_lot::Mutex;
 use rand::seq::IndexedRandom;
 use tokio::{
@@ -10,7 +9,9 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{debug, warn};
+
+use chrono::Utc;
 
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 
@@ -98,7 +99,12 @@ impl TaskConnector {
                         this.sleeper.sleep(this.option.intervals.connect).await;
                         let res = this.connect().await;
                         if let Err(e) = res {
-                            warn!(error_message = e.to_string(), "connect failed");
+                            // 候補が無いのは小さな network では常態なので、警告にしない
+                            if e.kind() == &ErrorKind::NotFound {
+                                debug!(error_message = e.to_string(), "no node profile to connect");
+                            } else {
+                                warn!(error_message = e.to_string(), "connect failed");
+                            }
                         }
                     } => {}
                     _ = this.token.cancelled() => break,
@@ -124,24 +130,28 @@ impl TaskConnector {
             v1.into_iter().chain(v2).chain([my_id]).collect()
         };
 
-        let node_profiles: Vec<NodeProfile> = self
+        let now = self.clock.now();
+        let known_nodes: Vec<KnownNode> = self
             .node_profile_repo
             .fetch_node_profiles()
             .await?
             .into_iter()
-            .filter(|n| !excluded_ids.contains(n.id()))
+            // 失敗した node は待ち時間が過ぎるまで候補にしない
+            .filter(|known| known.is_due(now))
+            .filter(|known| !excluded_ids.contains(known.profile.id()))
             .collect();
 
         // 同じ node の TaskConnector が同じ相手へ同時に接続しないよう、相手の選択と予約を 1 つの lock の中で行う
         let node_profile = {
             let mut connecting_ids = self.connecting_ids.lock();
-            let candidates: Vec<&NodeProfile> = node_profiles.iter().filter(|n| !connecting_ids.contains(n.id())).collect();
+            let candidates: Vec<&KnownNode> = known_nodes.iter().filter(|known| !connecting_ids.contains(known.profile.id())).collect();
             let node_profile = {
                 let mut rng = self.rng.lock();
-                (*candidates
+                candidates
                     .choose(&mut *rng)
-                    .ok_or_else(|| Error::new(ErrorKind::NotFound).with_message("node profile is not found"))?)
-                .clone()
+                    .ok_or_else(|| Error::new(ErrorKind::NotFound).with_message("node profile is not found"))?
+                    .profile
+                    .clone()
             };
             connecting_ids.insert(node_profile.id().to_vec());
             node_profile
@@ -160,7 +170,7 @@ impl TaskConnector {
                     warn!(address = addr.to_string(), "the peer's key does not match the node profile");
                     continue;
                 }
-                let status = SessionStatus::new(session, self.clock.clone());
+                let status = SessionStatus::new(session);
                 self.session_sender
                     .lock()
                     .await
@@ -173,6 +183,9 @@ impl TaskConnector {
                 return Ok(());
             }
         }
+
+        // 全 addr で繋がらなかったので、次に試すまでの待ち時間を伸ばす
+        self.node_profile_repo.mark_unreachable(node_profile.id()).await?;
 
         Ok(())
     }
@@ -311,7 +324,7 @@ mod tests {
         let my_node_profile = NodeProfile::sign(&my_signer, vec![], clock.now())?;
 
         let node_profile_repo = Arc::new(NodeFinderRepo::new(dir.path().to_str().unwrap(), clock.clone()).await?);
-        node_profile_repo.insert_or_update_node_profiles(&[&candidate], 0).await?;
+        node_profile_repo.insert_or_update_node_profiles(&[&candidate]).await?;
         let connected_node_profiles = Arc::new(Mutex::new(VolatileHashSet::new(chrono::Duration::seconds(180), clock.clone())));
         let (session_sender, mut session_receiver) = mpsc::channel(20);
         let task = TaskConnector::new(
@@ -322,7 +335,7 @@ mod tests {
             connected_node_profiles.clone(),
             Arc::new(Mutex::new(HashSet::new())),
             node_profile_repo,
-            clock,
+            clock.clone(),
             Arc::new(SleeperImpl),
             rng,
             NodeFinderOption {
@@ -355,7 +368,7 @@ mod tests {
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
 
         let node_profile_repo = Arc::new(NodeFinderRepo::new(state_dir, clock.clone()).await?);
-        node_profile_repo.insert_or_update_node_profiles(node_profiles, 0).await?;
+        node_profile_repo.insert_or_update_node_profiles(node_profiles).await?;
 
         let (session_sender, _session_receiver) = mpsc::channel(20);
 
@@ -367,7 +380,7 @@ mod tests {
             Arc::new(Mutex::new(VolatileHashSet::new(chrono::Duration::seconds(180), clock.clone()))),
             connecting_ids,
             node_profile_repo,
-            clock,
+            clock.clone(),
             Arc::new(SleeperImpl),
             rng,
             NodeFinderOption {

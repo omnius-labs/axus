@@ -1,75 +1,40 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
-use chrono::{Duration, Utc};
 use parking_lot::Mutex;
+use tokio::sync::{Mutex as TokioMutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use omnius_core_base::clock::Clock;
+use crate::{core::negotiator::node::NodeMessage, core::session::model::Session, model::NodeProfile};
 
-use crate::{
-    base::collections::{VolatileHashMap, VolatileHashSet},
-    core::session::model::Session,
-    model::{AssetKey, NodeProfile},
-};
+/// The work waiting for one Session's writer.
+///
+/// A task pushes a message when it has one, so a lookup answer does not wait for the communication cycle, and the writer sends a Status when the cycle passes with nothing to send.
+const OUTBOX_CAPACITY: usize = 64;
 
 #[derive(Clone)]
 pub struct SessionStatus {
     pub session: Session,
     pub node_profile: Arc<Mutex<Option<NodeProfile>>>,
-    pub sending_data_message: Arc<Mutex<SendingDataMessage>>,
-    pub received_data_message: Arc<Mutex<ReceivedDataMessage>>,
+    pub outbox: mpsc::Sender<NodeMessage>,
+    outbox_receiver: Arc<TokioMutex<Option<mpsc::Receiver<NodeMessage>>>>,
     /// 同じ相手との重複を解消するとき、この Session の送受信だけを止める
     pub cancellation_token: CancellationToken,
 }
 
 impl SessionStatus {
-    pub fn new(session: Session, clock: Arc<dyn Clock<Utc> + Send + Sync>) -> Self {
+    pub fn new(session: Session) -> Self {
+        let (outbox, outbox_receiver) = mpsc::channel(OUTBOX_CAPACITY);
         Self {
             session,
             node_profile: Arc::new(Mutex::new(None)),
-            sending_data_message: Arc::new(Mutex::new(SendingDataMessage::new())),
-            received_data_message: Arc::new(Mutex::new(ReceivedDataMessage::new(clock))),
+            outbox,
+            outbox_receiver: Arc::new(TokioMutex::new(Some(outbox_receiver))),
             cancellation_token: CancellationToken::new(),
         }
     }
-}
 
-pub struct SendingDataMessage {
-    pub push_node_profiles: Vec<Arc<NodeProfile>>,
-    pub want_asset_keys: Vec<Arc<AssetKey>>,
-    pub give_asset_key_locations: HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>>,
-    pub push_asset_key_locations: HashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>>,
-}
-
-impl SendingDataMessage {
-    pub fn new() -> Self {
-        Self {
-            push_node_profiles: vec![],
-            want_asset_keys: vec![],
-            give_asset_key_locations: HashMap::new(),
-            push_asset_key_locations: HashMap::new(),
-        }
-    }
-}
-
-impl Default for SendingDataMessage {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-pub struct ReceivedDataMessage {
-    pub want_asset_keys: VolatileHashSet<Arc<AssetKey>>,
-    pub give_asset_key_locations: VolatileHashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>>,
-    pub push_asset_key_locations: VolatileHashMap<Arc<AssetKey>, Vec<Arc<NodeProfile>>>,
-}
-
-impl ReceivedDataMessage {
-    pub fn new(clock: Arc<dyn Clock<Utc> + Send + Sync>) -> Self {
-        Self {
-            want_asset_keys: VolatileHashSet::new(Duration::minutes(30), clock.clone()),
-            give_asset_key_locations: VolatileHashMap::new(Duration::minutes(30), clock.clone()),
-            push_asset_key_locations: VolatileHashMap::new(Duration::minutes(30), clock),
-        }
+    /// The messages to write. The writer task takes this once.
+    pub async fn take_outbox_receiver(&self) -> Option<mpsc::Receiver<NodeMessage>> {
+        self.outbox_receiver.lock().await.take()
     }
 }

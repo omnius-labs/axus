@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use tokio::{
     select,
     sync::{Mutex as TokioMutex, mpsc},
@@ -9,7 +8,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use omnius_core_base::{clock::Clock, sleeper::Sleeper};
+use omnius_core_base::sleeper::Sleeper;
 
 use crate::{
     base::runtime::Shutdown,
@@ -27,7 +26,6 @@ pub struct TaskAccepter {
     sessions: Arc<SessionRegistry>,
     session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
     session_accepter: Arc<SessionAccepter>,
-    clock: Arc<dyn Clock<Utc> + Send + Sync>,
     sleeper: Arc<dyn Sleeper + Send + Sync>,
     option: NodeFinderOption,
     join_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
@@ -49,7 +47,6 @@ impl TaskAccepter {
         sessions: Arc<SessionRegistry>,
         session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
         session_accepter: Arc<SessionAccepter>,
-        clock: Arc<dyn Clock<Utc> + Send + Sync>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
         option: NodeFinderOption,
     ) -> Result<Arc<Self>> {
@@ -57,7 +54,6 @@ impl TaskAccepter {
             sessions,
             session_sender,
             session_accepter,
-            clock,
             sleeper,
             option,
             join_handle: Arc::new(TokioMutex::new(None)),
@@ -96,7 +92,7 @@ impl TaskAccepter {
         }
 
         let session = self.session_accepter.accept(&SessionType::NodeFinder).await?;
-        let status = SessionStatus::new(session, self.clock.clone());
+        let status = SessionStatus::new(session);
 
         self.session_sender
             .lock()

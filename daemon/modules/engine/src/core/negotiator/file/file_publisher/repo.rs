@@ -274,6 +274,26 @@ INSERT INTO committed_files (root_hash, file_name, block_size, attrs, created_at
         Ok(())
     }
 
+    /// Which of the hashes belong to a committed file, in one query.
+    pub async fn contains_committed_blocks(&self, root_hash: &OmniHash, block_hashes: &[OmniHash]) -> Result<Vec<bool>> {
+        if block_hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut builder: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new("SELECT block_hash FROM committed_blocks WHERE root_hash = ");
+        builder.push_bind(root_hash.to_string());
+        builder.push(" AND block_hash IN (");
+        {
+            let mut separated = builder.separated(", ");
+            for block_hash in block_hashes {
+                separated.push_bind(block_hash.to_string());
+            }
+            separated.push_unseparated(")");
+        }
+        let rows: Vec<(String,)> = builder.build_query_as().fetch_all(self.db.as_ref()).await?;
+        let found: HashSet<String> = rows.into_iter().map(|(hash,)| hash).collect();
+        Ok(block_hashes.iter().map(|block_hash| found.contains(&block_hash.to_string())).collect())
+    }
+
     pub async fn contains_committed_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<bool> {
         let (res,): (i64,) = sqlx::query_as(
             r#"

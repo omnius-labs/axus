@@ -50,6 +50,19 @@ impl ProvidedRootHashes {
     }
 }
 
+/// Releases the dial entry of a node pair when the dial ends, however it ends.
+pub struct DialGuard<'a> {
+    ctx: &'a ExchangeContext,
+    node_id: Vec<u8>,
+    root_hash: OmniHash,
+}
+
+impl Drop for DialGuard<'_> {
+    fn drop(&mut self) {
+        self.ctx.dialing.lock().remove(&(self.node_id.clone(), self.root_hash.clone()));
+    }
+}
+
 /// The state shared by the tasks and the Session workers of one FileExchanger.
 pub struct ExchangeContext {
     pub my_node_id: Vec<u8>,
@@ -125,13 +138,17 @@ impl ExchangeContext {
         self.next_session_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Marks the pair as being dialed, so that two connection tasks do not dial the same pair. Returns false when it already is.
-    pub fn begin_dial(&self, node_id: &[u8], root_hash: &OmniHash) -> bool {
-        self.dialing.lock().insert((node_id.to_vec(), root_hash.clone()))
-    }
-
-    pub fn end_dial(&self, node_id: &[u8], root_hash: &OmniHash) {
-        self.dialing.lock().remove(&(node_id.to_vec(), root_hash.clone()));
+    /// Marks the pair as being dialed, so that two connection tasks do not dial the same pair. The entry is
+    /// released when the guard is dropped, so a cancelled dial cannot leave the pair undialable.
+    pub fn begin_dial(&self, node_id: &[u8], root_hash: &OmniHash) -> Option<DialGuard<'_>> {
+        if !self.dialing.lock().insert((node_id.to_vec(), root_hash.clone())) {
+            return None;
+        }
+        Some(DialGuard {
+            ctx: self,
+            node_id: node_id.to_vec(),
+            root_hash: root_hash.clone(),
+        })
     }
 
     /// Whether a Session with the node for the root hash may be accepted or dialed.
@@ -222,19 +239,28 @@ impl ExchangeContext {
         self.file_subscriber.read_provided_block(root_hash, block_hash).await
     }
 
-    /// Whether this node provides the block, which answers a request without reading the block body.
-    pub async fn contains_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<bool> {
-        if self.file_publisher.contains_block(root_hash, block_hash).await? {
-            return Ok(true);
+    /// Which of the blocks this node provides. Each Store answers in one query, so a request of 64 hashes costs
+    /// two round trips instead of one per hash.
+    pub async fn contains_blocks(&self, root_hash: &OmniHash, block_hashes: &[OmniHash]) -> Result<Vec<bool>> {
+        let published = self.file_publisher.contains_blocks(root_hash, block_hashes).await?;
+        if published.iter().all(|found| *found) {
+            return Ok(published);
         }
-        self.file_subscriber.contains_provided_block(root_hash, block_hash).await
+        let subscribed = self.file_subscriber.contains_provided_blocks(root_hash, block_hashes).await?;
+        Ok(published.iter().zip(subscribed).map(|(published, subscribed)| *published || subscribed).collect())
     }
 
     /// Assigns blocks of the root hash to the Session. The blocks to fetch are read again from the Store
     /// when nothing is assignable and the previous reading is old.
     pub async fn assign_blocks(&self, root_hash: &OmniHash, session_id: u64, node_id: &[u8], limit: usize) -> Result<Vec<WantedBlock>> {
-        let assigned = self.assigner.lock().assign(root_hash, session_id, node_id, limit, Instant::now());
-        if !assigned.is_empty() {
+        let (assigned, wanted_empty) = {
+            let mut assigner = self.assigner.lock();
+            let assigned = assigner.assign(root_hash, session_id, node_id, limit, Instant::now());
+            (assigned, assigner.is_wanted_empty(root_hash))
+        };
+        // Nothing is assignable while the blocks are held by other Sessions or their ranks are throttled, and that
+        // is the normal steady state; reading the whole Store again then would cost the blocks and the peers.
+        if !assigned.is_empty() || !wanted_empty {
             return Ok(assigned);
         }
 
@@ -305,7 +331,7 @@ impl ExchangeContext {
     /// without excluding it, and a node with no record keeps the maximum.
     pub fn pending_limit(&self, node_id: &[u8]) -> usize {
         let now = Instant::now();
-        let score = self.fetch_score.lock();
+        let mut score = self.fetch_score.lock();
         let Some(throughput) = score.throughput(node_id, now) else {
             return MAX_PENDING_REQUESTS as usize;
         };
@@ -319,7 +345,7 @@ impl ExchangeContext {
     }
 
     pub fn record_sent(&self, node_id: &[u8], bytes: u64) {
-        self.choke.lock().record_sent(node_id, bytes);
+        self.choke.lock().record_sent(node_id, bytes, Instant::now());
     }
 
     /// Chooses the nodes to unchoke among the nodes that want our blocks.

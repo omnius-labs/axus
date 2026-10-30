@@ -101,11 +101,14 @@ impl TaskConnector {
 
         for node_profile in node_profiles {
             let node_id = node_profile.id();
-            if !self.is_candidate(node_id, root_hash) || !self.ctx.begin_dial(node_id, root_hash) {
+            if !self.is_candidate(node_id, root_hash) {
                 continue;
             }
+            let Some(dialing) = self.ctx.begin_dial(node_id, root_hash) else {
+                continue;
+            };
             let session = self.dial_node(root_hash, &node_profile).await;
-            self.ctx.end_dial(node_id, root_hash);
+            drop(dialing);
             if let Some(session) = session {
                 return Ok(Some(session));
             }
@@ -133,9 +136,12 @@ impl TaskConnector {
         unknown.shuffle(&mut *rng);
 
         let mut ordered: Vec<Arc<NodeProfile>> = known.into_iter().map(|(node_profile, _)| node_profile).collect();
+        // The positions are kept in one buffer, so inserting the nodes without a record costs no allocation each.
+        let mut positions: Vec<usize> = (0..=ordered.len()).collect();
         for node_profile in unknown {
-            let index = (0..=ordered.len()).collect::<Vec<_>>().choose(&mut *rng).copied().unwrap_or_default();
+            let index = positions.choose(&mut *rng).copied().unwrap_or_default();
             ordered.insert(index, node_profile);
+            positions.push(positions.len());
         }
         ordered
     }

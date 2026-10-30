@@ -61,6 +61,11 @@ impl BlockAssigner {
         root.wanted = wanted;
     }
 
+    /// Whether the root hash has no block left to fetch, which is when the Store is read again.
+    pub fn is_wanted_empty(&self, root_hash: &OmniHash) -> bool {
+        self.roots.get(root_hash).is_none_or(|root| root.wanted.is_empty())
+    }
+
     /// Forgets the root hashes that are not fetched anymore.
     pub fn retain_roots(&mut self, root_hashes: &HashSet<OmniHash>) {
         self.roots.retain(|root_hash, _| root_hashes.contains(root_hash));

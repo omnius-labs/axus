@@ -53,8 +53,8 @@ impl FilePublisher {
     pub async fn read_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<Option<Bytes>> {
         self.store.read_block(root_hash, block_hash).await
     }
-    pub async fn contains_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<bool> {
-        self.store.contains_block(root_hash, block_hash).await
+    pub async fn contains_blocks(&self, root_hash: &OmniHash, block_hashes: &[OmniHash]) -> Result<Vec<bool>> {
+        self.store.contains_blocks(root_hash, block_hashes).await
     }
     pub async fn get_published_root_hashes(&self) -> Result<Vec<OmniHash>> {
         self.store.get_published_root_hashes().await

@@ -168,9 +168,9 @@ impl FileSubscriberStore {
         self.blocks_storage.get_value(util::gen_block_path(root_hash, block_hash)).await
     }
 
-    /// Whether this node provides the block, which answers a request without reading the block body.
-    pub async fn contains_provided_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<bool> {
-        self.repo.contains_provided_block(root_hash, block_hash).await
+    /// Which of the blocks this node provides, in one query.
+    pub async fn contains_provided_blocks(&self, root_hash: &OmniHash, block_hashes: &[OmniHash]) -> Result<Vec<bool>> {
+        self.repo.contains_provided_blocks(root_hash, block_hashes).await
     }
 
     /// The blocks to fetch of the root hash, with the rank they belong to.

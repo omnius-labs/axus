@@ -36,10 +36,14 @@ struct PendingRequest {
     blocks: Vec<(OmniHash, u32)>,
     remaining: HashSet<OmniHash>,
     /// The hashes the presence bitmap said the peer holds, among the ones this Session still wants.
-    /// A hash here that never arrives is a block the peer promised and did not send.
+    /// A hash here that never arrives is a block the peer promised and did not send, unless the request
+    /// delivered another block, which shows the peer is sending rather than lying.
     claimed: HashSet<OmniHash>,
     /// When the request last received an answer, which decides when it is retracted for staying unanswered.
     last_answer_at: Instant,
+    /// Whether any block of this request arrived. A request that delivered a block is retracted without stopping
+    /// the rank, because the peer is sending, only slower than the retraction time.
+    delivered: bool,
     /// Whether the presence bitmap of this request was applied. It is not until then, because the bitmap
     /// answers the oldest request and has to be matched with it even when every block was retracted meanwhile.
     bitmap_applied: bool,
@@ -53,6 +57,7 @@ impl PendingRequest {
             remaining,
             claimed: HashSet::new(),
             last_answer_at: sent_at,
+            delivered: false,
             bitmap_applied: false,
         }
     }
@@ -74,6 +79,7 @@ impl PendingRequest {
             return None;
         }
         self.last_answer_at = now;
+        self.delivered = true;
         self.blocks.iter().find(|(hash, _)| hash == block_hash).map(|(_, rank)| *rank)
     }
 }
@@ -322,9 +328,10 @@ impl SessionWorker {
                     continue;
                 }
                 if unanswered {
-                    // A block the peer promised and did not send stops the rank for that node; a block of a request
-                    // without a bitmap yet is only given back, because the peer never said it holds it.
-                    if request.claimed.contains(hash) {
+                    // Only a request that delivered no block at all and whose bitmap claimed the block stops the
+                    // rank: a peer that sent part of the request is slow, not broken, and a request without a bitmap
+                    // is only given back because the peer never said it holds anything.
+                    if !request.delivered && request.claimed.contains(hash) {
                         undelivered.push((hash.clone(), *rank));
                     }
                     retracted.push(hash.clone());

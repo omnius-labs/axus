@@ -822,8 +822,9 @@ mod tests {
         let token = CancellationToken::new();
         let serving = peer.serve(Behavior::BlocksNeverArrive, token.clone());
         let intervals = FileExchangerIntervals {
-            // The blocks the peer claimed come back after a short wait, and its rank is not asked again in the test.
-            request_retract_after: Duration::from_millis(100),
+            // The peer that claims and never sends is throttled; the wait is long enough that a correct peer that
+            // writes a block to its Store is not retracted in the middle of a request.
+            request_retract_after: Duration::from_secs(1),
             request_timeout: Duration::from_secs(5),
             rank_absent_retry: Duration::from_secs(60),
             ..fast_intervals()

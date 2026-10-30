@@ -245,7 +245,7 @@ Incoming dials are still accepted during this period, since the peer may have ne
 
 A request can be sent only while the peer is not choking us.
 A request is a list of hashes of wanted blocks, and the peer answers it with one presence bitmap followed by a block for each hash it holds.
-The bitmap carries one bit per requested hash in the order of the request, so 64 hashes are answered with 8 bytes.
+The bitmap carries one bit per requested hash in the order of the request, as `ceil(n / 8)` bytes, so 64 hashes are answered with 8 bytes; the bits past the last hash are padding and are ignored.
 A block is carried one per frame with the content hash.
 
 ```mermaid
@@ -265,6 +265,9 @@ sequenceDiagram
 The bitmap precedes the blocks, so the requesting node knows the absent hashes before the first block arrives.
 Because a block is matched to its request by hash, the block order does not have to follow the order in the request.
 
+The bitmap answers the oldest request that has not been answered yet, and the answers keep the order of the requests.
+A missing or duplicated bitmap cannot be told apart from the next request's answer unless the number of bits differs, so it only costs work: the absent hashes of the wrong request are released and fetched again.
+
 There is no procedure for announcing held blocks in advance; what the peer holds is learned from the bitmap of each request.
 A node in the middle of fetching cannot distinguish a requested hash that does not belong to the file from one it has not fetched yet.
 In both cases the bit is absent, and requesting a hash that does not belong to the file is not treated as a violation.
@@ -274,10 +277,13 @@ If, while requests await responses, neither a presence bitmap nor a block arrive
 Measuring the deadline from the last response instead of per request keeps a Session receiving multiple blocks in sequence on a slow connection open.
 Because a choke removes all awaiting responses at that point, the request deadline does not advance while choked.
 
-A node retracts blocks it no longer needs with a cancel message carrying their hashes, and the peer removes them from the requests it has not answered.
-The peer still answers each request with its presence bitmap, so the answers keep the order of the requests; the requesting node ignores the bits of the retracted hashes.
+A node retracts blocks it no longer needs with a cancel message carrying their hashes, and the peer removes them from every request it has not answered yet, including a later request that asked for the same hash again.
+The peer still answers each request with its presence bitmap, so the answers keep the order of the requests.
+The bitmap is read against the hashes the requesting node still wants: the bits of the hashes it retracted meanwhile are ignored, because nobody asks for those blocks anymore.
 A presence bitmap that answers no request, because the requesting node already dropped that request, is ignored rather than treated as a violation.
-A block sent before the peer processed the cancel reaches the requesting node after the retraction; it is dropped without being treated as a violation.
+A block sent before the peer processed the cancel reaches the requesting node after the retraction; it is dropped without being treated as a violation, however many copies arrive until the grace ends.
+
+The wire of §5.4 and §5.5 changed in place: the version bit stays the same and no compatibility with the earlier messages is kept, because no deployment of the old wire exists.
 
 A node that conveyed a choke discards unresponded requests received from that peer and ignores requests arriving while choked.
 Because requests can cross a choke notification, these requests are not treated as violations.
@@ -297,21 +303,24 @@ An assigned block is returned to unassigned on an absent bit of the presence bit
 Because the bitmap names the absent hashes of a whole request at once, one request releases every block that peer lacks.
 A node that answered a request with no present bit of a rank is not asked for that rank again for a period.
 An answer with some present bits does not throttle the rank, because the peer holds blocks of it; the absent hashes are released and the other Sessions take them first, so the waste stops at the blocks of one rank.
+A node that answered present and then did not send the block within the retraction time is treated the same way: that rank is not asked of it for a period, because asking again only repeats the wait.
 Recording the absence per rank keeps one entry per node, root hash, and rank, whereas remembering each absent hash would grow with the blocks and the peers.
 
 A request whose last answer is older than the soft deadline is retracted rather than closed.
 The peer keeps the Session and its place in the dialing order, and the blocks are reassigned without waiting for the request deadline (§5.4).
+A request whose blocks were all retracted before its presence bitmap arrived keeps a shell until the bitmap answers it, so the answers stay matched with the requests; the shell does not count against the limit by throughput, but it does count against the limit of requests awaiting responses of §5.8, because the peer still holds it in its queue.
 
 #### Tail duplication
 
 One block is requested from one Session at a time, so when few blocks remain, the slowest peer holding one of them decides the completion time.
-The tail starts when the un-fetched blocks of a root hash fall to a fixed count, or when they fall to a larger count and no block has been stored for a period.
+The tail is judged on the rank being fetched: it starts when that rank's un-fetched blocks fall to a fixed count, or when they fall to a larger count and no block has been stored for a period.
+The period is measured from when the assignment of the root hash was created, or from the last block stored.
 In the tail, the same block is assigned to two Sessions, and the first block stored completes it; the other Sessions are told with a cancel message.
 Two copies bound the waste to one block length per remaining block, and the cancel keeps a late copy from being received.
 
 ### 5.6 Selecting send targets by transfer volume
 
-FileExchanger records, per node ID, the received bytes of blocks whose content hash matched and the sent bytes, in memory.
+FileExchanger records, per node ID, the received bytes of the blocks it stored and the sent bytes, in memory.
 The records are summed across Sessions and root hashes, and the ranking uses only the received bytes of the recent period.
 This prevents a node that provided many blocks in the past from staying prioritized after it stops providing.
 
@@ -330,6 +339,7 @@ FileExchanger therefore records, per node ID, the throughput of the blocks it re
 A node with no record is tried at a random position, so a new peer is neither preferred nor avoided.
 
 The throughput orders the dialing candidates of a root hash, and sets how many requests one Session may keep awaiting responses, between the minimum and the maximum of §5.8.
+Only a block that was stored counts, because an unneeded copy is dropped before its content is checked; the copy that wins the tail therefore also earns the record. A node that sent a copy the Session no longer needed is not credited for it.
 A retracted request needs no separate penalty: the record counts only the blocks received in the period, so a peer that answers nothing adds nothing while the period moves on.
 A slow node still receives blocks and can rise again after the period, because a slow sample is not a violation and is not excluded.
 
@@ -345,7 +355,7 @@ The following acts are violations, and FileExchanger closes the Session and excl
 
 - Sending a block whose content hash does not match
 - Sending a block that was not requested and was not retracted by a cancel
-- Sending a presence bitmap whose number of bits differs from the number of hashes in the request
+- Sending a presence bitmap whose number of bytes differs from the size that answers the request
 - Exceeding the limit on the number of hashes in one request or the number of requests awaiting responses
 - Sending a message over the frame limit
 
@@ -362,7 +372,7 @@ The following values must agree with the peer and are protocol constants.
 | --- | --- |
 | Maximum block length | 1 MiB |
 | Number of hashes in one request | 64 or fewer |
-| Presence bitmap of one request | 1 bit per requested hash |
+| Presence bitmap of one request | 1 bit per requested hash, as `ceil(n / 8)` bytes |
 | Requests awaiting responses on one Session | 16 or fewer |
 | Status message cycle and receive deadline | 10 s, 30 s |
 | Request deadline | 60 s |
@@ -578,7 +588,8 @@ Handling multiple root hashes in one Session per node pair keeps the handshake a
 **Decision**
 Held blocks are not announced in advance.
 The answer to a request starts with one presence bitmap that has a bit per requested hash, followed by a block for each present hash.
-An absent bit releases the block at once, and an answer with no present bit of a rank stops the node from being asked for that rank again for a period.
+An absent bit releases the block at once, and an answer with no present bit among the hashes still wanted stops the node from being asked for that rank again for a period.
+A bit claimed present whose block does not arrive within the retraction time stops the rank the same way, so a peer that answers bitmaps without sending the blocks does not keep a fetch alive for ever.
 
 **Rationale**
 No per-peer hold state is needed, and the correspondence between a requested hash and the received block is still the check.
@@ -596,7 +607,7 @@ For a peer holding all 1M blocks of a 1 TiB file, a filter at 1% false positives
 #### Assign one block to two Sessions in the tail
 
 **Decision**
-A block is assigned to one Session at a time, except when the un-fetched blocks of a root hash fall to a fixed count, or when they fall to a larger count and no block has been stored for a period.
+A block is assigned to one Session at a time, except when the un-fetched blocks of the rank being fetched fall to a fixed count, or when they fall to a larger count and no block has been stored for a period.
 Then the same block is assigned to two Sessions, and the first block stored completes it.
 
 **Rationale**
@@ -630,7 +641,8 @@ A request whose last answer is older than the soft deadline is retracted and its
 The Session is closed only when no answer arrives within the request deadline.
 
 **Rationale**
-Measuring only from the last response lets a peer that answers one block a minute keep its assignments and its connection slot indefinitely.
+Measuring only from the last response lets a peer that answers one block a minute keep its assignments and its connection slot indefinitely, and a peer that answers only presence bitmaps would keep the Session open without ever sending a block.
+Retraction plus the rank throttle of §5.5 removes those blocks from the peer, and the request deadline still closes a peer that stops answering altogether.
 Closing the Session instead costs a handshake and a new dial, cannot be distinguished from a flaky connection, and also triggers the exclusion.
 The throughput record lowers the number of requests such a peer is given, so the retraction only has to recover the block it is holding.
 
@@ -648,6 +660,7 @@ A node with no record is tried at a random position.
 The location info says who advertises a root hash, not who serves it fast, and the connection slots per root hash are limited.
 The dialing order is where a slow node costs the most, because it takes one of the slots.
 The pending count bounds a slow node's share without excluding it, and the period lets a node that became fast rise again.
+The record counts only the blocks that were stored, so the copy that loses a tail race is not credited.
 
 **Rejected**
 Keeping the random order and relying only on reassignment slows every fetch that dials slow peers first.

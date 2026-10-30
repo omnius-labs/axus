@@ -5,10 +5,25 @@ use tokio::sync::Notify;
 
 use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
-/// The requests received from a peer that are not answered yet, answered one block at a time.
+/// The next message that answers a request, in the order the requests arrived.
+/// The presence bitmap of a request always precedes the blocks of that request, so the requesting node
+/// can apply the bitmap of a request before any of its blocks arrives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServeItem {
+    Presence(Vec<u8>),
+    Block(OmniHash),
+}
+
+/// A request received from a peer that is not answered yet.
+struct PendingAnswer {
+    bits: Option<Vec<u8>>,
+    block_hashes: VecDeque<OmniHash>,
+}
+
+/// The requests received from a peer that are not answered yet, answered one message at a time.
 pub struct ServeQueue {
     max_requests: usize,
-    requests: Mutex<VecDeque<VecDeque<OmniHash>>>,
+    requests: Mutex<VecDeque<PendingAnswer>>,
     notify: Notify,
 }
 
@@ -21,14 +36,23 @@ impl ServeQueue {
         }
     }
 
-    /// Adds a request. Returns false, without adding, when the peer already has the maximum number of requests awaiting responses.
-    pub fn push(&self, block_hashes: Vec<OmniHash>) -> bool {
+    /// The requests awaiting responses.
+    pub fn len(&self) -> usize {
+        self.requests.lock().len()
+    }
+
+    /// Adds a request with the bitmap that answers it. Returns false, without adding, when the peer already has
+    /// the maximum number of requests awaiting responses.
+    pub fn push(&self, bits: Vec<u8>, block_hashes: Vec<OmniHash>) -> bool {
         {
             let mut requests = self.requests.lock();
             if requests.len() >= self.max_requests {
                 return false;
             }
-            requests.push_back(block_hashes.into());
+            requests.push_back(PendingAnswer {
+                bits: Some(bits),
+                block_hashes: block_hashes.into(),
+            });
         }
         self.notify.notify_one();
         true
@@ -39,28 +63,57 @@ impl ServeQueue {
         self.requests.lock().clear();
     }
 
-    /// Waits for the next hash to answer, in the order the requests arrived.
-    pub async fn next(&self) -> OmniHash {
+    /// Removes the hashes a cancel retracted, and drops a request that is left with nothing to answer.
+    /// The bitmap of a request is owed even when every block of it was retracted, because the requesting node
+    /// matches each answer with the requests it sent in order.
+    pub fn cancel(&self, block_hashes: &[OmniHash]) {
+        let mut requests = self.requests.lock();
+        let mut kept = VecDeque::with_capacity(requests.len());
+        for mut request in requests.drain(..) {
+            let queued = request.block_hashes.len();
+            request.block_hashes.retain(|hash| !block_hashes.contains(hash));
+            let emptied = queued > 0 && request.block_hashes.is_empty();
+            if !emptied || request.bits.is_some() {
+                kept.push_back(request);
+            }
+        }
+        *requests = kept;
+    }
+
+    /// Waits for the next message to answer, in the order the requests arrived.
+    pub async fn next(&self) -> ServeItem {
         loop {
-            if let Some(block_hash) = self.pop() {
-                return block_hash;
+            if let Some(item) = self.pop() {
+                return item;
             }
             self.notify.notified().await;
         }
     }
 
-    fn pop(&self) -> Option<OmniHash> {
+    fn pop(&self) -> Option<ServeItem> {
         let mut requests = self.requests.lock();
-        while let Some(request) = requests.front_mut() {
-            if let Some(block_hash) = request.pop_front() {
-                if request.is_empty() {
+        loop {
+            let (bits, block_hash, finished) = {
+                let request = requests.front_mut()?;
+                if request.bits.is_some() {
+                    (request.bits.take(), None, false)
+                } else if let Some(block_hash) = request.block_hashes.pop_front() {
+                    (None, Some(block_hash), request.block_hashes.is_empty())
+                } else {
+                    (None, None, true)
+                }
+            };
+            if let Some(bits) = bits {
+                return Some(ServeItem::Presence(bits));
+            }
+            if let Some(block_hash) = block_hash {
+                if finished {
                     requests.pop_front();
                 }
-                return Some(block_hash);
+                return Some(ServeItem::Block(block_hash));
             }
             requests.pop_front();
         }
-        None
     }
 }
 
@@ -70,25 +123,51 @@ mod tests {
 
     use omnius_core_omnikit::generated::omni_hash::{OmniHash, OmniHashAlgorithmType};
 
-    use super::ServeQueue;
+    use super::{ServeItem, ServeQueue};
 
     fn hash(value: u8) -> OmniHash {
         OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, [value])
     }
 
     #[tokio::test]
-    async fn hashes_are_answered_in_request_order_and_a_full_queue_refuses_requests() {
+    async fn the_bitmap_of_a_request_precedes_its_blocks_and_requests_are_answered_in_order() {
         let queue = ServeQueue::new(2);
-        assert!(queue.push(vec![hash(1), hash(2)]));
-        assert!(queue.push(vec![hash(3)]));
-        assert!(!queue.push(vec![hash(4)]));
+        assert!(queue.push(vec![0b0000_0010], vec![hash(1)]));
+        assert!(queue.push(vec![0b0000_0001], vec![hash(3)]));
+        assert!(!queue.push(vec![0b0000_0001], vec![hash(4)]));
 
-        assert_eq!(queue.next().await, hash(1));
-        assert_eq!(queue.next().await, hash(2));
+        assert_eq!(queue.next().await, ServeItem::Presence(vec![0b0000_0010]));
+        assert_eq!(queue.next().await, ServeItem::Block(hash(1)));
         // The first request is answered completely, so a slot is free.
-        assert!(queue.push(vec![hash(5)]));
-        assert_eq!(queue.next().await, hash(3));
-        assert_eq!(queue.next().await, hash(5));
+        assert!(queue.push(vec![0b0000_0001], vec![hash(5)]));
+        assert_eq!(queue.next().await, ServeItem::Presence(vec![0b0000_0001]));
+        assert_eq!(queue.next().await, ServeItem::Block(hash(3)));
+        assert_eq!(queue.next().await, ServeItem::Presence(vec![0b0000_0001]));
+        assert_eq!(queue.next().await, ServeItem::Block(hash(5)));
+    }
+
+    #[tokio::test]
+    async fn a_request_with_no_block_still_answers_with_its_bitmap() {
+        let queue = ServeQueue::new(2);
+        assert!(queue.push(vec![0b0000_0000], Vec::new()));
+
+        assert_eq!(queue.next().await, ServeItem::Presence(vec![0b0000_0000]));
+        assert!(tokio::time::timeout(Duration::from_millis(50), queue.next()).await.is_err());
+        assert_eq!(queue.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_cancel_removes_the_hash_from_the_request_it_was_queued_with() {
+        let queue = ServeQueue::new(2);
+        assert!(queue.push(vec![0b0000_0011], vec![hash(1), hash(2)]));
+        assert!(queue.push(vec![0b0000_0001], vec![hash(3)]));
+        queue.cancel(&[hash(1), hash(3)]);
+
+        assert_eq!(queue.next().await, ServeItem::Presence(vec![0b0000_0011]));
+        assert_eq!(queue.next().await, ServeItem::Block(hash(2)));
+        // The bitmap of the second request is still owed even though its only block was retracted.
+        assert_eq!(queue.next().await, ServeItem::Presence(vec![0b0000_0001]));
+        assert!(tokio::time::timeout(Duration::from_millis(50), queue.next()).await.is_err());
     }
 
     #[tokio::test]
@@ -96,11 +175,12 @@ mod tests {
         let queue = ServeQueue::new(4);
         assert!(tokio::time::timeout(Duration::from_millis(50), queue.next()).await.is_err());
 
-        queue.push(vec![hash(1), hash(2)]);
+        queue.push(vec![0b0000_0011], vec![hash(1), hash(2)]);
         queue.clear();
         assert!(tokio::time::timeout(Duration::from_millis(50), queue.next()).await.is_err());
 
-        queue.push(vec![hash(3)]);
-        assert_eq!(queue.next().await, hash(3));
+        queue.push(vec![0b0000_0001], vec![hash(3)]);
+        assert_eq!(queue.next().await, ServeItem::Presence(vec![0b0000_0001]));
+        assert_eq!(queue.next().await, ServeItem::Block(hash(3)));
     }
 }

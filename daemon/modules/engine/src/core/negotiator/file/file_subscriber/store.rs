@@ -168,8 +168,14 @@ impl FileSubscriberStore {
         self.blocks_storage.get_value(util::gen_block_path(root_hash, block_hash)).await
     }
 
-    pub async fn get_missing_block_hashes(&self, root_hash: &OmniHash) -> Result<Vec<OmniHash>> {
-        self.repo.find_missing_block_hashes(root_hash).await
+    /// Which of the blocks this node provides, in one query.
+    pub async fn contains_provided_blocks(&self, root_hash: &OmniHash, block_hashes: &[OmniHash]) -> Result<Vec<bool>> {
+        self.repo.contains_provided_blocks(root_hash, block_hashes).await
+    }
+
+    /// The blocks to fetch of the root hash, with the rank they belong to.
+    pub async fn get_missing_blocks(&self, root_hash: &OmniHash) -> Result<Vec<(OmniHash, u32)>> {
+        self.repo.find_missing_blocks(root_hash).await
     }
 
     pub async fn cancel(&self, id: &str) -> Result<()> {

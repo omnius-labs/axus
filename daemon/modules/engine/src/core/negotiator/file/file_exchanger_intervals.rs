@@ -8,14 +8,32 @@ pub struct FileExchangerIntervals {
     pub status_cycle: Duration,
     /// How long a request may wait for a block or a do-not-have response since the last response.
     pub request_timeout: Duration,
+    /// How long a request may wait for its answer before it is retracted, while the Session keeps being open.
+    pub request_retract_after: Duration,
     /// How long a Session neither side wants is kept.
     pub unwanted_close: Duration,
     /// How long a pair closed because neither side wanted is kept out of the dialing candidates.
     pub unwanted_cooldown: Duration,
     /// How long a pair rejected by the peer is kept out of the dialing candidates.
     pub reject_retry: Duration,
-    /// How long a node that answered do-not-have is not asked for the same block.
-    pub not_have_retry: Duration,
+    /// How long a node that answered a rank with no present bit is not asked for that rank.
+    pub rank_absent_retry: Duration,
+    /// How long a hash retracted by a cancel is still accepted instead of being a violation. It covers a block
+    /// that the peer had already started to send, so it is as long as a request may wait.
+    pub cancel_grace: Duration,
+    /// The un-fetched blocks of a root hash below which the same block is assigned to two Sessions.
+    pub tail_remaining: usize,
+    /// The un-fetched blocks and the idle time that also start the two copies of a block.
+    pub tail_stall_remaining: usize,
+    pub tail_stall: Duration,
+    /// The Sessions one block is assigned to in the tail.
+    pub tail_copies: usize,
+    /// The period of received bytes that measures the fetch throughput of a node.
+    pub fetch_window: Duration,
+    /// The blocks a node must have provided before its fetch throughput counts.
+    pub fetch_min_blocks: usize,
+    /// The requests awaiting responses on the slowest Session.
+    pub pending_min: usize,
     /// The period of the received bytes that ranks the nodes to unchoke.
     pub ranking_window: Duration,
     /// How often the node unchoked at random is chosen again.
@@ -44,10 +62,19 @@ impl Default for FileExchangerIntervals {
         Self {
             status_cycle: Duration::from_secs(10),
             request_timeout: Duration::from_secs(60),
+            request_retract_after: Duration::from_secs(10),
             unwanted_close: Duration::from_secs(60),
             unwanted_cooldown: Duration::from_secs(10 * 60),
             reject_retry: Duration::from_secs(30),
-            not_have_retry: Duration::from_secs(30),
+            rank_absent_retry: Duration::from_secs(30),
+            cancel_grace: Duration::from_secs(60),
+            tail_remaining: 32,
+            tail_stall_remaining: 256,
+            tail_stall: Duration::from_secs(15),
+            tail_copies: 2,
+            fetch_window: Duration::from_secs(10 * 60),
+            fetch_min_blocks: 4,
+            pending_min: 4,
             ranking_window: Duration::from_secs(10 * 60),
             unchoke_rotation: Duration::from_secs(30),
             violation_exclusion: Duration::from_secs(30 * 60),

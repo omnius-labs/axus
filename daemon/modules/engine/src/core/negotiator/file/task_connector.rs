@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rand::seq::SliceRandom as _;
+use rand::seq::{IndexedRandom as _, SliceRandom as _};
 use tokio::{select, sync::Mutex as TokioMutex, task::JoinHandle};
 use tracing::warn;
 
@@ -96,22 +96,54 @@ impl TaskConnector {
     }
 
     async fn dial(&self, root_hash: &OmniHash) -> Result<Option<Arc<ExchangeSession>>> {
-        let mut node_profiles = self.ctx.location_finder.find(&AssetKey::file(root_hash.clone())).await?;
-        node_profiles.shuffle(&mut *self.rng.lock());
+        let node_profiles = self.ctx.location_finder.find(&AssetKey::file(root_hash.clone())).await?;
+        let node_profiles = self.order_by_throughput(node_profiles);
 
         for node_profile in node_profiles {
             let node_id = node_profile.id();
-            if !self.is_candidate(node_id, root_hash) || !self.ctx.begin_dial(node_id, root_hash) {
+            if !self.is_candidate(node_id, root_hash) {
                 continue;
             }
+            let Some(dialing) = self.ctx.begin_dial(node_id, root_hash) else {
+                continue;
+            };
             let session = self.dial_node(root_hash, &node_profile).await;
-            self.ctx.end_dial(node_id, root_hash);
+            drop(dialing);
             if let Some(session) = session {
                 return Ok(Some(session));
             }
         }
 
         Ok(None)
+    }
+
+    /// The nodes that provided blocks fastest first. The throughput is read once per node, so the order is a
+    /// total order even while another Session records a block. A node without a record is inserted at a random
+    /// position, so a new peer is neither preferred nor avoided.
+    fn order_by_throughput(&self, node_profiles: Vec<Arc<NodeProfile>>) -> Vec<Arc<NodeProfile>> {
+        let mut rng = self.rng.lock();
+        let mut known: Vec<(Arc<NodeProfile>, f64)> = Vec::with_capacity(node_profiles.len());
+        let mut unknown: Vec<Arc<NodeProfile>> = Vec::new();
+        for node_profile in node_profiles {
+            match self.ctx.fetch_throughput(node_profile.id()) {
+                Some(throughput) => known.push((node_profile, throughput)),
+                None => unknown.push(node_profile),
+            }
+        }
+        known.shuffle(&mut *rng);
+        // The sort is stable, so nodes with equal throughput keep the shuffled order.
+        known.sort_by(|(_, left), (_, right)| right.total_cmp(left));
+        unknown.shuffle(&mut *rng);
+
+        let mut ordered: Vec<Arc<NodeProfile>> = known.into_iter().map(|(node_profile, _)| node_profile).collect();
+        // The positions are kept in one buffer, so inserting the nodes without a record costs no allocation each.
+        let mut positions: Vec<usize> = (0..=ordered.len()).collect();
+        for node_profile in unknown {
+            let index = positions.choose(&mut *rng).copied().unwrap_or_default();
+            ordered.insert(index, node_profile);
+            positions.push(positions.len());
+        }
+        ordered
     }
 
     fn is_candidate(&self, node_id: &[u8], root_hash: &OmniHash) -> bool {
@@ -140,7 +172,9 @@ impl TaskConnector {
                     self.ctx.set_aside_pair(node_profile.id(), root_hash, self.ctx.intervals.reject_retry);
                     return None;
                 }
-                Err(error) => warn!(error_message = error.to_string(), "file exchange handshake failed"),
+                Err(error) => {
+                    warn!(error_message = error.to_string(), "file exchange handshake failed")
+                }
             }
         }
 

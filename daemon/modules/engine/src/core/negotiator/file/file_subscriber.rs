@@ -70,8 +70,13 @@ impl FileSubscriber {
     pub async fn read_provided_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<Option<Vec<u8>>> {
         self.store.read_provided_block(root_hash, block_hash).await
     }
-    pub async fn get_missing_block_hashes(&self, root_hash: &OmniHash) -> Result<Vec<OmniHash>> {
-        self.store.get_missing_block_hashes(root_hash).await
+    pub async fn contains_provided_blocks(&self, root_hash: &OmniHash, block_hashes: &[OmniHash]) -> Result<Vec<bool>> {
+        self.store.contains_provided_blocks(root_hash, block_hashes).await
+    }
+
+    /// The blocks to fetch of the root hash, with the rank they belong to.
+    pub async fn get_missing_blocks(&self, root_hash: &OmniHash) -> Result<Vec<(OmniHash, u32)>> {
+        self.store.get_missing_blocks(root_hash).await
     }
     pub async fn get_subscribed_root_hashes(&self) -> Result<Vec<OmniHash>> {
         self.store.get_subscribed_root_hashes().await

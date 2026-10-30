@@ -90,6 +90,31 @@ CREATE INDEX IF NOT EXISTS index_root_hash_rank_index_for_blocks ON blocks (root
         rows.into_iter().map(|(hash,)| OmniHash::from_str(&hash).map_err(Into::into)).collect()
     }
 
+    /// Which of the hashes this node provides, in one query. The rows and the subscriptions are checked the same
+    /// way as `contains_provided_block`, so that answering a request and reading a block agree.
+    pub async fn contains_provided_blocks(&self, root_hash: &OmniHash, block_hashes: &[OmniHash]) -> Result<Vec<bool>> {
+        if block_hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut builder: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new("SELECT DISTINCT blocks.block_hash FROM blocks WHERE blocks.root_hash = ");
+        builder.push_bind(root_hash.to_string());
+        builder.push(
+            r#" AND blocks.downloaded = 1
+        AND EXISTS (SELECT 1 FROM files WHERE files.root_hash = blocks.root_hash AND files.status IN ('Downloading', 'Decoding', 'Finalizing', 'Completed'))
+        AND blocks.block_hash IN ("#,
+        );
+        {
+            let mut separated = builder.separated(", ");
+            for block_hash in block_hashes {
+                separated.push_bind(block_hash.to_string());
+            }
+            separated.push_unseparated(")");
+        }
+        let rows: Vec<(String,)> = builder.build_query_as().fetch_all(self.db.as_ref()).await?;
+        let found: std::collections::HashSet<String> = rows.into_iter().map(|(hash,)| hash).collect();
+        Ok(block_hashes.iter().map(|block_hash| found.contains(&block_hash.to_string())).collect())
+    }
+
     pub async fn contains_provided_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) -> Result<bool> {
         let found: Option<i64> = sqlx::query_scalar(
             r#"
@@ -107,11 +132,11 @@ SELECT 1
         Ok(found.is_some())
     }
 
-    /// The blocks of the rank each Downloading subscription of the root hash is waiting for that are not saved yet.
-    pub async fn find_missing_block_hashes(&self, root_hash: &OmniHash) -> Result<Vec<OmniHash>> {
-        let rows: Vec<(String,)> = sqlx::query_as(
+    /// The blocks each Downloading subscription of the root hash is waiting for that are not saved yet, with their rank.
+    pub async fn find_missing_blocks(&self, root_hash: &OmniHash) -> Result<Vec<(OmniHash, u32)>> {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
             r#"
-SELECT DISTINCT blocks.block_hash
+SELECT DISTINCT blocks.block_hash, blocks.rank
     FROM blocks
     JOIN files ON files.root_hash = blocks.root_hash AND files.rank = blocks.rank
     WHERE blocks.root_hash = ? AND blocks.downloaded = 0 AND files.status = 'Downloading'
@@ -121,7 +146,7 @@ SELECT DISTINCT blocks.block_hash
         .bind(root_hash.to_string())
         .fetch_all(self.db.as_ref())
         .await?;
-        rows.into_iter().map(|(hash,)| OmniHash::from_str(&hash).map_err(Into::into)).collect()
+        rows.into_iter().map(|(hash, rank)| Ok((OmniHash::from_str(&hash)?, rank as u32))).collect()
     }
 
     pub async fn transition(&self, id: &str, expected: &SubscribedFileStatus, status: &SubscribedFileStatus, reason: Option<&str>) -> Result<bool> {

@@ -59,7 +59,12 @@ mod tests {
                 block_hash: hash(4),
                 value: vec![5; 100],
             },
-            ExchangeMessage::NotHave { block_hash: hash(6) },
+            ExchangeMessage::HaveMap {
+                bits: vec![0b0000_0101, 0b0000_0011],
+            },
+            ExchangeMessage::Cancel {
+                block_hashes: vec![hash(7), hash(8)],
+            },
         ];
         for message in messages {
             assert_eq!(ExchangeMessageCodec::decode(&ExchangeMessageCodec::encode(&message)?)?, message);

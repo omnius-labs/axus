@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
-use crate::{model::AssetKey, prelude::*};
+use crate::{generated::axus::file::MAX_PENDING_REQUESTS, model::AssetKey, prelude::*};
 
 use super::*;
 
@@ -50,6 +50,19 @@ impl ProvidedRootHashes {
     }
 }
 
+/// Releases the dial entry of a node pair when the dial ends, however it ends.
+pub struct DialGuard<'a> {
+    ctx: &'a ExchangeContext,
+    node_id: Vec<u8>,
+    root_hash: OmniHash,
+}
+
+impl Drop for DialGuard<'_> {
+    fn drop(&mut self) {
+        self.ctx.dialing.lock().remove(&(self.node_id.clone(), self.root_hash.clone()));
+    }
+}
+
 /// The state shared by the tasks and the Session workers of one FileExchanger.
 pub struct ExchangeContext {
     pub my_node_id: Vec<u8>,
@@ -63,6 +76,7 @@ pub struct ExchangeContext {
     assigner: Mutex<BlockAssigner>,
     wanted_refreshed_at: Mutex<HashMap<OmniHash, Instant>>,
     choke: Mutex<ChokeManager>,
+    fetch_score: Mutex<FetchScore>,
     excluded_nodes: Mutex<Expirations<Vec<u8>>>,
     closed_pairs: Mutex<Expirations<(Vec<u8>, OmniHash)>>,
     root_hashes: Mutex<ProvidedRootHashes>,
@@ -92,9 +106,18 @@ impl ExchangeContext {
             file_subscriber,
             location_finder,
             registry: ExchangeSessionRegistry::new(),
-            assigner: Mutex::new(BlockAssigner::new(intervals.not_have_retry)),
+            assigner: Mutex::new(BlockAssigner::new(
+                intervals.rank_absent_retry,
+                TailOption {
+                    remaining: intervals.tail_remaining,
+                    stall_remaining: intervals.tail_stall_remaining,
+                    stall: intervals.tail_stall,
+                    copies: intervals.tail_copies,
+                },
+            )),
             wanted_refreshed_at: Mutex::new(HashMap::new()),
             choke: Mutex::new(ChokeManager::new(intervals.ranking_window, option.unchoke_count, intervals.unchoke_rotation)),
+            fetch_score: Mutex::new(FetchScore::new(intervals.fetch_window, intervals.fetch_min_blocks)),
             excluded_nodes: Mutex::new(Expirations::new()),
             closed_pairs: Mutex::new(Expirations::new()),
             root_hashes: Mutex::new(ProvidedRootHashes::default()),
@@ -115,13 +138,17 @@ impl ExchangeContext {
         self.next_session_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Marks the pair as being dialed, so that two connection tasks do not dial the same pair. Returns false when it already is.
-    pub fn begin_dial(&self, node_id: &[u8], root_hash: &OmniHash) -> bool {
-        self.dialing.lock().insert((node_id.to_vec(), root_hash.clone()))
-    }
-
-    pub fn end_dial(&self, node_id: &[u8], root_hash: &OmniHash) {
-        self.dialing.lock().remove(&(node_id.to_vec(), root_hash.clone()));
+    /// Marks the pair as being dialed, so that two connection tasks do not dial the same pair. The entry is
+    /// released when the guard is dropped, so a cancelled dial cannot leave the pair undialable.
+    pub fn begin_dial(&self, node_id: &[u8], root_hash: &OmniHash) -> Option<DialGuard<'_>> {
+        if !self.dialing.lock().insert((node_id.to_vec(), root_hash.clone())) {
+            return None;
+        }
+        Some(DialGuard {
+            ctx: self,
+            node_id: node_id.to_vec(),
+            root_hash: root_hash.clone(),
+        })
     }
 
     /// Whether a Session with the node for the root hash may be accepted or dialed.
@@ -212,11 +239,28 @@ impl ExchangeContext {
         self.file_subscriber.read_provided_block(root_hash, block_hash).await
     }
 
+    /// Which of the blocks this node provides. Each Store answers in one query, so a request of 64 hashes costs
+    /// two round trips instead of one per hash.
+    pub async fn contains_blocks(&self, root_hash: &OmniHash, block_hashes: &[OmniHash]) -> Result<Vec<bool>> {
+        let published = self.file_publisher.contains_blocks(root_hash, block_hashes).await?;
+        if published.iter().all(|found| *found) {
+            return Ok(published);
+        }
+        let subscribed = self.file_subscriber.contains_provided_blocks(root_hash, block_hashes).await?;
+        Ok(published.iter().zip(subscribed).map(|(published, subscribed)| *published || subscribed).collect())
+    }
+
     /// Assigns blocks of the root hash to the Session. The blocks to fetch are read again from the Store
     /// when nothing is assignable and the previous reading is old.
-    pub async fn assign_blocks(&self, root_hash: &OmniHash, session_id: u64, node_id: &[u8], limit: usize) -> Result<Vec<OmniHash>> {
-        let assigned = self.assigner.lock().assign(root_hash, session_id, node_id, limit, Instant::now());
-        if !assigned.is_empty() {
+    pub async fn assign_blocks(&self, root_hash: &OmniHash, session_id: u64, node_id: &[u8], limit: usize) -> Result<Vec<WantedBlock>> {
+        let (assigned, wanted_empty) = {
+            let mut assigner = self.assigner.lock();
+            let assigned = assigner.assign(root_hash, session_id, node_id, limit, Instant::now());
+            (assigned, assigner.is_wanted_empty(root_hash))
+        };
+        // Nothing is assignable while the blocks are held by other Sessions or their ranks are throttled, and that
+        // is the normal steady state; reading the whole Store again then would cost the blocks and the peers.
+        if !assigned.is_empty() || !wanted_empty {
             return Ok(assigned);
         }
 
@@ -229,27 +273,43 @@ impl ExchangeContext {
         if !due {
             return Ok(assigned);
         }
-        let wanted = self.file_subscriber.get_missing_block_hashes(root_hash).await?;
+        let wanted: Vec<WantedBlock> = self
+            .file_subscriber
+            .get_missing_blocks(root_hash)
+            .await?
+            .into_iter()
+            .map(|(block_hash, rank)| WantedBlock { block_hash, rank })
+            .collect();
         self.wanted_refreshed_at.lock().insert(root_hash.clone(), now);
         let mut assigner = self.assigner.lock();
-        assigner.update_wanted(root_hash, wanted);
+        assigner.update_wanted(root_hash, wanted, now);
         Ok(assigner.assign(root_hash, session_id, node_id, limit, now))
     }
 
     pub fn complete_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) {
-        self.assigner.lock().complete(root_hash, block_hash);
+        self.assigner.lock().complete(root_hash, block_hash, Instant::now());
     }
 
-    pub fn release_blocks(&self, root_hash: &OmniHash, block_hashes: impl IntoIterator<Item = OmniHash>) {
-        self.assigner.lock().release(root_hash, block_hashes);
+    /// Whether the Session is still expected to answer with the block. It stops being expected when another
+    /// Session saved the same block in the tail, so the Session retracts it instead of keeping it pending.
+    pub fn is_assigned(&self, root_hash: &OmniHash, session_id: u64, block_hash: &OmniHash) -> bool {
+        self.assigner.lock().is_assigned(root_hash, session_id, block_hash)
+    }
+
+    pub fn release_blocks(&self, root_hash: &OmniHash, session_id: u64, block_hashes: impl IntoIterator<Item = OmniHash>) {
+        self.assigner.lock().release(root_hash, session_id, block_hashes);
     }
 
     pub fn release_session_blocks(&self, root_hash: &OmniHash, session_id: u64) {
         self.assigner.lock().release_session(root_hash, session_id);
     }
 
-    pub fn mark_not_have(&self, root_hash: &OmniHash, node_id: &[u8], block_hash: &OmniHash) {
-        self.assigner.lock().mark_not_have(root_hash, node_id, block_hash, Instant::now());
+    /// Releases the blocks the node does not hold and stops asking it for their ranks for a while.
+    pub fn mark_rank_absent(&self, root_hash: &OmniHash, session_id: u64, node_id: &[u8], ranks: impl IntoIterator<Item = u32>, block_hashes: impl IntoIterator<Item = OmniHash>) {
+        let now = Instant::now();
+        let mut assigner = self.assigner.lock();
+        assigner.release(root_hash, session_id, block_hashes);
+        assigner.mark_rank_absent(root_hash, node_id, ranks, now);
     }
 
     pub fn is_choked(&self, node_id: &[u8]) -> bool {
@@ -257,11 +317,35 @@ impl ExchangeContext {
     }
 
     pub fn record_received(&self, node_id: &[u8], bytes: u64) {
-        self.choke.lock().record_received(node_id, bytes, Instant::now());
+        let now = Instant::now();
+        self.choke.lock().record_received(node_id, bytes, now);
+        self.fetch_score.lock().record(node_id, bytes, now);
+    }
+
+    /// The bytes per second the node provided in the recent period, or None while it provided too few blocks.
+    pub fn fetch_throughput(&self, node_id: &[u8]) -> Option<f64> {
+        self.fetch_score.lock().throughput(node_id, Instant::now())
+    }
+
+    /// How many requests the Session may keep awaiting responses. A slow node keeps fewer, which bounds its share
+    /// without excluding it, and a node with no record keeps the maximum.
+    pub fn pending_limit(&self, node_id: &[u8]) -> usize {
+        let now = Instant::now();
+        let mut score = self.fetch_score.lock();
+        let Some(throughput) = score.throughput(node_id, now) else {
+            return MAX_PENDING_REQUESTS as usize;
+        };
+        let median = score.median(now).unwrap_or(throughput);
+        if median <= 0.0 {
+            return MAX_PENDING_REQUESTS as usize;
+        }
+        let slowest = self.intervals.pending_min.min(MAX_PENDING_REQUESTS as usize);
+        let ratio = (throughput / median).clamp(0.0, 1.0);
+        slowest + ((MAX_PENDING_REQUESTS as usize - slowest) as f64 * ratio) as usize
     }
 
     pub fn record_sent(&self, node_id: &[u8], bytes: u64) {
-        self.choke.lock().record_sent(node_id, bytes);
+        self.choke.lock().record_sent(node_id, bytes, Instant::now());
     }
 
     /// Chooses the nodes to unchoke among the nodes that want our blocks.

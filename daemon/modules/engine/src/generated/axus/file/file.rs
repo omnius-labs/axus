@@ -79,8 +79,11 @@ pub enum ExchangeMessage {
         block_hash: omnius_core_omnikit::generated::omni_hash::OmniHash,
         value: Vec<u8>,
     },
-    NotHave {
-        block_hash: omnius_core_omnikit::generated::omni_hash::OmniHash,
+    HaveMap {
+        bits: Vec<u8>,
+    },
+    Cancel {
+        block_hashes: Vec<omnius_core_omnikit::generated::omni_hash::OmniHash>,
     },
 }
 
@@ -104,8 +107,14 @@ impl omnius_core_rocketpack::RocketPackStruct for ExchangeMessage {
                 <omnius_core_omnikit::generated::omni_hash::OmniHash as omnius_core_rocketpack::RocketPackStruct>::validate(block_hash)?;
                 omnius_core_rocketpack::validate_length("ExchangeMessage.Block.value", 0, 1048576, (value).len())?;
             }
-            Self::NotHave { block_hash } => {
-                <omnius_core_omnikit::generated::omni_hash::OmniHash as omnius_core_rocketpack::RocketPackStruct>::validate(block_hash)?;
+            Self::HaveMap { bits } => {
+                omnius_core_rocketpack::validate_length("ExchangeMessage.HaveMap.bits", 0, 8, (bits).len())?;
+            }
+            Self::Cancel { block_hashes } => {
+                omnius_core_rocketpack::validate_length("ExchangeMessage.Cancel.block_hashes", 0, 64, (block_hashes).len())?;
+                for item in (block_hashes).iter() {
+                    <omnius_core_omnikit::generated::omni_hash::OmniHash as omnius_core_rocketpack::RocketPackStruct>::validate(item)?;
+                }
             }
         }
         Ok(())
@@ -162,11 +171,22 @@ impl omnius_core_rocketpack::RocketPackStruct for ExchangeMessage {
                 omnius_core_rocketpack::validate_length("ExchangeMessage.Block.value", 0, 1048576, (value).len())?;
                 encoder.write_bytes((value).as_slice())?;
             }
-            Self::NotHave { block_hash } => {
+            Self::HaveMap { bits } => {
                 encoder.write_u64(8)?;
                 encoder.write_map(1)?;
                 encoder.write_u64(1)?;
-                encoder.write_struct(block_hash)?;
+                omnius_core_rocketpack::validate_length("ExchangeMessage.HaveMap.bits", 0, 8, (bits).len())?;
+                encoder.write_bytes((bits).as_slice())?;
+            }
+            Self::Cancel { block_hashes } => {
+                encoder.write_u64(9)?;
+                encoder.write_map(1)?;
+                encoder.write_u64(1)?;
+                omnius_core_rocketpack::validate_length("ExchangeMessage.Cancel.block_hashes", 0, 64, (block_hashes).len())?;
+                encoder.write_array((block_hashes).len())?;
+                for item in (block_hashes).iter() {
+                    encoder.write_struct(item)?;
+                }
             }
         }
 
@@ -290,17 +310,37 @@ impl omnius_core_rocketpack::RocketPackStruct for ExchangeMessage {
                 }
                 8 => {
                     let __inner_count_9 = decoder.read_map()?;
-                    let mut __rpf_storage_block_hash: Option<omnius_core_omnikit::generated::omni_hash::OmniHash> = None;
+                    let mut __rpf_storage_bits: Option<Vec<u8>> = None;
                     for _ in 0..__inner_count_9 {
                         match decoder.read_u64()? {
                             1 => {
-                                __rpf_storage_block_hash = Some(decoder.read_struct::<omnius_core_omnikit::generated::omni_hash::OmniHash>()?);
+                                __rpf_storage_bits = Some(decoder.read_bytes_bounded("ExchangeMessage.HaveMap.bits", 0, 8)?);
                             }
                             _ => decoder.skip_field()?,
                         }
                     }
-                    __rpf_result = Some(Self::NotHave {
-                        block_hash: __rpf_storage_block_hash.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: block_hash"))?,
+                    __rpf_result = Some(Self::HaveMap {
+                        bits: __rpf_storage_bits.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: bits"))?,
+                    });
+                }
+                9 => {
+                    let __inner_count_10 = decoder.read_map()?;
+                    let mut __rpf_storage_block_hashes: Option<Vec<omnius_core_omnikit::generated::omni_hash::OmniHash>> = None;
+                    for _ in 0..__inner_count_10 {
+                        match decoder.read_u64()? {
+                            1 => {
+                                let __count_11 = decoder.read_array_bounded("ExchangeMessage.Cancel.block_hashes", 0, 64)?;
+                                let mut __values_12: Vec<omnius_core_omnikit::generated::omni_hash::OmniHash> = Vec::new();
+                                for _ in 0..__count_11 {
+                                    __values_12.push(decoder.read_struct::<omnius_core_omnikit::generated::omni_hash::OmniHash>()?);
+                                }
+                                __rpf_storage_block_hashes = Some(__values_12);
+                            }
+                            _ => decoder.skip_field()?,
+                        }
+                    }
+                    __rpf_result = Some(Self::Cancel {
+                        block_hashes: __rpf_storage_block_hashes.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: block_hashes"))?,
                     });
                 }
                 _ => decoder.skip_field()?,
@@ -312,6 +352,8 @@ impl omnius_core_rocketpack::RocketPackStruct for ExchangeMessage {
 }
 
 pub const MAX_BLOCK_LENGTH: u32 = 1048576;
+
+pub const MAX_HAVE_MAP_BYTES: u32 = 8;
 
 pub const MAX_REQUEST_BLOCK_HASHES: u32 = 64;
 

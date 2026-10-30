@@ -16,7 +16,7 @@ pub struct ChokeManager {
     unchoke_count: usize,
     rotation: Duration,
     received: HashMap<Vec<u8>, VecDeque<(Instant, u64)>>,
-    sent: HashMap<Vec<u8>, u64>,
+    sent: HashMap<Vec<u8>, VecDeque<(Instant, u64)>>,
     unchoked: HashSet<Vec<u8>>,
     random_slot: Option<(Vec<u8>, Instant)>,
 }
@@ -39,13 +39,13 @@ impl ChokeManager {
         self.received.entry(node_id.to_vec()).or_default().push_back((now, bytes));
     }
 
-    pub fn record_sent(&mut self, node_id: &[u8], bytes: u64) {
-        *self.sent.entry(node_id.to_vec()).or_default() += bytes;
+    pub fn record_sent(&mut self, node_id: &[u8], bytes: u64, now: Instant) {
+        self.sent.entry(node_id.to_vec()).or_default().push_back((now, bytes));
     }
 
     #[allow(unused)]
     pub fn sent_bytes(&self, node_id: &[u8]) -> u64 {
-        self.sent.get(node_id).copied().unwrap_or(0)
+        self.sent.get(node_id).map_or(0, |entries| entries.iter().map(|(_, bytes)| bytes).sum())
     }
 
     /// Everything is choked until the first decision, because Sessions start choking the peer.
@@ -57,6 +57,12 @@ impl ChokeManager {
     pub fn decide(&mut self, wanting: &[Vec<u8>], now: Instant, rng: &mut (impl Rng + ?Sized)) {
         let window = self.window;
         self.received.retain(|_, entries| {
+            while entries.front().is_some_and(|(at, _)| now.saturating_duration_since(*at) >= window) {
+                entries.pop_front();
+            }
+            !entries.is_empty()
+        });
+        self.sent.retain(|_, entries| {
             while entries.front().is_some_and(|(at, _)| now.saturating_duration_since(*at) >= window) {
                 entries.pop_front();
             }
@@ -171,12 +177,18 @@ mod tests {
     }
 
     #[test]
-    fn sent_bytes_accumulate_per_node() {
+    fn sent_bytes_accumulate_per_node_and_the_record_is_pruned() {
         let mut manager = manager();
-        manager.record_sent(&[1], 10);
-        manager.record_sent(&[1], 5);
+        let now = Instant::now();
+        manager.record_sent(&[1], 10, now);
+        manager.record_sent(&[1], 5, now);
 
         assert_eq!(manager.sent_bytes(&[1]), 15);
         assert_eq!(manager.sent_bytes(&[2]), 0);
+
+        // The decision drops what the period no longer covers, as it does for the received bytes.
+        let mut rng = ChaCha20Rng::seed_from_u64(1);
+        manager.decide(&nodes(1), now + Duration::from_secs(11 * 60), &mut rng);
+        assert_eq!(manager.sent_bytes(&[1]), 0);
     }
 }

@@ -18,6 +18,11 @@ impl<K: Hash + Eq> Expirations<K> {
         *entry = (*entry).max(until);
     }
 
+    /// Drops the keys whose time is over, for a map that is written but not looked up on every tick.
+    pub fn prune(&mut self, now: Instant) {
+        self.entries.retain(|_, until| *until > now);
+    }
+
     pub fn contains(&mut self, key: &K, now: Instant) -> bool {
         self.entries.retain(|_, until| *until > now);
         self.entries.contains_key(key)

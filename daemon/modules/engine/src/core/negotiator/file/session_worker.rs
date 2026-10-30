@@ -309,6 +309,8 @@ impl SessionWorker {
     /// Retracts the blocks the Session no longer needs: the ones another Session saved first, and the ones whose
     /// request waited past the retraction time. The peer stops sending them, and the blocks go to other Sessions.
     fn retract_blocks(&self, state: &mut WorkerState, control_tx: &mpsc::Sender<ExchangeMessage>, now: Instant) {
+        // A peer that never answers never reaches the drop path of a block, so the grace is pruned here too.
+        state.retracted.prune(now);
         let retract_after = self.ctx.intervals.request_retract_after;
         // The blocks another Session saved first, and the blocks this Session waited for past the retraction time.
         let mut retracted: Vec<OmniHash> = Vec::new();
@@ -528,16 +530,18 @@ impl SessionWorker {
     }
 
     async fn on_block(&self, state: &mut WorkerState, block_hash: OmniHash, value: Vec<u8>) -> Option<Closing> {
+        let now = Instant::now();
         // A block the Session waits for is accepted even while a cancel of an earlier copy is still remembered.
-        if !Self::take_pending(state, &block_hash) {
-            // A block sent before the peer processed our cancel may arrive afterwards, more than once when the
-            // Session asked for it again in the meantime; it is dropped without blame for as long as the grace lasts.
-            if state.retracted.contains(&block_hash, Instant::now()) {
-                return None;
+        let waited = Self::take_pending(state, &block_hash);
+        if !waited {
+            // A block sent before the peer processed our cancel may arrive afterwards, even more than once when the
+            // Session asked for it again meanwhile. It is not blamed, and the content hash decides whether it is
+            // stored, because a slow peer may finish a block after the retraction.
+            if !state.retracted.contains(&block_hash, now) {
+                return Some(Closing::Violation("block that was not requested"));
             }
-            return Some(Closing::Violation("block that was not requested"));
         }
-        state.last_progress = Instant::now();
+        state.last_progress = now;
         if value.len() > MAX_BLOCK_LENGTH as usize {
             return Some(Closing::Violation("block over the maximum length"));
         }

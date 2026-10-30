@@ -18,7 +18,8 @@ pub struct FileExchangerIntervals {
     pub reject_retry: Duration,
     /// How long a node that answered a rank with no present bit is not asked for that rank.
     pub rank_absent_retry: Duration,
-    /// How long a hash retracted by a cancel is still accepted and dropped instead of being a violation.
+    /// How long a hash retracted by a cancel is still accepted instead of being a violation. It covers a block
+    /// that the peer had already started to send, so it is as long as a request may wait.
     pub cancel_grace: Duration,
     /// The un-fetched blocks of a root hash below which the same block is assigned to two Sessions.
     pub tail_remaining: usize,
@@ -66,7 +67,7 @@ impl Default for FileExchangerIntervals {
             unwanted_cooldown: Duration::from_secs(10 * 60),
             reject_retry: Duration::from_secs(30),
             rank_absent_retry: Duration::from_secs(30),
-            cancel_grace: Duration::from_secs(30),
+            cancel_grace: Duration::from_secs(60),
             tail_remaining: 32,
             tail_stall_remaining: 256,
             tail_stall: Duration::from_secs(15),

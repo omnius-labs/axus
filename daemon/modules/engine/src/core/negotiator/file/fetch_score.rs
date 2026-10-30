@@ -37,7 +37,8 @@ impl Ring {
             self.next = 0;
             self.started_at = now;
         } else if steps > 0 {
-            for step in 0..steps {
+            // The buckets the ring moves past are the oldest ones, so they are cleared before the next record uses them.
+            for step in 1..=steps {
                 let index = (self.next + step) % BUCKET_COUNT;
                 self.bytes[index] = 0;
                 self.blocks[index] = 0;
@@ -192,6 +193,19 @@ mod tests {
         let fast = score.throughput(b"fast", start + Duration::from_secs(3)).unwrap();
         let slow = score.throughput(b"slow", start + Duration::from_secs(15)).unwrap();
         assert!(fast > slow * 100.0);
+    }
+
+    #[test]
+    fn the_record_keeps_every_bucket_of_the_period() {
+        let start = Instant::now();
+        let mut score = FetchScore::new(Duration::from_secs(60), 4);
+        for second in 0..4 {
+            score.record(b"a", 1_000, start + Duration::from_secs(second));
+        }
+
+        // Half way through the period the blocks are still inside it, so the node keeps its record.
+        assert!(score.throughput(b"a", start + Duration::from_secs(30)).is_some());
+        assert_eq!(score.node_count(), 1);
     }
 
     #[test]

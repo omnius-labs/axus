@@ -844,7 +844,9 @@ mod tests {
         // The rank it claimed is not asked of it again, so the file completes from the peer that sends the blocks.
         subscriber.wait_completed(&id).await?;
         assert_eq!(tokio::fs::read(&output).await?, content);
+        // The rank it claimed is not asked again, so the peer sees one request per rank and not one per retraction.
         assert!(peer.request_count() >= 1);
+        assert!(peer.request_count() <= 6, "the peer was asked {} times", peer.request_count());
         assert!(!subscriber.ctx().is_excluded(&peer.id()));
 
         token.cancel();

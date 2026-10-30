@@ -25,6 +25,12 @@ pub struct FileExchangerIntervals {
     pub tail_stall: Duration,
     /// The Sessions one block is assigned to in the tail.
     pub tail_copies: usize,
+    /// The period of received bytes that measures the fetch throughput of a node.
+    pub fetch_window: Duration,
+    /// The blocks a node must have provided before its fetch throughput counts.
+    pub fetch_min_blocks: usize,
+    /// The requests awaiting responses on the slowest Session.
+    pub pending_min: usize,
     /// The period of the received bytes that ranks the nodes to unchoke.
     pub ranking_window: Duration,
     /// How often the node unchoked at random is chosen again.
@@ -62,6 +68,9 @@ impl Default for FileExchangerIntervals {
             tail_stall_remaining: 256,
             tail_stall: Duration::from_secs(15),
             tail_copies: 2,
+            fetch_window: Duration::from_secs(10 * 60),
+            fetch_min_blocks: 4,
+            pending_min: 4,
             ranking_window: Duration::from_secs(10 * 60),
             unchoke_rotation: Duration::from_secs(30),
             violation_exclusion: Duration::from_secs(30 * 60),

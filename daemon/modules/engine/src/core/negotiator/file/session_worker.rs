@@ -332,8 +332,10 @@ impl SessionWorker {
     }
 
     /// Sends requests until the requests awaiting responses reach the limit or nothing is left to assign.
+    /// The limit shrinks for a node whose blocks arrive slowly.
     async fn fill_requests(&self, state: &mut WorkerState, control_tx: &mpsc::Sender<ExchangeMessage>, want: bool) {
-        while want && !state.peer_choking && state.pending.len() < MAX_PENDING_REQUESTS as usize {
+        let limit = self.ctx.pending_limit(&self.session.node_id);
+        while want && !state.peer_choking && state.pending.len() < limit {
             let assigned = match self
                 .ctx
                 .assign_blocks(&self.session.root_hash, self.session.id, &self.session.node_id, Self::REQUEST_BLOCK_COUNT)

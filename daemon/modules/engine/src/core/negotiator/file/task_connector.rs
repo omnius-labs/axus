@@ -98,6 +98,14 @@ impl TaskConnector {
     async fn dial(&self, root_hash: &OmniHash) -> Result<Option<Arc<ExchangeSession>>> {
         let mut node_profiles = self.ctx.location_finder.find(&AssetKey::file(root_hash.clone())).await?;
         node_profiles.shuffle(&mut *self.rng.lock());
+        // The nodes that provided blocks fastest are tried first. A node without a record is given the median
+        // throughput, so a new peer neither wins nor loses against the known ones.
+        let median = self.ctx.fetch_median().unwrap_or(0.0);
+        node_profiles.sort_by(|left, right| {
+            let left = self.ctx.fetch_throughput(left.id()).unwrap_or(median);
+            let right = self.ctx.fetch_throughput(right.id()).unwrap_or(median);
+            right.total_cmp(&left)
+        });
 
         for node_profile in node_profiles {
             let node_id = node_profile.id();

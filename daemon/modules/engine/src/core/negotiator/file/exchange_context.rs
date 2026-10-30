@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
-use crate::{model::AssetKey, prelude::*};
+use crate::{generated::axus::file::MAX_PENDING_REQUESTS, model::AssetKey, prelude::*};
 
 use super::*;
 
@@ -63,6 +63,7 @@ pub struct ExchangeContext {
     assigner: Mutex<BlockAssigner>,
     wanted_refreshed_at: Mutex<HashMap<OmniHash, Instant>>,
     choke: Mutex<ChokeManager>,
+    fetch_score: Mutex<FetchScore>,
     excluded_nodes: Mutex<Expirations<Vec<u8>>>,
     closed_pairs: Mutex<Expirations<(Vec<u8>, OmniHash)>>,
     root_hashes: Mutex<ProvidedRootHashes>,
@@ -103,6 +104,7 @@ impl ExchangeContext {
             )),
             wanted_refreshed_at: Mutex::new(HashMap::new()),
             choke: Mutex::new(ChokeManager::new(intervals.ranking_window, option.unchoke_count, intervals.unchoke_rotation)),
+            fetch_score: Mutex::new(FetchScore::new(intervals.fetch_window, intervals.fetch_min_blocks)),
             excluded_nodes: Mutex::new(Expirations::new()),
             closed_pairs: Mutex::new(Expirations::new()),
             root_hashes: Mutex::new(ProvidedRootHashes::default()),
@@ -289,7 +291,36 @@ impl ExchangeContext {
     }
 
     pub fn record_received(&self, node_id: &[u8], bytes: u64) {
-        self.choke.lock().record_received(node_id, bytes, Instant::now());
+        let now = Instant::now();
+        self.choke.lock().record_received(node_id, bytes, now);
+        self.fetch_score.lock().record(node_id, bytes, now);
+    }
+
+    /// The bytes per second the node provided in the recent period, or None while it provided too few blocks.
+    pub fn fetch_throughput(&self, node_id: &[u8]) -> Option<f64> {
+        self.fetch_score.lock().throughput(node_id, Instant::now())
+    }
+
+    /// The throughput a node without a record is given, so that it is neither preferred nor avoided.
+    pub fn fetch_median(&self) -> Option<f64> {
+        self.fetch_score.lock().median(Instant::now())
+    }
+
+    /// How many requests the Session may keep awaiting responses. A slow node keeps fewer, which bounds its share
+    /// without excluding it, and a node with no record keeps the maximum.
+    pub fn pending_limit(&self, node_id: &[u8]) -> usize {
+        let now = Instant::now();
+        let score = self.fetch_score.lock();
+        let Some(throughput) = score.throughput(node_id, now) else {
+            return MAX_PENDING_REQUESTS as usize;
+        };
+        let median = score.median(now).unwrap_or(throughput);
+        if median <= 0.0 {
+            return MAX_PENDING_REQUESTS as usize;
+        }
+        let slowest = self.intervals.pending_min.min(MAX_PENDING_REQUESTS as usize);
+        let ratio = (throughput / median).clamp(0.0, 1.0);
+        slowest + ((MAX_PENDING_REQUESTS as usize - slowest) as f64 * ratio) as usize
     }
 
     pub fn record_sent(&self, node_id: &[u8], bytes: u64) {

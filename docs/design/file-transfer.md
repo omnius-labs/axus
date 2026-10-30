@@ -843,7 +843,8 @@ A test with real NodeFinders confirms that advertising, lookup, and transfer wor
 The presence bitmap of §5.4, the cancel message, the rank throttle of §5.5, and the tail duplication are implemented.
 The answering side builds the bitmap from an existence check on both Stores and sends it ahead of the blocks of the same request, and it removes the hashes a cancel retracts from its queue.
 The requesting side releases the absent hashes, stops asking the node for those ranks for the period, assigns a block to two Sessions in the tail, and retracts its copy with a cancel once the other Session saved the block; a block that arrives after the retraction is dropped without blame.
-The per-request retraction and the fetch throughput of §5 are designed but not implemented; [the plan](../plans/file-exchanger-transfer-efficiency.md) tracks that work.
+The fetch throughput of §5.6 is implemented: the received bytes of the blocks whose content hash matched are recorded per node ID over the period, the dialing candidates are ordered by it with a node without a record at the median, and a slow node keeps fewer requests awaiting responses.
+The per-request retraction of §5.5 is designed but not implemented; [the plan](../plans/file-exchanger-transfer-efficiency.md) tracks that work.
 There is no REST API to start publishing and subscribing.
 
 For confirmed bugs, see [issues.md](../issues.md).

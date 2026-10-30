@@ -157,7 +157,7 @@ mod tests {
                 model::{Session, SessionOption, SessionType},
             },
         },
-        generated::axus::file::ExchangeMessage,
+        generated::axus::file::{ExchangeMessage, MAX_PENDING_REQUESTS},
         model::NodeProfile,
         prelude::*,
         protocol::file::ExchangeMessageCodec,
@@ -182,6 +182,9 @@ mod tests {
             tail_stall_remaining: 0,
             tail_stall: Duration::from_millis(500),
             tail_copies: 2,
+            fetch_window: Duration::from_secs(10),
+            fetch_min_blocks: 4,
+            pending_min: 4,
             ranking_window: Duration::from_secs(10),
             unchoke_rotation: Duration::from_millis(300),
             violation_exclusion: Duration::from_secs(60),
@@ -546,6 +549,57 @@ mod tests {
 
         assert_eq!(tokio::fs::read(&output).await?, content);
         publisher.shutdown().await;
+        subscriber.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_slow_node_keeps_fewer_requests_awaiting_responses() -> TestResult {
+        let node = TestNode::new().await?;
+        let ctx = node.ctx();
+        let (fast, slow) = (b"fast".to_vec(), b"slow".to_vec());
+        for _ in 0..4 {
+            ctx.record_received(&fast, 1_000_000);
+            ctx.record_received(&slow, 1_000);
+        }
+
+        // The fast node is at or above the median, the slow one below it, and a node with no record keeps the maximum.
+        assert_eq!(ctx.pending_limit(&fast), MAX_PENDING_REQUESTS as usize);
+        assert_eq!(ctx.pending_limit(&slow), ctx.intervals.pending_min);
+        assert_eq!(ctx.pending_limit(b"unknown"), MAX_PENDING_REQUESTS as usize);
+
+        node.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_node_that_provided_fastest_is_dialed_first() -> TestResult {
+        let fast = TestNode::new().await?;
+        let slow = TestNode::new().await?;
+        let subscriber = TestNode::new().await?;
+        let content = content(8 * 1024);
+        let root_hash = fast.publish(&content).await?;
+        assert_eq!(slow.publish(&content).await?, root_hash);
+        subscriber.knows(&[&fast.endpoint.profile, &slow.endpoint.profile]);
+
+        let ctx = subscriber.ctx();
+        for _ in 0..4 {
+            ctx.record_received(&fast.id(), 1_000_000);
+            ctx.record_received(&slow.id(), 1_000);
+        }
+
+        let (id, output) = subscriber.subscribe(&root_hash, "output.bin").await?;
+        let (ctx, fast_id, slow_id, watched_root) = (subscriber.ctx().clone(), fast.id(), slow.id(), root_hash.clone());
+        wait_for(|| {
+            let (ctx, fast_id, slow_id, watched_root) = (ctx.clone(), fast_id.clone(), slow_id.clone(), watched_root.clone());
+            async move { ctx.registry.contains(&fast_id, &watched_root) && !ctx.registry.contains(&slow_id, &watched_root) }
+        })
+        .await?;
+        subscriber.wait_completed(&id).await?;
+
+        assert_eq!(tokio::fs::read(&output).await?, content);
+        fast.shutdown().await;
+        slow.shutdown().await;
         subscriber.shutdown().await;
         Ok(())
     }

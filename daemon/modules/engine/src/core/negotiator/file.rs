@@ -5,6 +5,7 @@ mod exchange_handshake;
 mod exchange_session;
 mod exchange_session_registry;
 mod expirations;
+mod fetch_score;
 mod file_exchanger;
 mod file_exchanger_intervals;
 mod file_publisher;
@@ -31,6 +32,8 @@ use exchange_session::*;
 use exchange_session_registry::*;
 #[allow(unused)]
 use expirations::*;
+#[allow(unused)]
+use fetch_score::*;
 #[allow(unused)]
 pub use file_exchanger::*;
 #[allow(unused)]

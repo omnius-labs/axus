@@ -356,6 +356,8 @@ impl TaskCommunicator {
                 wrote = true;
             }
             NodeMessage::AnnounceLocations { locations } => {
+                // 空の広告は何も書かないので、周期待ちの対象にしない
+                wrote = !locations.is_empty();
                 let mut relayed: HashMap<Arc<AssetKey>, AnnounceLocation> = HashMap::new();
                 {
                     let mut location_cache = self.location_cache.lock();
@@ -374,7 +376,6 @@ impl TaskCommunicator {
                     }
                 }
                 self.relay_locations(relayed, peer_id).await;
-                wrote = true;
             }
             NodeMessage::LookupRequest { lookup_id, asset_key } => {
                 let locations = self.location_cache.lock().get(&asset_key).to_vec();

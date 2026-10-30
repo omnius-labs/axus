@@ -175,21 +175,20 @@ impl TaskLookup {
                 if Instant::now() >= deadline {
                     break;
                 }
-                let distance = RoutingTable::distance(&asset_key.hash.value, node_profile.id());
-                if closest.as_ref().is_none_or(|value| distance < *value) {
-                    closest = Some(distance);
+                // 近さは Kadex の順序で比べる。バイト列の辞書順とは一致しない
+                if closest
+                    .as_ref()
+                    .is_none_or(|value| RoutingTable::is_closer(&asset_key.hash.value, node_profile.id(), value))
+                {
+                    closest = Some(node_profile.id().to_vec());
                 }
-                // 期限を過ぎたら打ち切り、ダイヤルも含めて期限の内側に収める
-                let Ok(answer) = timeout_at(deadline, self.query(&node_profile, asset_key)).await else {
-                    continue;
-                };
-                let Ok(answer) = answer else {
+                let Ok(answer) = self.query(&node_profile, asset_key, deadline).await else {
                     continue;
                 };
                 found.extend(answer.locations);
                 closer.extend(answer.closer_nodes.into_iter().filter(|profile| {
                     let id = profile.id();
-                    id != my_node_profile.id() && !queried.contains(id) && closest.as_ref().is_none_or(|value| RoutingTable::distance(&asset_key.hash.value, id) < *value)
+                    id != my_node_profile.id() && !queried.contains(id) && closest.as_ref().is_none_or(|value| RoutingTable::is_closer(&asset_key.hash.value, id, value))
                 }));
             }
 
@@ -206,11 +205,14 @@ impl TaskLookup {
         Ok(found)
     }
 
-    async fn query(&self, node_profile: &Arc<NodeProfile>, asset_key: &AssetKey) -> Result<LookupAnswer> {
+    async fn query(&self, node_profile: &Arc<NodeProfile>, asset_key: &AssetKey, deadline: Instant) -> Result<LookupAnswer> {
         let peer_id = node_profile.id().to_vec();
         let status = match self.find_session(&peer_id).await {
             Some(status) => status,
-            None => self.communicator.connect(node_profile).await?,
+            // ダイヤルも期限の内側に収める
+            None => timeout_at(deadline, self.communicator.connect(node_profile))
+                .await
+                .map_err(|e| Error::from_error(e, ErrorKind::NetworkError).with_message("the lookup dial timed out"))??,
         };
 
         let lookup_id = self.rng.lock().next_u64();
@@ -227,10 +229,14 @@ impl TaskLookup {
             return Err(Error::from_error(e, ErrorKind::NetworkError).with_message("dropped a lookup request"));
         }
 
-        // 応答は 1 周期より遅れることがあるので、受信期限まで待つ。全体の期限は呼び出し側が切る
-        match timeout(self.option.intervals.receive_timeout(), receiver).await {
+        // 応答は 1 周期より遅れることがあるので受信期限まで待ち、全体の期限でも切る
+        let wait = deadline.saturating_duration_since(Instant::now()).min(self.option.intervals.receive_timeout());
+        match timeout(wait, receiver).await {
             Ok(Ok(answer)) => Ok(answer),
-            Ok(Err(e)) => Err(Error::from_error(e, ErrorKind::NetworkError).with_message("the lookup answer was dropped")),
+            Ok(Err(e)) => {
+                self.lookup_registry.remove(&peer_id, lookup_id).await;
+                Err(Error::from_error(e, ErrorKind::NetworkError).with_message("the lookup answer was dropped"))
+            }
             Err(e) => {
                 self.lookup_registry.remove(&peer_id, lookup_id).await;
                 Err(Error::from_error(e, ErrorKind::NetworkError).with_message("the lookup answer timed out"))

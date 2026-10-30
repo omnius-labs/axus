@@ -24,6 +24,13 @@ impl RoutingTable {
         target.iter().zip(id).map(|(left, right)| left ^ right).collect()
     }
 
+    /// Whether `id` is closer to `target` than `than` is.
+    ///
+    /// The comparison must go through [`Kadex::compare`], which reads the distance from its last byte; ordering the byte vectors directly gives a different answer.
+    pub fn is_closer(target: &[u8], id: &[u8], than: &[u8]) -> bool {
+        Kadex::compare(&Self::distance(target, id), &Self::distance(target, than)) == std::cmp::Ordering::Less
+    }
+
     /// The known nodes closest to `target`, skipping the node itself and `exclude`.
     ///
     /// A lookup uses this to choose whom to ask, and an answer uses it to tell the asker who is closer.
@@ -73,6 +80,17 @@ mod tests {
         assert_eq!(closest.len(), 2);
         assert!(closest.iter().all(|profile| profile.id() != base));
         assert!(closest.iter().all(|profile| profile.id() != known[1].profile.id()));
+    }
+
+    #[test]
+    fn closeness_follows_the_byte_order_of_kadex() {
+        // 距離は A = [1, 0]、B = [0, 1]。バイト列の辞書順では B が近いが、Kadex は末尾バイトから読むので A が近い
+        let target = [0u8, 0];
+        let a = [1u8, 0];
+        let b = [0u8, 1];
+
+        assert!(RoutingTable::is_closer(&target, &a, &b));
+        assert!(!RoutingTable::is_closer(&target, &b, &a));
     }
 
     #[test]

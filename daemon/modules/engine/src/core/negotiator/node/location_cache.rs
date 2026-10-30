@@ -206,6 +206,24 @@ mod tests {
     }
 
     #[test]
+    fn the_profile_limit_evicts_the_oldest_entries_too() -> TestResult {
+        let clock = clock();
+        let mut cache = LocationCache::new(clock.clone());
+
+        // 1 つの key に最大件数を入れ、プロファイル上限を超えるまで key を増やす
+        let keys = LocationCache::MAX_NODE_PROFILES / LocationCache::MAX_LOCATIONS_PER_KEY + 1;
+        for i in 0..keys {
+            let locations: Vec<Arc<NodeProfile>> = (0..LocationCache::MAX_LOCATIONS_PER_KEY).map(|j| profile(&format!("{i}-{j}"))).collect();
+            cache.insert(key(&format!("asset-{i:05}")), locations);
+            clock.advance(std::time::Duration::from_millis(1));
+        }
+
+        assert!(cache.profile_count() <= LocationCache::MAX_NODE_PROFILES);
+        assert!(cache.get(&key("asset-00000")).is_empty(), "the oldest key is evicted to keep the profile limit");
+        Ok(())
+    }
+
+    #[test]
     fn the_oldest_entry_is_evicted_first() -> TestResult {
         let clock = clock();
         let mut cache = LocationCache::new(clock.clone());

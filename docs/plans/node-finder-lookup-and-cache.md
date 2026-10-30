@@ -166,10 +166,13 @@ Raise the Session limits to eight connected and eight accepted.
 
 **What it became**
 The lookup runs as its own task over the local wants, every `NodeFinderIntervals::lookup` cycle with a cooldown of three cycles per AssetKey.
+The whole lookup is cut at the deadline, dialing included, and it stops when no returned node is closer than the closest one already asked.
+A provider keeps its own profile as the location of the AssetKeys it provides, so a lookup that reaches it is answered directly.
 The XOR order used to choose the fan-out is `RoutingTable::closest_ids`; `Kadex::find` padded its result with the node itself and stopped at it, which dropped every candidate when the asking node was the closest one, so only `Kadex::compare` remains in use.
 
 **Completion criterion**
-The service tests reach a publisher through a bootstrap node and through a relay node without the propagation that Step 2 removed, and the lookup, registry, and routing-table unit tests pass.
+The service tests reach a publisher through a bootstrap node and through a relay node without the propagation that Step 2 removed.
+`task_lookup::tests::the_same_key_is_not_dialed_again_inside_the_cooldown` and `a_lookup_ends_within_its_deadline_even_when_dialing_hangs` cover the cooldown and the deadline, and the registry and routing-table unit tests pass.
 
 <a id="s-5"></a>
 ### Step 5. Distance order, cleanup, and document close-out

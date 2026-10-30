@@ -19,7 +19,8 @@ impl RoutingTable {
         entries
     }
 
-    fn distance(target: &[u8], id: &[u8]) -> Vec<u8> {
+    /// The XOR distance between a target and an ID, compared by [`Kadex::compare`].
+    pub fn distance(target: &[u8], id: &[u8]) -> Vec<u8> {
         target.iter().zip(id).map(|(left, right)| left ^ right).collect()
     }
 

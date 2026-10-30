@@ -27,6 +27,7 @@ pub struct TaskComputer {
     node_profile_repo: Arc<NodeFinderRepo>,
     node_profile_fetcher: Arc<dyn NodeProfileFetcher + Send + Sync>,
     sessions: Arc<SessionRegistry>,
+    location_cache: Arc<Mutex<LocationCache>>,
     want_cache: Arc<Mutex<WantCache>>,
     get_want_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
     get_push_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
@@ -54,6 +55,7 @@ impl TaskComputer {
         node_profile_repo: Arc<NodeFinderRepo>,
         node_profile_fetcher: Arc<dyn NodeProfileFetcher + Send + Sync>,
         sessions: Arc<SessionRegistry>,
+        location_cache: Arc<Mutex<LocationCache>>,
         want_cache: Arc<Mutex<WantCache>>,
         get_want_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
         get_push_asset_keys_fn: FnCaller<Vec<AssetKey>, ()>,
@@ -66,6 +68,7 @@ impl TaskComputer {
             node_profile_repo,
             node_profile_fetcher,
             sessions,
+            location_cache,
             want_cache,
             get_want_asset_keys_fn,
             get_push_asset_keys_fn,
@@ -138,6 +141,15 @@ impl TaskComputer {
 
         // 求める key は lookup の起点になる。cache 側で寿命を管理する
         self.want_cache.lock().set_local(my_want_asset_keys);
+
+        {
+            // 期限切れを落とし、自分の提供 key は自分の所在として答える
+            let mut location_cache = self.location_cache.lock();
+            location_cache.refresh();
+            for asset_key in my_push_asset_keys.iter() {
+                location_cache.insert(asset_key.clone(), [my_node_profile.clone()]);
+            }
+        }
 
         let statuses = self.sessions.statuses().await;
         if statuses.is_empty() {

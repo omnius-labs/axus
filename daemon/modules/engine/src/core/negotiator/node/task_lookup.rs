@@ -11,7 +11,7 @@ use tokio::{
     select,
     sync::Mutex as TokioMutex,
     task::JoinHandle,
-    time::{Instant, timeout},
+    time::{Instant, timeout, timeout_at},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -161,10 +161,11 @@ impl TaskLookup {
         let deadline = Instant::now() + self.deadline();
         let known = self.node_profile_repo.fetch_node_profiles().await?;
 
-        // 近いノードから始め、答えが返した closer_nodes で前へ進む
+        // 近いノードから始め、答えが返した closer_nodes のうち今より近いものだけを次に問い合わせる
         let mut frontier: Vec<Arc<NodeProfile>> = RoutingTable::closest(my_node_profile.id(), &asset_key.hash.value, &known, Self::FAN_OUT, my_node_profile.id());
         let mut queried: HashSet<Vec<u8>> = HashSet::new();
         let mut found: Vec<Arc<NodeProfile>> = Vec::new();
+        let mut closest: Option<Vec<u8>> = None;
 
         while !frontier.is_empty() && Instant::now() < deadline {
             let batch: Vec<Arc<NodeProfile>> = frontier.drain(..).filter(|profile| queried.insert(profile.id().to_vec())).collect();
@@ -174,11 +175,22 @@ impl TaskLookup {
                 if Instant::now() >= deadline {
                     break;
                 }
-                let Ok(answer) = self.query(&node_profile, asset_key).await else {
+                let distance = RoutingTable::distance(&asset_key.hash.value, node_profile.id());
+                if closest.as_ref().is_none_or(|value| distance < *value) {
+                    closest = Some(distance);
+                }
+                // 期限を過ぎたら打ち切り、ダイヤルも含めて期限の内側に収める
+                let Ok(answer) = timeout_at(deadline, self.query(&node_profile, asset_key)).await else {
+                    continue;
+                };
+                let Ok(answer) = answer else {
                     continue;
                 };
                 found.extend(answer.locations);
-                closer.extend(answer.closer_nodes.into_iter().filter(|profile| !queried.contains(profile.id())));
+                closer.extend(answer.closer_nodes.into_iter().filter(|profile| {
+                    let id = profile.id();
+                    id != my_node_profile.id() && !queried.contains(id) && closest.as_ref().is_none_or(|value| RoutingTable::distance(&asset_key.hash.value, id) < *value)
+                }));
             }
 
             if !found.is_empty() {
@@ -215,7 +227,8 @@ impl TaskLookup {
             return Err(Error::from_error(e, ErrorKind::NetworkError).with_message("dropped a lookup request"));
         }
 
-        match timeout(self.option.intervals.communicate, receiver).await {
+        // 応答は 1 周期より遅れることがあるので、受信期限まで待つ。全体の期限は呼び出し側が切る
+        match timeout(self.option.intervals.receive_timeout(), receiver).await {
             Ok(Ok(answer)) => Ok(answer),
             Ok(Err(e)) => Err(Error::from_error(e, ErrorKind::NetworkError).with_message("the lookup answer was dropped")),
             Err(e) => {
@@ -232,5 +245,186 @@ impl TaskLookup {
             .into_iter()
             .find(|(id, _)| id.as_slice() == peer_id)
             .map(|(_, status)| status)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use chrono::DateTime;
+    use rand::SeedableRng as _;
+    use testresult::TestResult;
+    use tokio::net::TcpStream;
+
+    use omnius_core_base::{clock::FakeClockUtc, sleeper::SleeperImpl};
+    use omnius_core_omnikit::{
+        generated::omni_sign::{OmniSignType, OmniSigner},
+        model::omni_addr::OmniAddr,
+    };
+
+    use crate::{
+        base::connection::ConnectionTcpConnector,
+        core::session::{SessionConnector, model::SessionOption},
+    };
+
+    use super::*;
+
+    fn clock() -> Arc<FakeClockUtc> {
+        Arc::new(FakeClockUtc::new(DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z").unwrap().into()))
+    }
+
+    fn option(communicate: Duration) -> NodeFinderOption {
+        NodeFinderOption {
+            state_dir: String::new(),
+            max_connected_session_count: 8,
+            max_accepted_session_count: 8,
+            intervals: NodeFinderIntervals {
+                connect: Duration::from_millis(10),
+                compute: Duration::from_millis(10),
+                communicate,
+                lookup: Duration::from_millis(10),
+            },
+        }
+    }
+
+    async fn create_lookup(
+        clock: Arc<FakeClockUtc>,
+        option: NodeFinderOption,
+        tcp_connector: Arc<dyn ConnectionTcpConnector + Send + Sync>,
+    ) -> Result<(Arc<TaskLookup>, Arc<TaskCommunicator>, Arc<NodeFinderRepo>)> {
+        let dir = tempfile::tempdir()?;
+        let state_dir = dir.path().to_str().unwrap().to_string();
+        std::mem::forget(dir);
+
+        let my_node_profile = Arc::new(Mutex::new(NodeProfile::random_for_test(vec![OmniAddr::new("self")])));
+        let sessions = Arc::new(SessionRegistry::new());
+        let node_profile_repo = Arc::new(NodeFinderRepo::new(&state_dir, clock.clone()).await?);
+        let location_cache = Arc::new(Mutex::new(LocationCache::new(clock.clone())));
+        let want_cache = Arc::new(Mutex::new(WantCache::new()));
+        let lookup_registry = Arc::new(LookupRegistry::new());
+        let rng: Arc<Mutex<dyn rand::Rng + Send + Sync>> = Arc::new(Mutex::new(rand::rngs::ChaCha20Rng::from_rng(&mut rand_core::UnwrapErr(rand::rngs::SysRng))));
+
+        let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
+        let session_connector = Arc::new(SessionConnector::new(tcp_connector, signer, clock.clone(), rng.clone(), SessionOption::default()));
+
+        let (session_sender, session_receiver) = mpsc::channel(20);
+        std::mem::forget(session_sender);
+
+        let communicator = TaskCommunicator::new(
+            my_node_profile.clone(),
+            sessions.clone(),
+            session_connector,
+            node_profile_repo.clone(),
+            location_cache.clone(),
+            lookup_registry.clone(),
+            Arc::new(TokioMutex::new(session_receiver)),
+            clock.clone(),
+            Arc::new(SleeperImpl),
+            option.clone(),
+        )
+        .await?;
+
+        let lookup = TaskLookup::new(
+            my_node_profile,
+            sessions,
+            communicator.clone(),
+            node_profile_repo.clone(),
+            location_cache,
+            want_cache,
+            lookup_registry,
+            clock,
+            Arc::new(SleeperImpl),
+            rng,
+            option,
+        )
+        .await?;
+
+        Ok((lookup, communicator, node_profile_repo))
+    }
+
+    fn asset_key() -> AssetKey {
+        AssetKey {
+            typ: "test".to_string(),
+            hash: omnius_core_omnikit::generated::omni_hash::OmniHash {
+                typ: omnius_core_omnikit::generated::omni_hash::OmniHashAlgorithmType::Sha3_256,
+                value: vec![1; 32],
+            },
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingConnector {
+        count: AtomicUsize,
+        delay: Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl ConnectionTcpConnector for CountingConnector {
+        async fn connect(&self, _addr: &OmniAddr) -> Result<TcpStream> {
+            self.count.fetch_add(1, Ordering::SeqCst);
+            if !self.delay.is_zero() {
+                tokio::time::sleep(self.delay).await;
+            }
+            Err(Error::new(ErrorKind::NotConnected).with_message("the test does not dial"))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_same_key_is_not_dialed_again_inside_the_cooldown() -> TestResult {
+        let clock = clock();
+        let connector = Arc::new(CountingConnector::default());
+        let (lookup, communicator, repo) = create_lookup(clock.clone(), option(Duration::from_millis(100)), connector.clone()).await?;
+
+        // 既知 node を 1 つ用意する。接続はできずダイヤルだけが数えられる
+        let known = NodeProfile::random_for_test(vec![OmniAddr::new("known")]);
+        repo.insert_or_update_node_profiles(&[&known]).await?;
+
+        let first = lookup.lookup(&asset_key()).await?;
+        assert!(first.is_empty());
+        assert_eq!(connector.count.load(Ordering::SeqCst), 1);
+
+        // cooldown の内側では、同じ key を問い合わせ直さない
+        let second = lookup.lookup(&asset_key()).await?;
+        assert!(second.is_empty());
+        assert_eq!(connector.count.load(Ordering::SeqCst), 1, "a lookup inside the cooldown does not dial");
+
+        clock.advance(Duration::from_millis(100) * TaskLookup::COOLDOWN_FACTOR + Duration::from_millis(1));
+        let third = lookup.lookup(&asset_key()).await?;
+        assert!(third.is_empty());
+        assert_eq!(connector.count.load(Ordering::SeqCst), 2, "the cooldown ends and the key is dialed again");
+
+        lookup.shutdown().await;
+        communicator.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_lookup_ends_within_its_deadline_even_when_dialing_hangs() -> TestResult {
+        let clock = clock();
+        let connector = Arc::new(CountingConnector {
+            count: AtomicUsize::new(0),
+            delay: Duration::from_secs(30),
+        });
+        let option = option(Duration::from_millis(100));
+        let (lookup, communicator, repo) = create_lookup(clock, option.clone(), connector.clone()).await?;
+
+        let known = NodeProfile::random_for_test(vec![OmniAddr::new("known")]);
+        repo.insert_or_update_node_profiles(&[&known]).await?;
+
+        let started = Instant::now();
+        let found = lookup.lookup(&asset_key()).await?;
+        let elapsed = started.elapsed();
+
+        assert!(found.is_empty());
+        assert!(
+            elapsed < option.intervals.receive_timeout() + Duration::from_millis(500),
+            "the lookup is cut at its deadline, elapsed {elapsed:?}"
+        );
+        assert_eq!(connector.count.load(Ordering::SeqCst), 1);
+
+        lookup.shutdown().await;
+        communicator.shutdown().await;
+        Ok(())
     }
 }

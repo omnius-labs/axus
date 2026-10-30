@@ -24,7 +24,7 @@ use crate::{
         negotiator::node::{AnnounceLocation, NodeFinderVersion, NodeMessage},
         session::{
             SessionConnector,
-            model::{Session, SessionType},
+            model::{Session, SessionHandshakeType, SessionType},
         },
     },
     model::{AssetKey, NodeProfile},
@@ -60,8 +60,15 @@ impl Shutdown for TaskCommunicator {
             let _ = join_handle.await;
         }
 
-        for join_handle in self.communicate_join_handles.lock().await.drain(..) {
-            let _ = join_handle.await;
+        // cancel の後に確立された Session のタスクも残らないよう、空になるまで join する
+        loop {
+            let join_handles: Vec<JoinHandle<()>> = self.communicate_join_handles.lock().await.drain(..).collect();
+            if join_handles.is_empty() {
+                break;
+            }
+            for join_handle in join_handles {
+                let _ = join_handle.await;
+            }
         }
     }
 }
@@ -145,6 +152,12 @@ impl TaskCommunicator {
     ///
     /// The lookup uses this when the closest node it needs is not connected; the Session then behaves like one the connector dialed.
     pub async fn connect(self: &Arc<Self>, node_profile: &NodeProfile) -> Result<Arc<SessionStatus>> {
+        // 上限は Connected の数で数える。connector と同じ規則なので、lookup も同じ枠を共有する
+        if self.sessions.count_by_handshake_type(&SessionHandshakeType::Connected).await >= self.option.max_connected_session_count {
+            return Err(Error::new(ErrorKind::NotConnected).with_message("the connected Session limit is reached"));
+        }
+
+        let mut last_error = None;
         for addr in node_profile.addrs() {
             let Ok(session) = self.session_connector.connect(addr, &SessionType::NodeFinder).await else {
                 continue;
@@ -154,24 +167,23 @@ impl TaskCommunicator {
                 warn!(address = addr.to_string(), "the peer's key does not match the node profile");
                 continue;
             }
-            return match self.establish(SessionStatus::new(session)).await {
-                Ok(status) => Ok(status),
+            match self.establish(SessionStatus::new(session)).await {
+                Ok(status) => return Ok(status),
                 // 既に同じ相手と繋がっているなら、その Session を使う
-                Err(e) if e.kind() == &ErrorKind::AlreadyExists => self
-                    .sessions
-                    .statuses()
-                    .await
-                    .into_iter()
-                    .find(|(id, _)| id == node_profile.id())
-                    .map(|(_, status)| status)
-                    .ok_or(e),
-                Err(e) => Err(e),
-            };
+                Err(e) if e.kind() == &ErrorKind::AlreadyExists => {
+                    if let Some((_, status)) = self.sessions.statuses().await.into_iter().find(|(id, _)| id == node_profile.id()) {
+                        return Ok(status);
+                    }
+                    last_error = Some(e);
+                }
+                // 1 つの addr で handshake が失敗しても、残りの addr は試す
+                Err(e) => last_error = Some(e),
+            }
         }
 
         self.node_profile_repo.mark_unreachable(node_profile.id()).await?;
 
-        Err(Error::new(ErrorKind::NotConnected).with_message("no address of the node accepted a connection"))
+        Err(last_error.unwrap_or_else(|| Error::new(ErrorKind::NotConnected).with_message("no address of the node accepted a connection")))
     }
 
     /// Finishes the handshake, registers the Session, and starts its writer, reader, and cleanup.
@@ -184,7 +196,8 @@ impl TaskCommunicator {
         };
 
         let other_node_profile_uri = other_node_profile.to_uri()?;
-        // handshake まで終えた相手は到達可能なので、次に繋ぐときの失敗回数を戻す
+        // handshake まで終えた相手だけが到達可能。profile を保存してから到達時刻を記録する
+        self.node_profile_repo.insert_or_update_node_profiles(&[&other_node_profile]).await?;
         self.node_profile_repo.mark_reachable(other_node_profile.id()).await?;
         *status.node_profile.lock() = Some(other_node_profile.clone());
         let other_node_id = other_node_profile.id().to_vec();
@@ -302,11 +315,13 @@ impl TaskCommunicator {
                         let message = status.session.stream.receiver.lock().await.recv_message_with::<NodeMessageCodec>().await?;
                         // 受信した時点を基準にし、保存処理にかかった時間で期限を延ばさない
                         let received_at = Instant::now();
-                        timeout_at(received_at + receive_timeout, this.dispatch(&status, &peer_id, message))
+                        let wrote = timeout_at(received_at + receive_timeout, this.dispatch(&status, &peer_id, message))
                             .await
                             .map_err(|e| Error::from_error(e, ErrorKind::NetworkError).with_message("NodeFinder receive timed out"))??;
-                        // 周期より速く送る相手に、保存処理を繰り返させない
-                        this.sleeper.sleep(communicate.saturating_sub(received_at.elapsed())).await;
+                        // 周期より速く送る相手に保存処理を繰り返させない。書き込まない Status と lookup は待たせない
+                        if wrote {
+                            this.sleeper.sleep(communicate.saturating_sub(received_at.elapsed())).await;
+                        }
                         Ok::<(), Error>(())
                     }
                     .await;
@@ -325,7 +340,9 @@ impl TaskCommunicator {
         })
     }
 
-    async fn dispatch(&self, status: &Arc<SessionStatus>, peer_id: &[u8], message: NodeMessage) -> Result<()> {
+    /// Returns whether the message wrote to the store or the cache, which decides whether the cycle wait applies.
+    async fn dispatch(&self, status: &Arc<SessionStatus>, peer_id: &[u8], message: NodeMessage) -> Result<bool> {
+        let mut wrote = false;
         match message {
             NodeMessage::Status => {}
             NodeMessage::AnnounceProfiles { node_profiles } => {
@@ -336,6 +353,7 @@ impl TaskCommunicator {
                     .map(|profile| profile.as_ref())
                     .collect();
                 self.node_profile_repo.insert_or_update_node_profiles(&node_profiles).await?;
+                wrote = true;
             }
             NodeMessage::AnnounceLocations { locations } => {
                 let mut relayed: HashMap<Arc<AssetKey>, AnnounceLocation> = HashMap::new();
@@ -356,6 +374,7 @@ impl TaskCommunicator {
                     }
                 }
                 self.relay_locations(relayed, peer_id).await;
+                wrote = true;
             }
             NodeMessage::LookupRequest { lookup_id, asset_key } => {
                 let locations = self.location_cache.lock().get(&asset_key).to_vec();
@@ -385,7 +404,7 @@ impl TaskCommunicator {
             }
         }
 
-        Ok(())
+        Ok(wrote)
     }
 
     /// The known nodes closest to an AssetKey, which the answer tells the asker so the lookup can move toward the key.
@@ -408,15 +427,13 @@ impl TaskCommunicator {
         }
 
         let statuses = self.sessions.statuses().await;
-        let ids: Vec<&[u8]> = statuses.iter().map(|(id, _)| id.as_slice()).collect();
+        // 送信元を除いてから近い順に選ぶ。選んでから除くと、送信元が近傍に入った分だけ配信先が減る
+        let ids: Vec<&[u8]> = statuses.iter().map(|(id, _)| id.as_slice()).filter(|id| *id != from).collect();
         let my_node_profile = self.my_node_profile.lock().clone();
 
         let mut per_session: HashMap<Vec<u8>, HashMap<Arc<AssetKey>, AnnounceLocation>> = HashMap::new();
         for (asset_key, location) in locations {
             for id in RoutingTable::closest_ids(my_node_profile.id(), &asset_key.hash.value, &ids, Self::FAN_OUT) {
-                if id == from {
-                    continue;
-                }
                 per_session.entry(id.to_vec()).or_default().insert(asset_key.clone(), location.clone());
             }
         }
@@ -688,6 +705,56 @@ mod tests {
             panic!("the other Session receives the relayed announcement");
         };
         assert_eq!(locations[&asset_key].hops, MAX_HOPS - 1);
+
+        task.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_zero_hop_announcement_reaches_no_other_session() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let intervals = NodeFinderIntervals {
+            communicate: Duration::from_secs(30),
+            ..NodeFinderIntervals::default()
+        };
+        let (task, session_sender) = create_task_communicator(dir.path().to_str().unwrap(), intervals).await?;
+
+        let (session_a, peer_a, profile_a) = session_pair()?;
+        let (session_b, peer_b, profile_b) = session_pair()?;
+        let answer_a = answer_handshake(peer_a.clone(), profile_a);
+        let answer_b = answer_handshake(peer_b.clone(), profile_b);
+        session_sender.send(SessionStatus::new(session_a)).await?;
+        session_sender.send(SessionStatus::new(session_b)).await?;
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
+            answer_a.await?;
+            answer_b.await?;
+            while task.sessions.statuses().await.len() != 2 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Ok::<(), Error>(())
+        })
+        .await??;
+
+        let asset_key = asset_key(1);
+        peer_a
+            .sender
+            .lock()
+            .await
+            .send_message_with::<NodeMessageCodec>(&NodeMessage::AnnounceLocations {
+                locations: HashMap::from([(
+                    asset_key.clone(),
+                    AnnounceLocation {
+                        hops: 0,
+                        node_profiles: vec![Arc::new(node_profile())],
+                    },
+                )]),
+            })
+            .await?;
+
+        // hop 0 は cache に入るだけで、他の Session へは中継されない
+        let leaked = tokio::time::timeout(Duration::from_millis(300), peer_b.receiver.lock().await.recv_message_with::<NodeMessageCodec>()).await;
+        assert!(leaked.is_err(), "a zero-hop announcement is not relayed");
+        assert_eq!(task.location_cache.lock().get(&asset_key).len(), 1);
 
         task.shutdown().await;
         Ok(())

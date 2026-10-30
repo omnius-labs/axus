@@ -196,6 +196,7 @@ impl NodeFinder {
             self.node_profile_repo.clone(),
             self.node_profile_fetcher.clone(),
             self.sessions.clone(),
+            self.location_cache.clone(),
             self.want_cache.clone(),
             self.get_want_asset_keys_fn.caller(),
             self.get_push_asset_keys_fn.caller(),

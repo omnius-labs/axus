@@ -8,6 +8,8 @@ pub struct FileExchangerIntervals {
     pub status_cycle: Duration,
     /// How long a request may wait for a block or a do-not-have response since the last response.
     pub request_timeout: Duration,
+    /// How long a request may wait for its answer before it is retracted, while the Session keeps being open.
+    pub request_retract_after: Duration,
     /// How long a Session neither side wants is kept.
     pub unwanted_close: Duration,
     /// How long a pair closed because neither side wanted is kept out of the dialing candidates.
@@ -59,6 +61,7 @@ impl Default for FileExchangerIntervals {
         Self {
             status_cycle: Duration::from_secs(10),
             request_timeout: Duration::from_secs(60),
+            request_retract_after: Duration::from_secs(10),
             unwanted_close: Duration::from_secs(60),
             unwanted_cooldown: Duration::from_secs(10 * 60),
             reject_retry: Duration::from_secs(30),

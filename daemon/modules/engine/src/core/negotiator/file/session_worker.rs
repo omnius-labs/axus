@@ -35,17 +35,20 @@ enum Closing {
 struct PendingRequest {
     blocks: Vec<(OmniHash, u32)>,
     remaining: HashSet<OmniHash>,
+    /// When the request last received an answer, which decides when it is retracted for staying unanswered.
+    last_answer_at: Instant,
     /// Whether the presence bitmap of this request was applied. It is not until then, because the bitmap
     /// answers the oldest request and has to be matched with it even when every block was retracted meanwhile.
     bitmap_applied: bool,
 }
 
 impl PendingRequest {
-    fn new(blocks: Vec<(OmniHash, u32)>) -> Self {
+    fn new(blocks: Vec<(OmniHash, u32)>, sent_at: Instant) -> Self {
         let remaining = blocks.iter().map(|(hash, _)| hash.clone()).collect();
         Self {
             blocks,
             remaining,
+            last_answer_at: sent_at,
             bitmap_applied: false,
         }
     }
@@ -55,11 +58,18 @@ impl PendingRequest {
         self.bitmap_applied && self.remaining.is_empty()
     }
 
+    /// Whether the request still waits for a block. A request whose blocks were all retracted before its presence
+    /// bitmap arrived keeps a shell, which answers the bitmap but does not take a request slot.
+    fn is_active(&self) -> bool {
+        !self.remaining.is_empty()
+    }
+
     /// The rank of the block, when the request is still waiting for it.
-    fn take(&mut self, block_hash: &OmniHash) -> Option<u32> {
+    fn take(&mut self, block_hash: &OmniHash, now: Instant) -> Option<u32> {
         if !self.remaining.remove(block_hash) {
             return None;
         }
+        self.last_answer_at = now;
         self.blocks.iter().find(|(hash, _)| hash == block_hash).map(|(_, rank)| *rank)
     }
 }
@@ -287,18 +297,24 @@ impl SessionWorker {
             return Some(Closing::Timeout("no response within the request deadline"));
         }
 
-        self.retract_completed_blocks(state, control_tx, now);
+        self.retract_blocks(state, control_tx, now);
         self.fill_requests(state, control_tx, want).await;
         None
     }
 
-    /// Retracts the blocks another Session saved first, so that the peer stops sending a copy nobody needs.
-    /// The assignment is dropped by the one that saved the block, so the Session only stops expecting it.
-    fn retract_completed_blocks(&self, state: &mut WorkerState, control_tx: &mpsc::Sender<ExchangeMessage>, now: Instant) {
+    /// Retracts the blocks the Session no longer needs: the ones another Session saved first, and the ones whose
+    /// request waited past the retraction time. The peer stops sending them, and the blocks go to other Sessions.
+    fn retract_blocks(&self, state: &mut WorkerState, control_tx: &mpsc::Sender<ExchangeMessage>, now: Instant) {
+        let retract_after = self.ctx.intervals.request_retract_after;
         let mut completed = Vec::new();
         for request in &state.pending {
+            // A request that waited past the retraction time gives its blocks back while the Session stays open.
+            let unanswered = now.saturating_duration_since(request.last_answer_at) >= retract_after;
             for (hash, _) in &request.blocks {
-                if request.remaining.contains(hash) && !self.ctx.is_assigned(&self.session.root_hash, self.session.id, hash) {
+                if !request.remaining.contains(hash) {
+                    continue;
+                }
+                if unanswered || !self.ctx.is_assigned(&self.session.root_hash, self.session.id, hash) {
                     completed.push(hash.clone());
                 }
             }
@@ -310,13 +326,15 @@ impl SessionWorker {
         for hash in &completed {
             state.retracted.insert(hash.clone(), now + self.ctx.intervals.cancel_grace);
         }
+        // The blocks go back to the assignment, so another Session, or this one later, can ask for them again.
+        self.ctx.release_blocks(&self.session.root_hash, self.session.id, completed.iter().cloned());
         for request in &mut state.pending {
             for hash in &completed {
                 request.remaining.remove(hash);
             }
         }
         state.pending.retain(|request| !request.is_done());
-        // One message carries at most the hashes a request may carry, so a tick with many completed
+        // One message carries at most the hashes a request may carry, so a tick with many retracted
         // blocks sends several cancels.
         for block_hashes in completed.chunks(MAX_REQUEST_BLOCK_HASHES as usize) {
             if control_tx
@@ -335,7 +353,10 @@ impl SessionWorker {
     /// The limit shrinks for a node whose blocks arrive slowly.
     async fn fill_requests(&self, state: &mut WorkerState, control_tx: &mpsc::Sender<ExchangeMessage>, want: bool) {
         let limit = self.ctx.pending_limit(&self.session.node_id);
-        while want && !state.peer_choking && state.pending.len() < limit {
+        let mut active = state.pending.iter().filter(|request| request.is_active()).count();
+        // The shells left by retracted requests still answer their bitmaps, so the queue of sent requests stays
+        // bounded on its own rather than through the limit of the active ones.
+        while want && !state.peer_choking && active < limit && state.pending.len() < MAX_PENDING_REQUESTS as usize {
             let assigned = match self
                 .ctx
                 .assign_blocks(&self.session.root_hash, self.session.id, &self.session.node_id, Self::REQUEST_BLOCK_COUNT)
@@ -361,20 +382,26 @@ impl SessionWorker {
             if state.pending.is_empty() {
                 state.last_progress = Instant::now();
             }
-            state.pending.push(PendingRequest::new(blocks));
+            state.pending.push(PendingRequest::new(blocks, Instant::now()));
+            active += 1;
         }
     }
 
     /// Applies the bitmap of the oldest request and releases the blocks the peer does not hold.
     fn on_have_map(&self, state: &mut WorkerState, bits: &[u8]) -> Option<Closing> {
         let (request_count, absent) = {
+            // A bitmap can arrive for a request this node already dropped, for example when a choke cleared it
+            // before the answer was sent. It answers nothing, so it is ignored.
             let Some(request) = state.pending.first_mut() else {
-                return Some(Closing::Violation("presence bitmap without a request"));
+                debug!(session_id = self.session.id, "a presence bitmap answers no request");
+                return None;
             };
             if request.bitmap_applied {
-                return Some(Closing::Violation("presence bitmap without a request"));
+                debug!(session_id = self.session.id, "a presence bitmap answers a request twice");
+                return None;
             }
             request.bitmap_applied = true;
+            request.last_answer_at = Instant::now();
             if bits.len() != request.blocks.len().div_ceil(8) {
                 return Some(Closing::Violation("presence bitmap that does not match the request"));
             }
@@ -514,8 +541,9 @@ impl SessionWorker {
 
     /// Removes the hash from the request awaiting its response. Returns false when no request is awaiting it.
     fn take_pending(state: &mut WorkerState, block_hash: &OmniHash) -> bool {
+        let now = Instant::now();
         for index in 0..state.pending.len() {
-            if state.pending[index].take(block_hash).is_some() {
+            if state.pending[index].take(block_hash, now).is_some() {
                 if state.pending[index].is_done() {
                     state.pending.remove(index);
                 }
@@ -533,7 +561,36 @@ impl SessionWorker {
 
 #[cfg(test)]
 mod tests {
-    use super::PresenceBitmap;
+    use std::time::Duration;
+
+    use omnius_core_omnikit::generated::omni_hash::{OmniHash, OmniHashAlgorithmType};
+    use tokio::time::Instant;
+
+    use super::{PendingRequest, PresenceBitmap};
+
+    fn hash(value: u8) -> OmniHash {
+        OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, [value])
+    }
+
+    #[test]
+    fn a_request_stays_active_until_every_block_is_answered() {
+        let start = Instant::now();
+        let mut request = PendingRequest::new(vec![(hash(1), 0), (hash(2), 0)], start);
+        assert!(request.is_active());
+        assert!(!request.is_done());
+
+        assert_eq!(request.take(&hash(1), start + Duration::from_secs(1)), Some(0));
+        // The answer decides when the request counts as unanswered again.
+        assert_eq!(request.last_answer_at, start + Duration::from_secs(1));
+        assert!(request.is_active());
+
+        assert_eq!(request.take(&hash(2), start + Duration::from_secs(2)), Some(0));
+        assert!(!request.is_active());
+        // The request is kept until its presence bitmap arrives, so the answers stay matched with the requests.
+        assert!(!request.is_done());
+        request.bitmap_applied = true;
+        assert!(request.is_done());
+    }
 
     #[test]
     fn the_bitmap_of_64_hashes_is_8_bytes_and_round_trips() {

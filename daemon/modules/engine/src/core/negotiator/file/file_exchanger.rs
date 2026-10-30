@@ -172,6 +172,8 @@ mod tests {
         FileExchangerIntervals {
             status_cycle: Duration::from_millis(200),
             request_timeout: Duration::from_secs(1),
+            // Retraction stays off, so a test that does not arrange for it never sees a request retracted.
+            request_retract_after: Duration::from_secs(60),
             unwanted_close: Duration::from_millis(800),
             unwanted_cooldown: Duration::from_secs(2),
             reject_retry: Duration::from_millis(300),
@@ -504,19 +506,24 @@ mod tests {
                 tokio::select! {
                     _ = token.cancelled() => return Ok(()),
                     _ = tick.tick() => Self::send(&session, &status).await?,
-                    message = Self::receive(&session) => match (behavior, message?) {
-                        (Behavior::BadBlock, ExchangeMessage::Request { block_hashes }) => {
-                            Self::send(&session, &ExchangeMessage::Block { block_hash: block_hashes[0].clone(), value: vec![0; 10] }).await?;
-                        }
-                        (Behavior::NoBlocks, ExchangeMessage::Request { block_hashes }) => {
+                    message = Self::receive(&session) => {
+                        let message = message?;
+                        if matches!(message, ExchangeMessage::Request { .. }) {
                             requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                            let bits = vec![0u8; block_hashes.len().div_ceil(8)];
-                            Self::send(&session, &ExchangeMessage::HaveMap { bits }).await?;
                         }
-                        (Behavior::ShortHaveMap, ExchangeMessage::Request { .. }) => {
-                            Self::send(&session, &ExchangeMessage::HaveMap { bits: vec![0b0000_0001] }).await?;
+                        match (behavior, message) {
+                            (Behavior::BadBlock, ExchangeMessage::Request { block_hashes }) => {
+                                Self::send(&session, &ExchangeMessage::Block { block_hash: block_hashes[0].clone(), value: vec![0; 10] }).await?;
+                            }
+                            (Behavior::NoBlocks, ExchangeMessage::Request { block_hashes }) => {
+                                let bits = vec![0u8; block_hashes.len().div_ceil(8)];
+                                Self::send(&session, &ExchangeMessage::HaveMap { bits }).await?;
+                            }
+                            (Behavior::ShortHaveMap, ExchangeMessage::Request { .. }) => {
+                                Self::send(&session, &ExchangeMessage::HaveMap { bits: vec![0b0000_0001] }).await?;
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
             }
@@ -712,6 +719,56 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_peer_sending_a_block_nobody_requested_is_excluded() -> TestResult {
         expect_exclusion_then_transfer(Behavior::UnrequestedBlock, true).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_request_that_is_not_answered_is_retracted_without_closing_the_session() -> TestResult {
+        let publisher = TestNode::new().await?;
+        let peer = Arc::new(RawPeer::new().await?);
+        let token = CancellationToken::new();
+        let serving = peer.serve(Behavior::IgnoreRequests, token.clone());
+        let intervals = FileExchangerIntervals {
+            // The request is retracted long before the Session would be closed for silence.
+            request_retract_after: Duration::from_millis(100),
+            request_timeout: Duration::from_secs(30),
+            ..fast_intervals()
+        };
+        let subscriber = TestNode::with_intervals(|_| {}, intervals).await?;
+        let content = content(8 * 1024);
+        let root_hash = publisher.publish(&content).await?;
+
+        let (id, _output) = subscriber.subscribe(&root_hash, "output.bin").await?;
+        subscriber.knows(&[&peer.endpoint.profile]);
+        let requests = peer.requests.clone();
+        wait_for(|| {
+            let requests = requests.clone();
+            async move { requests.load(std::sync::atomic::Ordering::SeqCst) > 0 }
+        })
+        .await?;
+        let first = peer.request_count();
+
+        // The unanswered requests are retracted, and their blocks come back to be asked again.
+        wait_for(|| {
+            let requests = requests.clone();
+            async move { requests.load(std::sync::atomic::Ordering::SeqCst) > 1 }
+        })
+        .await?;
+        assert!(peer.request_count() > first);
+        // The peer keeps its Session and is not excluded for not answering, which the request deadline decides.
+        assert!(!subscriber.ctx().is_excluded(&peer.id()));
+        assert_eq!(subscriber.ctx().registry.count_by_root_hash(&root_hash), 1);
+        assert!(matches!(
+            subscriber.ctx().file_subscriber.find_file(&id).await?.map(|file| file.status),
+            Some(SubscribedFileStatus::Downloading)
+        ));
+        let _ = id;
+
+        token.cancel();
+        let _ = serving.await;
+        publisher.shutdown().await;
+        subscriber.shutdown().await;
+        peer.endpoint.session_accepter.shutdown().await;
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

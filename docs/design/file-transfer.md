@@ -276,6 +276,7 @@ Because a choke removes all awaiting responses at that point, the request deadli
 
 A node retracts blocks it no longer needs with a cancel message carrying their hashes, and the peer removes them from the requests it has not answered.
 The peer still answers each request with its presence bitmap, so the answers keep the order of the requests; the requesting node ignores the bits of the retracted hashes.
+A presence bitmap that answers no request, because the requesting node already dropped that request, is ignored rather than treated as a violation.
 A block sent before the peer processed the cancel reaches the requesting node after the retraction; it is dropped without being treated as a violation.
 
 A node that conveyed a choke discards unresponded requests received from that peer and ignores requests arriving while choked.
@@ -844,7 +845,7 @@ The presence bitmap of §5.4, the cancel message, the rank throttle of §5.5, an
 The answering side builds the bitmap from an existence check on both Stores and sends it ahead of the blocks of the same request, and it removes the hashes a cancel retracts from its queue.
 The requesting side releases the absent hashes, stops asking the node for those ranks for the period, assigns a block to two Sessions in the tail, and retracts its copy with a cancel once the other Session saved the block; a block that arrives after the retraction is dropped without blame.
 The fetch throughput of §5.6 is implemented: the received bytes of the blocks whose content hash matched are recorded per node ID over the period, the dialing candidates are ordered by it with a node without a record at a random position, and a slow node keeps fewer requests awaiting responses.
-The per-request retraction of §5.5 is designed but not implemented; [the plan](../plans/file-exchanger-transfer-efficiency.md) tracks that work.
+The per-request retraction of §5.5 is implemented: a request whose last answer is older than the soft deadline is retracted with a cancel and its blocks go back to the assignment, while the Session stays open and is closed only at the request deadline.
 There is no REST API to start publishing and subscribing.
 
 For confirmed bugs, see [issues.md](../issues.md).

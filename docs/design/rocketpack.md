@@ -69,9 +69,8 @@ A type's declaration and codec are not split between hand-written and generated;
 Because the rpf can express element-count and byte-length limits on a type, a migrated type can enforce the limits at decode time.
 Accept that the generated pack also checks the same limits at send time.
 
-The exception to byte-for-byte identity is the multi-element map that DataMessage used before its replacement.
-Converting from `HashMap` to the generated type's `BTreeMap` changes the traversal order, but since the receiving side does not depend on map order, it is tolerated as wire-compatible.
-This part is verified by mutual decoding from old to new and new to old and by the identity of the map contents; single-element maps and the other communication types stay byte-fixed.
+A multi-element map is encoded from the generated type's `BTreeMap`, so its traversal order differs from the `HashMap` the earlier hand-written type used.
+The receiving side does not depend on map order, so this is tolerated; single-element maps and the other communication types stay byte-fixed.
 The accepted range of NodeProfile URIs is changed per the decision in §5.1.
 
 ## 5. Design decisions
@@ -134,7 +133,7 @@ Leaving a thin `RocketPackStruct` implementation on the domain types violates th
 #### Accept map order changes and send-time checks
 
 **Decision**
-DataMessage was also switched to the generated type. The order change of multi-element maps is tolerated as the exception in §4.
+NodeFinder's messages were also switched to the generated type. The order change of multi-element maps is tolerated as the exception in §4.
 The existing count limits are written into the schema, and it is accepted that the generated pack also rejects over-limit values at send time.
 The byte-length limit and the variable-length field limits follow the next decision.
 

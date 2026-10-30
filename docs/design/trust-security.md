@@ -57,10 +57,10 @@ At the wire decode of NodeMessage and NodeProfile, the following element counts 
 
 | Target | Limit per message |
 | --- | --- |
-| `push_node_profiles` | 32 |
-| `want_asset_keys` | 1024 |
-| `give_asset_key_locations` | 1024 |
-| `push_asset_key_locations` | 1024 |
+| `AnnounceProfiles` NodeProfiles | 32 |
+| `AnnounceLocations` AssetKeys | 1024 |
+| `LookupResponse` locations | 8 |
+| `LookupResponse` closer nodes | 8 |
 | NodeProfiles per AssetKey | 8 |
 | NodeProfile `addrs` | 8 |
 

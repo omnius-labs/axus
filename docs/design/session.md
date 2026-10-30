@@ -137,7 +137,7 @@ On top of the frame limit, NodeFinder uses the following element counts as the s
 
 | Target | Limit per message |
 | --- | --- |
-| `push_node_profiles` | 32 |
+| `AnnounceProfiles` NodeProfiles | 32 |
 | `AnnounceLocations` AssetKeys | 1024 |
 | `LookupResponse` locations | 8 |
 | `LookupResponse` closer nodes | 8 |
@@ -236,7 +236,7 @@ SessionAccepter drops a Session that `accept` takes later than the handshake dea
 It holds one receiver per use behind its own lock, so a FileExchanger accept that waits for a connection does not stop NodeFinder from accepting; a test confirms it.
 SessionConnector returns a Session only on Accept, and the dialing sides of NodeFinder and FileExchanger close a Session whose cert key differs from the key of the candidate's NodeProfile.
 The wire decode of NodeMessage and NodeProfile checks the element count limits before allocation.
-Tests confirm closing Sessions that exceed limits and the round trip of sending-side information narrowed within limits.
+Tests confirm the decode-time rejection of each element count and a Session closed by a frame over the limit.
 NodeFinder's frame limit is 256 KiB, confirmed by tests sending and receiving at exactly the limit and rejecting over-limit frames.
 FileExchanger starts with the daemon, but it advertises and dials nothing until a file is published or subscribed, and the REST API that starts them is not defined yet.
 Until multiple-version selection is decided, Profile exchange on an untrusted network is not enabled.

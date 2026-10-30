@@ -63,6 +63,7 @@ Received information is given a lifetime and count limit so old location info an
 [TaskCommunicator](../../daemon/modules/engine/src/core/negotiator/node/task_communicator.rs) handles only the per-Session handshake and send/receive.
 Consolidating the decision into one place keeps routing policy from scattering across per-connection workers.
 Each Session has an outbox and a writer task, so a message produced outside the cycle is sent without waiting for it, and the writer sends a Status when a cycle passes with nothing to send.
+The receive side waits out the rest of the cycle only after a message that writes to the store or the cache, because that wait exists to keep a fast peer from repeating that work; a Status and a lookup message are handled immediately.
 The wait comes after processing, and since the §6.1 receive deadline is updated at message reception, the wait does not extend the deadline.
 A peer that sends faster than the cycle is prevented from making the receiving side repeat persistence work.
 
@@ -147,7 +148,7 @@ The element counts of NodeMessages sent and received are kept within the followi
 
 | Target | Limit per message |
 | --- | --- |
-| `push_node_profiles` | 32 |
+| `AnnounceProfiles` NodeProfiles | 32 |
 | `AnnounceLocations` AssetKeys | 1024 |
 | `LookupResponse` locations | 8 |
 | `LookupResponse` closer nodes | 8 |
@@ -223,8 +224,9 @@ One cache also gives the receive state a single bound instead of one per Session
 
 **Decision**
 The lookup task asks the three known nodes closest to the AssetKey, collects the locations and the closer nodes of each answer, and continues with the closer ones until an answer carries a location or the deadline passes.
-A node that is not connected is dialed and the Session is registered as usual.
-The same AssetKey is not looked up again for three lookup intervals.
+A node that is not connected is dialed and the Session is registered as usual, but only while the connected Session count is below its limit.
+The lookup stops when no returned node is closer than the closest one already asked, and the same AssetKey is not looked up again for three lookup intervals.
+A node that provides an AssetKey also holds its own profile as that AssetKey's location, so a lookup that reaches the provider is answered directly.
 
 **Rationale**
 Without a request and an answer, a lookup could not tell "nobody has this key" from "it has not arrived yet", and the caller had to poll the propagation state.

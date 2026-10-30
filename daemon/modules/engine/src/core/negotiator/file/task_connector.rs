@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rand::seq::SliceRandom as _;
+use rand::seq::{IndexedRandom as _, SliceRandom as _};
 use tokio::{select, sync::Mutex as TokioMutex, task::JoinHandle};
 use tracing::warn;
 
@@ -96,16 +96,8 @@ impl TaskConnector {
     }
 
     async fn dial(&self, root_hash: &OmniHash) -> Result<Option<Arc<ExchangeSession>>> {
-        let mut node_profiles = self.ctx.location_finder.find(&AssetKey::file(root_hash.clone())).await?;
-        node_profiles.shuffle(&mut *self.rng.lock());
-        // The nodes that provided blocks fastest are tried first. A node without a record is given the median
-        // throughput, so a new peer neither wins nor loses against the known ones.
-        let median = self.ctx.fetch_median().unwrap_or(0.0);
-        node_profiles.sort_by(|left, right| {
-            let left = self.ctx.fetch_throughput(left.id()).unwrap_or(median);
-            let right = self.ctx.fetch_throughput(right.id()).unwrap_or(median);
-            right.total_cmp(&left)
-        });
+        let node_profiles = self.ctx.location_finder.find(&AssetKey::file(root_hash.clone())).await?;
+        let node_profiles = self.order_by_throughput(node_profiles);
 
         for node_profile in node_profiles {
             let node_id = node_profile.id();
@@ -120,6 +112,32 @@ impl TaskConnector {
         }
 
         Ok(None)
+    }
+
+    /// The nodes that provided blocks fastest first. The throughput is read once per node, so the order is a
+    /// total order even while another Session records a block. A node without a record is inserted at a random
+    /// position, so a new peer is neither preferred nor avoided.
+    fn order_by_throughput(&self, node_profiles: Vec<Arc<NodeProfile>>) -> Vec<Arc<NodeProfile>> {
+        let mut rng = self.rng.lock();
+        let mut known: Vec<(Arc<NodeProfile>, f64)> = Vec::with_capacity(node_profiles.len());
+        let mut unknown: Vec<Arc<NodeProfile>> = Vec::new();
+        for node_profile in node_profiles {
+            match self.ctx.fetch_throughput(node_profile.id()) {
+                Some(throughput) => known.push((node_profile, throughput)),
+                None => unknown.push(node_profile),
+            }
+        }
+        known.shuffle(&mut *rng);
+        // The sort is stable, so nodes with equal throughput keep the shuffled order.
+        known.sort_by(|(_, left), (_, right)| right.total_cmp(left));
+        unknown.shuffle(&mut *rng);
+
+        let mut ordered: Vec<Arc<NodeProfile>> = known.into_iter().map(|(node_profile, _)| node_profile).collect();
+        for node_profile in unknown {
+            let index = (0..=ordered.len()).collect::<Vec<_>>().choose(&mut *rng).copied().unwrap_or_default();
+            ordered.insert(index, node_profile);
+        }
+        ordered
     }
 
     fn is_candidate(&self, node_id: &[u8], root_hash: &OmniHash) -> bool {

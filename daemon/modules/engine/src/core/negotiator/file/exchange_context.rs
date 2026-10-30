@@ -301,11 +301,6 @@ impl ExchangeContext {
         self.fetch_score.lock().throughput(node_id, Instant::now())
     }
 
-    /// The throughput a node without a record is given, so that it is neither preferred nor avoided.
-    pub fn fetch_median(&self) -> Option<f64> {
-        self.fetch_score.lock().median(Instant::now())
-    }
-
     /// How many requests the Session may keep awaiting responses. A slow node keeps fewer, which bounds its share
     /// without excluding it, and a node with no record keeps the maximum.
     pub fn pending_limit(&self, node_id: &[u8]) -> usize {

@@ -122,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn the_median_places_a_node_without_a_record_between_the_others() {
+    fn the_median_of_the_known_nodes_is_between_them() {
         let start = Instant::now();
         let mut score = FetchScore::new(Duration::from_secs(600), 4);
         for second in 0..4 {

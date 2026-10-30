@@ -291,9 +291,10 @@ mod tests {
         // After the stall the same block is offered to the second Session as the second copy.
         assert_eq!(assigner.assign(&root, 2, b"b", 1, now + Duration::from_secs(15)), first);
 
-        // A saved block moves the tail back to the count of the remaining blocks.
+        // A saved block moves the tail back to the count of the remaining blocks, so the next block is
+        // assigned to one Session again and the second Session gets a different one.
         assigner.complete(&root, &first[0].block_hash, now + Duration::from_secs(15));
         let next = assigner.assign(&root, 2, b"b", 1, now + Duration::from_secs(16));
-        assert_ne!(Some(&next[0]), None);
+        assert_ne!(next.first().map(|wanted| &wanted.block_hash), Some(&first[0].block_hash));
     }
 }

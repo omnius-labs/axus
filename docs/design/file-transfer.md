@@ -281,7 +281,8 @@ A node retracts blocks it no longer needs with a cancel message carrying their h
 The peer still answers each request with its presence bitmap, so the answers keep the order of the requests.
 The bitmap is read against the hashes the requesting node still wants: the bits of the hashes it retracted meanwhile are ignored, because nobody asks for those blocks anymore.
 A presence bitmap that answers no request, because the requesting node already dropped that request, is ignored rather than treated as a violation.
-A block sent before the peer processed the cancel reaches the requesting node after the retraction; it is dropped without being treated as a violation, however many copies arrive until the grace ends.
+A block sent before the peer processed the cancel reaches the requesting node after the retraction.
+It is not treated as a violation for as long as the grace of §5.8 lasts, however many copies arrive, and the content hash decides whether it is stored: a peer that needs longer than the retraction time to send one block still completes it.
 
 The wire of §5.4 and §5.5 changed in place: the version bit stays the same and no compatibility with the earlier messages is kept, because no deployment of the old wire exists.
 
@@ -303,7 +304,7 @@ An assigned block is returned to unassigned on an absent bit of the presence bit
 Because the bitmap names the absent hashes of a whole request at once, one request releases every block that peer lacks.
 A node that answered a request with no present bit of a rank is not asked for that rank again for a period.
 An answer with some present bits does not throttle the rank, because the peer holds blocks of it; the absent hashes are released and the other Sessions take them first, so the waste stops at the blocks of one rank.
-A node that answered present and then did not send the block within the retraction time is treated the same way: that rank is not asked of it for a period, because asking again only repeats the wait.
+A node whose presence bitmap arrived before the retraction and then did not send the block within the retraction time is treated the same way: that rank is not asked of it for a period, because asking again only repeats the wait.
 Recording the absence per rank keeps one entry per node, root hash, and rank, whereas remembering each absent hash would grow with the blocks and the peers.
 
 A request whose last answer is older than the soft deadline is retracted rather than closed.
@@ -346,7 +347,7 @@ A slow node still receives blocks and can rise again after the period, because a
 ### 5.7 Verification and violations
 
 A received block is checked in two stages.
-FileExchanger confirms that the block's hash is in a request awaiting a response on that Session, or was retracted by a cancel within a short period.
+FileExchanger confirms that the block's hash is in a request awaiting a response on that Session, or was retracted by a cancel within the grace of §5.8.
 `FileSubscriber::write_block` computes the content hash and checks it against the hash carried on the block, storing only matching blocks.
 `write_block` returns, distinguishing the three outcomes: stored, unneeded, and hash mismatch.
 Because a tainted block is not persisted, the check happens before writing the metadata and block bodies.
@@ -387,7 +388,7 @@ The following values may vary per node, with the table values as the defaults.
 | Time until a Session neither side wants is closed | 60 s |
 | Time a mutually-unwanted closed pair stays out of the dialing candidates | 10 min |
 | Time before a node that answered a rank with no present bit is asked for that rank again | 30 s |
-| Time a retracted hash is accepted and dropped | 30 s |
+| Time a retracted hash is still accepted | 60 s |
 | Time a request may wait for its answer before it is retracted | 10 s |
 | Un-fetched blocks that start the tail duplication | 32 |
 | Un-fetched blocks and the idle time that start the tail duplication | 256, 15 s |
@@ -623,7 +624,7 @@ Duplicating a fixed fraction, for example the last 2%, makes the duplicated bloc
 
 **Decision**
 A node retracts blocks it no longer needs with a cancel message carrying their hashes.
-A block for a retracted hash that arrives within a short period is dropped without being treated as a violation.
+A block for a retracted hash that arrives within the grace is not treated as a violation, and is stored when the Store still needs it; a peer that takes longer than the retraction time to send one block therefore still completes it instead of being excluded.
 
 **Rationale**
 Tail duplication and the retraction of a slow request both leave requests the node no longer needs, and without a cancel the peer sends a full block that is discarded.
@@ -856,7 +857,7 @@ They also confirm that a request crossing the choke is ignored without blame, th
 A test with real NodeFinders confirms that advertising, lookup, and transfer work together.
 The presence bitmap of §5.4, the cancel message, the rank throttle of §5.5, and the tail duplication are implemented.
 The answering side builds the bitmap from an existence check on both Stores and sends it ahead of the blocks of the same request, and it removes the hashes a cancel retracts from its queue.
-The requesting side releases the absent hashes, stops asking the node for those ranks for the period, assigns a block to two Sessions in the tail, and retracts its copy with a cancel once the other Session saved the block; a block that arrives after the retraction is dropped without blame.
+The requesting side releases the absent hashes, stops asking the node for those ranks for the period, assigns a block to two Sessions in the tail, and retracts its copy with a cancel once the other Session saved the block; a block that arrives after the retraction is not blamed and is stored when it is still needed.
 The fetch throughput of §5.6 is implemented: the received bytes of the blocks whose content hash matched are recorded per node ID over the period, the dialing candidates are ordered by it with a node without a record at a random position, and a slow node keeps fewer requests awaiting responses.
 The per-request retraction of §5.5 is implemented: a request whose last answer is older than the soft deadline is retracted with a cancel and its blocks go back to the assignment, while the Session stays open and is closed only at the request deadline.
 There is no REST API to start publishing and subscribing.

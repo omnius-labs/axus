@@ -158,7 +158,7 @@ SELECT value, last_seen, fail_count, last_attempt
     }
 
     /// node ID ごとに 1 行だけ保持し、`NodeProfile::updated_time` が新しいものだけで置き換える。
-    /// 受信しただけでは到達可能と分からないため、`last_seen` と `fail_count` は変えない
+    /// 受信しただけでは到達可能と分からないため、`last_seen` と `fail_count` は変えない（新規行は未到達の 0）
     pub async fn insert_or_update_node_profiles(&self, items: &[&NodeProfile]) -> Result<()> {
         const CHUNK_SIZE: i64 = 100;
 
@@ -170,14 +170,14 @@ INSERT INTO node_profiles (node_id, value, profile_updated_time, last_seen, fail
             );
 
             let now = self.clock.now().naive_utc();
-            let now_seconds = self.clock.now().timestamp();
             let rows: Vec<(Vec<u8>, String, i64)> = chunk.iter().map(|v| Ok((v.id().to_vec(), v.to_uri()?, v.updated_time()))).collect::<Result<_>>()?;
 
             query_builder.push_values(rows, |mut b, (node_id, value, profile_updated_time)| {
                 b.push_bind(node_id);
                 b.push_bind(value);
                 b.push_bind(profile_updated_time);
-                b.push_bind(now_seconds);
+                // 受信しただけでは到達可能と分からないので、未到達として 0 で入れる
+                b.push_bind(0);
                 b.push_bind(0);
                 b.push_bind(0);
                 b.push_bind(now);
@@ -417,6 +417,31 @@ mod tests {
         let stored: Vec<NodeProfile> = repo.fetch_node_profiles().await?.into_iter().map(|known| known.profile).collect();
         assert_eq!(stored.len(), 2);
         assert!(!stored.contains(&profiles[0]), "the node seen longest ago is evicted first");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_profile_seen_only_through_gossip_is_evicted_before_a_reached_one() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let clock = Arc::new(FakeClockUtc::new(DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")?.into()));
+        let repo = NodeFinderRepo::new(dir.path().to_str().unwrap(), clock.clone()).await?;
+
+        // 先に到達済みの node、後から gossip だけで知った node
+        let reached = NodeProfile::random_for_test(vec![OmniAddr::new("reached")]);
+        repo.insert_or_update_node_profiles(&[&reached]).await?;
+        repo.mark_reachable(reached.id()).await?;
+        clock.advance(std::time::Duration::from_secs(10));
+        let gossiped = NodeProfile::random_for_test(vec![OmniAddr::new("gossiped")]);
+        repo.insert_or_update_node_profiles(&[&gossiped]).await?;
+
+        let stored = repo.fetch_node_profiles().await?;
+        assert_eq!(stored[0].profile, reached, "a reached node ranks above a gossiped one");
+        assert_eq!(stored[0].last_seen, clock.now().timestamp() - 10);
+        assert_eq!(stored[1].last_seen, 0);
+
+        repo.shrink(1).await?;
+        let stored: Vec<NodeProfile> = repo.fetch_node_profiles().await?.into_iter().map(|known| known.profile).collect();
+        assert_eq!(stored, vec![reached]);
         Ok(())
     }
 

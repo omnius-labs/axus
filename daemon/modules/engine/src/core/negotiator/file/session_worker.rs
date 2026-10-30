@@ -492,11 +492,12 @@ impl SessionWorker {
     }
 
     async fn on_block(&self, state: &mut WorkerState, block_hash: OmniHash, value: Vec<u8>) -> Option<Closing> {
-        // A block sent before the peer processed our cancel may arrive afterwards; it is dropped without blame.
-        if state.retracted.take(&block_hash, Instant::now()) {
-            return None;
-        }
+        // A block the Session waits for is accepted even while a cancel of an earlier copy is still remembered.
         if !Self::take_pending(state, &block_hash) {
+            // A block sent before the peer processed our cancel may arrive afterwards; it is dropped without blame.
+            if state.retracted.take(&block_hash, Instant::now()) {
+                return None;
+            }
             return Some(Closing::Violation("block that was not requested"));
         }
         state.last_progress = Instant::now();

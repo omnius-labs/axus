@@ -299,7 +299,7 @@ A node that answered a request with no present bit of a rank is not asked for th
 An answer with some present bits does not throttle the rank, because the peer holds blocks of it; the absent hashes are released and the other Sessions take them first, so the waste stops at the blocks of one rank.
 Recording the absence per rank keeps one entry per node, root hash, and rank, whereas remembering each absent hash would grow with the blocks and the peers.
 
-A request that stays unanswered for the soft deadline while the Session answers other requests is retracted rather than closed.
+A request whose last answer is older than the soft deadline is retracted rather than closed.
 The peer keeps the Session and its place in the dialing order, and the blocks are reassigned without waiting for the request deadline (§5.4).
 
 #### Tail duplication
@@ -626,7 +626,7 @@ Treating a crossing block as a violation excludes a peer that followed the proto
 #### Judge a slow peer per request and keep the Session
 
 **Decision**
-A request that stays unanswered past the soft deadline, while the Session answers other requests, is retracted and its blocks are reassigned; the Session stays open.
+A request whose last answer is older than the soft deadline is retracted and its blocks are reassigned; the Session stays open.
 The Session is closed only when no answer arrives within the request deadline.
 
 **Rationale**

@@ -166,7 +166,9 @@ impl TaskConnector {
                     self.ctx.set_aside_pair(node_profile.id(), root_hash, self.ctx.intervals.reject_retry);
                     return None;
                 }
-                Err(error) => warn!(error_message = error.to_string(), "file exchange handshake failed"),
+                Err(error) => {
+                    warn!(error_message = error.to_string(), "file exchange handshake failed")
+                }
             }
         }
 

@@ -772,6 +772,44 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_peer_that_never_answers_loses_its_blocks_and_the_file_completes_from_another_peer() -> TestResult {
+        let publisher = TestNode::new().await?;
+        let peer = Arc::new(RawPeer::new().await?);
+        let token = CancellationToken::new();
+        let serving = peer.serve(Behavior::IgnoreRequests, token.clone());
+        let intervals = FileExchangerIntervals {
+            request_retract_after: Duration::from_millis(100),
+            request_timeout: Duration::from_secs(5),
+            ..fast_intervals()
+        };
+        let subscriber = TestNode::with_intervals(|_| {}, intervals).await?;
+        let content = content(8 * 1024);
+        let root_hash = publisher.publish(&content).await?;
+        // The peer answers nothing, so every block it is asked for is retracted and asked again.
+        subscriber.knows(&[&peer.endpoint.profile, &publisher.endpoint.profile]);
+
+        let (id, output) = subscriber.subscribe(&root_hash, "output.bin").await?;
+        let requests = peer.requests.clone();
+        wait_for(|| {
+            let requests = requests.clone();
+            async move { requests.load(std::sync::atomic::Ordering::SeqCst) > 1 }
+        })
+        .await?;
+
+        // The blocks come from the peer that sends them, and the silent peer keeps its Session.
+        subscriber.wait_completed(&id).await?;
+        assert_eq!(tokio::fs::read(&output).await?, content);
+        assert!(!subscriber.ctx().is_excluded(&peer.id()));
+
+        token.cancel();
+        let _ = serving.await;
+        publisher.shutdown().await;
+        subscriber.shutdown().await;
+        peer.endpoint.session_accepter.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_presence_bitmap_that_does_not_match_the_request_is_a_violation() -> TestResult {
         expect_exclusion_then_transfer(Behavior::ShortHaveMap, true).await
     }

@@ -54,8 +54,8 @@ impl FetchScore {
         Some(bytes as f64 / span.as_secs_f64())
     }
 
-    /// The median throughput of the nodes that provided enough blocks, which is where a node without a record is
-    /// placed so that a new peer is neither preferred nor avoided.
+    /// The median throughput of the nodes that provided enough blocks. It is the reference the pending limit of a
+    /// scored node is scaled against; the dial order places a node without a record at a random position instead.
     pub fn median(&self, now: Instant) -> Option<f64> {
         let mut values: Vec<f64> = self.received.keys().filter_map(|node_id| self.throughput(node_id, now)).collect();
         if values.is_empty() {

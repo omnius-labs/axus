@@ -282,7 +282,8 @@ The peer still answers each request with its presence bitmap, so the answers kee
 The bitmap is read against the hashes the requesting node still wants: the bits of the hashes it retracted meanwhile are ignored, because nobody asks for those blocks anymore.
 A presence bitmap that answers no request, because the requesting node already dropped that request, is ignored rather than treated as a violation.
 A block sent before the peer processed the cancel reaches the requesting node after the retraction.
-It is not treated as a violation for as long as the grace of §5.8 lasts, however many copies arrive, and the content hash decides whether it is stored: a peer that needs longer than the retraction time to send one block still completes it.
+It is not treated as a violation for as long as the grace of §5.8 lasts, however many copies arrive.
+When the Store still needs the block, the content hash decides whether it is stored, so a peer that needs longer than the retraction time to send one block still completes it.
 
 The wire of §5.4 and §5.5 changed in place: the version bit stays the same and no compatibility with the earlier messages is kept, because no deployment of the old wire exists.
 
@@ -304,7 +305,8 @@ An assigned block is returned to unassigned on an absent bit of the presence bit
 Because the bitmap names the absent hashes of a whole request at once, one request releases every block that peer lacks.
 A node that answered a request with no present bit of a rank is not asked for that rank again for a period.
 An answer with some present bits does not throttle the rank, because the peer holds blocks of it; the absent hashes are released and the other Sessions take them first, so the waste stops at the blocks of one rank.
-A node whose presence bitmap arrived before the retraction and then did not send the block within the retraction time is treated the same way: that rank is not asked of it for a period, because asking again only repeats the wait.
+A node whose presence bitmap arrived before the retraction and then did not send any of the request's blocks within the retraction time is treated the same way: that rank is not asked of it for a period, because asking again only repeats the wait.
+A request that delivered some of its blocks is only given back when it is retracted, because that peer is sending, just slower than the retraction time; the throughput record is what lowers its share.
 Recording the absence per rank keeps one entry per node, root hash, and rank, whereas remembering each absent hash would grow with the blocks and the peers.
 
 A request whose last answer is older than the soft deadline is retracted rather than closed.
@@ -620,7 +622,7 @@ The thresholds on the count keep the duplication out of the body of the transfer
 Always requesting two copies doubles the received bytes of every block for a gain that exists only when few blocks remain.
 Duplicating a fixed fraction, for example the last 2%, makes the duplicated blocks grow with the file: 2% of a 1 TiB file is about 20,000 blocks.
 
-#### Retract blocks with a cancel message and drop a block that crosses it
+#### Retract blocks with a cancel message and accept a block that crosses it
 
 **Decision**
 A node retracts blocks it no longer needs with a cancel message carrying their hashes.
@@ -629,7 +631,7 @@ A block for a retracted hash that arrives within the grace is not treated as a v
 **Rationale**
 Tail duplication and the retraction of a slow request both leave requests the node no longer needs, and without a cancel the peer sends a full block that is discarded.
 The block may already be in flight when the cancel arrives, so treating it as unrequested would exclude a peer that behaved correctly.
-The period is short because the record is only needed until a block sent before the cancel could have arrived.
+The period is as long as a request may wait, because a peer that needed longer than the retraction time to send the block still finishes it, and the block is stored when the Store needs it.
 
 **Rejected**
 Letting the retracted blocks arrive and discarding them at the Store costs up to one block length per retraction and counts bytes the peer spent on requested data as the peer's fault.
@@ -644,6 +646,7 @@ The Session is closed only when no answer arrives within the request deadline.
 **Rationale**
 Measuring only from the last response lets a peer that answers one block a minute keep its assignments and its connection slot indefinitely, and a peer that answers only presence bitmaps would keep the Session open without ever sending a block.
 Retraction plus the rank throttle of §5.5 removes those blocks from the peer, and the request deadline still closes a peer that stops answering altogether.
+The rank is stopped only when the retracted request delivered no block at all, so a peer that is merely slower than the retraction time is not treated as one that never sends.
 Closing the Session instead costs a handshake and a new dial, cannot be distinguished from a flaky connection, and also triggers the exclusion.
 The throughput record lowers the number of requests such a peer is given, so the retraction only has to recover the block it is holding.
 

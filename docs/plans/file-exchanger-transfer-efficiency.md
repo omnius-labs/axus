@@ -63,7 +63,7 @@ The presence bitmap and the rank throttle replace the per-hash record of the ass
 | --- | --- |
 | Presence bitmap per request and the rank throttle | [file-transfer.md §6.1](../design/file-transfer.md#convey-the-presence-of-a-whole-request-in-one-bitmap) |
 | Two copies in the tail and the thresholds | [file-transfer.md §6.1](../design/file-transfer.md#assign-one-block-to-two-sessions-in-the-tail) |
-| Cancel and the block that crosses it | [file-transfer.md §6.1](../design/file-transfer.md#retract-blocks-with-a-cancel-message-and-drop-a-block-that-crosses-it) |
+| Cancel and the block that crosses it | [file-transfer.md §6.1](../design/file-transfer.md#retract-blocks-with-a-cancel-message-and-accept-a-block-that-crosses-it) |
 | Per-request retraction instead of closing the Session | [file-transfer.md §6.1](../design/file-transfer.md#judge-a-slow-peer-per-request-and-keep-the-session) |
 | Fetch throughput in the dialing order and the pending count | [file-transfer.md §6.1](../design/file-transfer.md#order-fetch-targets-by-the-measured-throughput) |
 | Time constants injected through Intervals | [file-transfer.md](../design/file-transfer.md#inject-fileexchangers-time-constants-through-intervals) |

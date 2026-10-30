@@ -114,6 +114,7 @@ axum-extra = { version = "0.12", features = [
 bytes = "1"
 headers = "0.4"
 http = "1"
+url = "2.5.4"
 
 [workspace.lints.clippy]
 uninlined_format_args = "allow"

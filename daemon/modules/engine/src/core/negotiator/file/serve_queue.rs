@@ -64,6 +64,8 @@ impl ServeQueue {
     }
 
     /// Removes the hashes a cancel retracted, and drops a request that is left with nothing to answer.
+    /// The bitmap of a request is owed even when every block of it was retracted, because the requesting node
+    /// matches each answer with the requests it sent in order.
     pub fn cancel(&self, block_hashes: &[OmniHash]) {
         let mut requests = self.requests.lock();
         let mut kept = VecDeque::with_capacity(requests.len());
@@ -71,7 +73,7 @@ impl ServeQueue {
             let queued = request.block_hashes.len();
             request.block_hashes.retain(|hash| !block_hashes.contains(hash));
             let emptied = queued > 0 && request.block_hashes.is_empty();
-            if !emptied {
+            if !emptied || request.bits.is_some() {
                 kept.push_back(request);
             }
         }
@@ -163,6 +165,8 @@ mod tests {
 
         assert_eq!(queue.next().await, ServeItem::Presence(vec![0b0000_0011]));
         assert_eq!(queue.next().await, ServeItem::Block(hash(2)));
+        // The bitmap of the second request is still owed even though its only block was retracted.
+        assert_eq!(queue.next().await, ServeItem::Presence(vec![0b0000_0001]));
         assert!(tokio::time::timeout(Duration::from_millis(50), queue.next()).await.is_err());
     }
 

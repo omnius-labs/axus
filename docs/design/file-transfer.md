@@ -275,6 +275,7 @@ Measuring the deadline from the last response instead of per request keeps a Ses
 Because a choke removes all awaiting responses at that point, the request deadline does not advance while choked.
 
 A node retracts blocks it no longer needs with a cancel message carrying their hashes, and the peer removes them from the requests it has not answered.
+The peer still answers each request with its presence bitmap, so the answers keep the order of the requests; the requesting node ignores the bits of the retracted hashes.
 A block sent before the peer processed the cancel reaches the requesting node after the retraction; it is dropped without being treated as a violation.
 
 A node that conveyed a choke discards unresponded requests received from that peer and ignores requests arriving while choked.

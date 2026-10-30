@@ -10,7 +10,7 @@ use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
 use crate::{
     base::connection::{FramedRecvExt as _, FramedSendExt as _, FramedStream},
-    generated::axus::file::{ExchangeMessage, MAX_BLOCK_LENGTH, MAX_PENDING_REQUESTS},
+    generated::axus::file::{ExchangeMessage, MAX_BLOCK_LENGTH, MAX_PENDING_REQUESTS, MAX_REQUEST_BLOCK_HASHES},
     prelude::*,
     protocol::file::ExchangeMessageCodec,
 };
@@ -316,9 +316,18 @@ impl SessionWorker {
             }
         }
         state.pending.retain(|request| !request.is_done());
-        if control_tx.try_send(ExchangeMessage::Cancel { block_hashes: completed }).is_err() {
-            // The cancel is best effort: the block is dropped when it arrives within the grace anyway.
-            debug!(session_id = self.session.id, "a cancel could not be queued");
+        // One message carries at most the hashes a request may carry, so a tick with many completed
+        // blocks sends several cancels.
+        for block_hashes in completed.chunks(MAX_REQUEST_BLOCK_HASHES as usize) {
+            if control_tx
+                .try_send(ExchangeMessage::Cancel {
+                    block_hashes: block_hashes.to_vec(),
+                })
+                .is_err()
+            {
+                // The cancel is best effort: the block is dropped when it arrives within the grace anyway.
+                debug!(session_id = self.session.id, "a cancel could not be queued");
+            }
         }
     }
 

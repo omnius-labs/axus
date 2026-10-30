@@ -35,16 +35,24 @@ enum Closing {
 struct PendingRequest {
     blocks: Vec<(OmniHash, u32)>,
     remaining: HashSet<OmniHash>,
+    /// Whether the presence bitmap of this request was applied. It is not until then, because the bitmap
+    /// answers the oldest request and has to be matched with it even when every block was retracted meanwhile.
+    bitmap_applied: bool,
 }
 
 impl PendingRequest {
     fn new(blocks: Vec<(OmniHash, u32)>) -> Self {
         let remaining = blocks.iter().map(|(hash, _)| hash.clone()).collect();
-        Self { blocks, remaining }
+        Self {
+            blocks,
+            remaining,
+            bitmap_applied: false,
+        }
     }
 
-    fn is_empty(&self) -> bool {
-        self.remaining.is_empty()
+    /// Whether nothing is left to answer and the request can be dropped.
+    fn is_done(&self) -> bool {
+        self.bitmap_applied && self.remaining.is_empty()
     }
 
     /// The rank of the block, when the request is still waiting for it.
@@ -84,6 +92,9 @@ struct WorkerState {
     conveyed_choke: bool,
     status_sent_at: Option<Instant>,
     pending: Vec<PendingRequest>,
+    /// The hashes this Session retracted with a cancel. A block for one of them may already be in flight,
+    /// so it is dropped until the grace ends instead of being a violation.
+    retracted: Expirations<OmniHash>,
     last_progress: Instant,
     unwanted_since: Option<Instant>,
 }
@@ -96,6 +107,7 @@ impl WorkerState {
             conveyed_choke: true,
             status_sent_at: None,
             pending: Vec::new(),
+            retracted: Expirations::new(),
             last_progress: now,
             unwanted_since: None,
         }
@@ -275,8 +287,39 @@ impl SessionWorker {
             return Some(Closing::Timeout("no response within the request deadline"));
         }
 
+        self.retract_completed_blocks(state, control_tx, now);
         self.fill_requests(state, control_tx, want).await;
         None
+    }
+
+    /// Retracts the blocks another Session saved first, so that the peer stops sending a copy nobody needs.
+    /// The assignment is dropped by the one that saved the block, so the Session only stops expecting it.
+    fn retract_completed_blocks(&self, state: &mut WorkerState, control_tx: &mpsc::Sender<ExchangeMessage>, now: Instant) {
+        let mut completed = Vec::new();
+        for request in &state.pending {
+            for (hash, _) in &request.blocks {
+                if request.remaining.contains(hash) && !self.ctx.is_assigned(&self.session.root_hash, self.session.id, hash) {
+                    completed.push(hash.clone());
+                }
+            }
+        }
+        if completed.is_empty() {
+            return;
+        }
+
+        for hash in &completed {
+            state.retracted.insert(hash.clone(), now + self.ctx.intervals.cancel_grace);
+        }
+        for request in &mut state.pending {
+            for hash in &completed {
+                request.remaining.remove(hash);
+            }
+        }
+        state.pending.retain(|request| !request.is_done());
+        if control_tx.try_send(ExchangeMessage::Cancel { block_hashes: completed }).is_err() {
+            // The cancel is best effort: the block is dropped when it arrives within the grace anyway.
+            debug!(session_id = self.session.id, "a cancel could not be queued");
+        }
     }
 
     /// Sends requests until the requests awaiting responses reach the limit or nothing is left to assign.
@@ -301,7 +344,7 @@ impl SessionWorker {
                 block_hashes: blocks.iter().map(|(hash, _)| hash.clone()).collect(),
             };
             if control_tx.try_send(request).is_err() {
-                self.ctx.release_blocks(&self.session.root_hash, blocks.into_iter().map(|(hash, _)| hash));
+                self.ctx.release_blocks(&self.session.root_hash, self.session.id, blocks.into_iter().map(|(hash, _)| hash));
                 return;
             }
             if state.pending.is_empty() {
@@ -314,9 +357,13 @@ impl SessionWorker {
     /// Applies the bitmap of the oldest request and releases the blocks the peer does not hold.
     fn on_have_map(&self, state: &mut WorkerState, bits: &[u8]) -> Option<Closing> {
         let (request_count, absent) = {
-            let Some(request) = state.pending.first() else {
+            let Some(request) = state.pending.first_mut() else {
                 return Some(Closing::Violation("presence bitmap without a request"));
             };
+            if request.bitmap_applied {
+                return Some(Closing::Violation("presence bitmap without a request"));
+            }
+            request.bitmap_applied = true;
             if bits.len() != request.blocks.len().div_ceil(8) {
                 return Some(Closing::Violation("presence bitmap that does not match the request"));
             }
@@ -335,15 +382,17 @@ impl SessionWorker {
         if absent.len() == request_count {
             // The peer holds none of this request, so it is not asked for these ranks for a while.
             let ranks: Vec<u32> = absent.iter().map(|(_, rank)| *rank).collect();
-            let block_hashes: Vec<OmniHash> = absent.into_iter().map(|(hash, _)| hash).collect();
-            self.ctx.mark_rank_absent(&self.session.root_hash, &self.session.node_id, ranks, block_hashes);
-            state.pending.remove(0);
+            let block_hashes: Vec<OmniHash> = absent.iter().map(|(hash, _)| hash.clone()).collect();
+            self.ctx
+                .mark_rank_absent(&self.session.root_hash, self.session.id, &self.session.node_id, ranks, block_hashes);
+            state.pending[0].remaining.clear();
         } else {
             for (hash, _) in &absent {
                 state.pending[0].remaining.remove(hash);
             }
-            self.ctx.release_blocks(&self.session.root_hash, absent.into_iter().map(|(hash, _)| hash));
+            self.ctx.release_blocks(&self.session.root_hash, self.session.id, absent.into_iter().map(|(hash, _)| hash));
         }
+        state.pending.retain(|request| !request.is_done());
         None
     }
 
@@ -393,6 +442,11 @@ impl SessionWorker {
                 self.fill_requests(state, control_tx, want).await;
                 None
             }
+            ExchangeMessage::Cancel { block_hashes } => {
+                // The peer no longer needs these blocks, which it may have requested before its own retraction.
+                self.serve_queue.cancel(&block_hashes);
+                None
+            }
             ExchangeMessage::Hello { .. } | ExchangeMessage::Open { .. } | ExchangeMessage::Accept | ExchangeMessage::Reject => {
                 Some(Closing::Violation("message that belongs to the handshake"))
             }
@@ -400,6 +454,10 @@ impl SessionWorker {
     }
 
     async fn on_block(&self, state: &mut WorkerState, block_hash: OmniHash, value: Vec<u8>) -> Option<Closing> {
+        // A block sent before the peer processed our cancel may arrive afterwards; it is dropped without blame.
+        if state.retracted.take(&block_hash, Instant::now()) {
+            return None;
+        }
         if !Self::take_pending(state, &block_hash) {
             return Some(Closing::Violation("block that was not requested"));
         }
@@ -422,7 +480,7 @@ impl SessionWorker {
             Ok(WriteBlockResult::HashMismatch) => Some(Closing::Violation("block whose content hash does not match")),
             Err(error) => {
                 warn!(error_message = error.to_string(), "saving a received block failed");
-                self.ctx.release_blocks(&self.session.root_hash, [block_hash]);
+                self.ctx.release_blocks(&self.session.root_hash, self.session.id, [block_hash]);
                 None
             }
         }
@@ -447,7 +505,7 @@ impl SessionWorker {
     fn take_pending(state: &mut WorkerState, block_hash: &OmniHash) -> bool {
         for index in 0..state.pending.len() {
             if state.pending[index].take(block_hash).is_some() {
-                if state.pending[index].is_empty() {
+                if state.pending[index].is_done() {
                     state.pending.remove(index);
                 }
                 return true;
@@ -458,7 +516,7 @@ impl SessionWorker {
 
     fn release_pending(&self, state: &mut WorkerState) {
         let released: Vec<OmniHash> = state.pending.drain(..).flat_map(|request| request.blocks.into_iter().map(|(hash, _)| hash)).collect();
-        self.ctx.release_blocks(&self.session.root_hash, released);
+        self.ctx.release_blocks(&self.session.root_hash, self.session.id, released);
     }
 }
 

@@ -63,6 +63,21 @@ impl ServeQueue {
         self.requests.lock().clear();
     }
 
+    /// Removes the hashes a cancel retracted, and drops a request that is left with nothing to answer.
+    pub fn cancel(&self, block_hashes: &[OmniHash]) {
+        let mut requests = self.requests.lock();
+        let mut kept = VecDeque::with_capacity(requests.len());
+        for mut request in requests.drain(..) {
+            let queued = request.block_hashes.len();
+            request.block_hashes.retain(|hash| !block_hashes.contains(hash));
+            let emptied = queued > 0 && request.block_hashes.is_empty();
+            if !emptied {
+                kept.push_back(request);
+            }
+        }
+        *requests = kept;
+    }
+
     /// Waits for the next message to answer, in the order the requests arrived.
     pub async fn next(&self) -> ServeItem {
         loop {
@@ -137,6 +152,18 @@ mod tests {
         assert_eq!(queue.next().await, ServeItem::Presence(vec![0b0000_0000]));
         assert!(tokio::time::timeout(Duration::from_millis(50), queue.next()).await.is_err());
         assert_eq!(queue.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_cancel_removes_the_hash_from_the_request_it_was_queued_with() {
+        let queue = ServeQueue::new(2);
+        assert!(queue.push(vec![0b0000_0011], vec![hash(1), hash(2)]));
+        assert!(queue.push(vec![0b0000_0001], vec![hash(3)]));
+        queue.cancel(&[hash(1), hash(3)]);
+
+        assert_eq!(queue.next().await, ServeItem::Presence(vec![0b0000_0011]));
+        assert_eq!(queue.next().await, ServeItem::Block(hash(2)));
+        assert!(tokio::time::timeout(Duration::from_millis(50), queue.next()).await.is_err());
     }
 
     #[tokio::test]

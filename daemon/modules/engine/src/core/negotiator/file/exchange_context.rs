@@ -92,7 +92,15 @@ impl ExchangeContext {
             file_subscriber,
             location_finder,
             registry: ExchangeSessionRegistry::new(),
-            assigner: Mutex::new(BlockAssigner::new(intervals.rank_absent_retry)),
+            assigner: Mutex::new(BlockAssigner::new(
+                intervals.rank_absent_retry,
+                TailOption {
+                    remaining: intervals.tail_remaining,
+                    stall_remaining: intervals.tail_stall_remaining,
+                    stall: intervals.tail_stall,
+                    copies: intervals.tail_copies,
+                },
+            )),
             wanted_refreshed_at: Mutex::new(HashMap::new()),
             choke: Mutex::new(ChokeManager::new(intervals.ranking_window, option.unchoke_count, intervals.unchoke_rotation)),
             excluded_nodes: Mutex::new(Expirations::new()),
@@ -246,16 +254,22 @@ impl ExchangeContext {
             .collect();
         self.wanted_refreshed_at.lock().insert(root_hash.clone(), now);
         let mut assigner = self.assigner.lock();
-        assigner.update_wanted(root_hash, wanted);
+        assigner.update_wanted(root_hash, wanted, now);
         Ok(assigner.assign(root_hash, session_id, node_id, limit, now))
     }
 
     pub fn complete_block(&self, root_hash: &OmniHash, block_hash: &OmniHash) {
-        self.assigner.lock().complete(root_hash, block_hash);
+        self.assigner.lock().complete(root_hash, block_hash, Instant::now());
     }
 
-    pub fn release_blocks(&self, root_hash: &OmniHash, block_hashes: impl IntoIterator<Item = OmniHash>) {
-        self.assigner.lock().release(root_hash, block_hashes);
+    /// Whether the Session is still expected to answer with the block. It stops being expected when another
+    /// Session saved the same block in the tail, so the Session retracts it instead of keeping it pending.
+    pub fn is_assigned(&self, root_hash: &OmniHash, session_id: u64, block_hash: &OmniHash) -> bool {
+        self.assigner.lock().is_assigned(root_hash, session_id, block_hash)
+    }
+
+    pub fn release_blocks(&self, root_hash: &OmniHash, session_id: u64, block_hashes: impl IntoIterator<Item = OmniHash>) {
+        self.assigner.lock().release(root_hash, session_id, block_hashes);
     }
 
     pub fn release_session_blocks(&self, root_hash: &OmniHash, session_id: u64) {
@@ -263,10 +277,10 @@ impl ExchangeContext {
     }
 
     /// Releases the blocks the node does not hold and stops asking it for their ranks for a while.
-    pub fn mark_rank_absent(&self, root_hash: &OmniHash, node_id: &[u8], ranks: impl IntoIterator<Item = u32>, block_hashes: impl IntoIterator<Item = OmniHash>) {
+    pub fn mark_rank_absent(&self, root_hash: &OmniHash, session_id: u64, node_id: &[u8], ranks: impl IntoIterator<Item = u32>, block_hashes: impl IntoIterator<Item = OmniHash>) {
         let now = Instant::now();
         let mut assigner = self.assigner.lock();
-        assigner.release(root_hash, block_hashes);
+        assigner.release(root_hash, session_id, block_hashes);
         assigner.mark_rank_absent(root_hash, node_id, ranks, now);
     }
 

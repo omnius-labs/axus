@@ -176,6 +176,12 @@ mod tests {
             unwanted_cooldown: Duration::from_secs(2),
             reject_retry: Duration::from_millis(300),
             rank_absent_retry: Duration::from_millis(200),
+            cancel_grace: Duration::from_secs(2),
+            // The tail stays off, so a test that does not arrange for it transfers one copy of each block.
+            tail_remaining: 0,
+            tail_stall_remaining: 0,
+            tail_stall: Duration::from_millis(500),
+            tail_copies: 2,
             ranking_window: Duration::from_secs(10),
             unchoke_rotation: Duration::from_millis(300),
             violation_exclusion: Duration::from_secs(60),
@@ -256,6 +262,10 @@ mod tests {
         }
 
         async fn with_option(adjust: impl FnOnce(&mut FileExchangerOption)) -> TestResult<Self> {
+            Self::with_intervals(adjust, fast_intervals()).await
+        }
+
+        async fn with_intervals(adjust: impl FnOnce(&mut FileExchangerOption), intervals: FileExchangerIntervals) -> TestResult<Self> {
             let dir = tempfile::tempdir()?;
             let endpoint = Endpoint::new(dir.path(), &[SessionType::FileExchanger]).await?;
             let locations = Arc::new(FixedLocationFinder::new(endpoint.profile.id().to_vec()));
@@ -270,7 +280,7 @@ mod tests {
                 Arc::new(SleeperImpl),
                 Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng)))),
                 option,
-                fast_intervals(),
+                intervals,
             )
             .await?;
 
@@ -536,6 +546,45 @@ mod tests {
 
         assert_eq!(tokio::fs::read(&output).await?, content);
         publisher.shutdown().await;
+        subscriber.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_block_in_the_tail_is_assigned_to_two_sessions_and_the_first_copy_completes_it() -> TestResult {
+        // Two nodes hold the same file, so the subscriber has two Sessions for the root hash.
+        let first_publisher = TestNode::new().await?;
+        let second_publisher = TestNode::new().await?;
+        let intervals = FileExchangerIntervals {
+            // Every block counts as the tail, so both Sessions are asked for the same block.
+            tail_remaining: 4096,
+            // The duplicate copies double the traffic, so a loaded machine needs more than the usual deadline.
+            request_timeout: Duration::from_secs(10),
+            ..fast_intervals()
+        };
+        let subscriber = TestNode::with_intervals(|_| {}, intervals).await?;
+        let content = content(8 * 1024);
+        let root_hash = first_publisher.publish(&content).await?;
+        let same_root_hash = second_publisher.publish(&content).await?;
+        assert_eq!(same_root_hash, root_hash);
+        subscriber.knows(&[&first_publisher.endpoint.profile, &second_publisher.endpoint.profile]);
+
+        let (id, output) = subscriber.subscribe(&root_hash, "output.bin").await?;
+        wait_for(|| {
+            let ctx = subscriber.ctx().clone();
+            let root_hash = root_hash.clone();
+            async move { ctx.registry.count_by_root_hash(&root_hash) >= 2 }
+        })
+        .await?;
+        subscriber.wait_completed(&id).await?;
+
+        assert_eq!(tokio::fs::read(&output).await?, content);
+        // A copy that arrives after the cancel is dropped, so neither provider is excluded for sending it.
+        assert!(!subscriber.ctx().is_excluded(&first_publisher.id()));
+        assert!(!subscriber.ctx().is_excluded(&second_publisher.id()));
+
+        first_publisher.shutdown().await;
+        second_publisher.shutdown().await;
         subscriber.shutdown().await;
         Ok(())
     }

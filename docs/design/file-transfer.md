@@ -839,8 +839,10 @@ A Session neither side wants is closed, and its pair stays out of the dialing ca
 Tests between nodes over loopback TCP confirm the transfer of a multi-rank file, the relay by a node in the middle of fetching, the exclusion of peers that send a mismatched or unrequested block or exceed the request limit, completion from another peer after an exclusion, and the closing at the request and receive deadlines.
 They also confirm that a request crossing the choke is ignored without blame, the presence bitmap that answers a request holding a hash the peer does not provide, the rejection of a root hash the peer does not provide, the closing of a Session neither side wants, and that a node answering at another node's address is not dialed.
 A test with real NodeFinders confirms that advertising, lookup, and transfer work together.
-The presence bitmap of §5.4 and the rank throttle of §5.5 are implemented: the answering side builds the bitmap from an existence check on both Stores and sends it ahead of the blocks of the same request, and the requesting side releases the absent hashes and stops asking the node for those ranks for the period.
-The cancel message, the tail duplication, the per-request retraction, and the fetch throughput of §5 are designed but not implemented; [the plan](../plans/file-exchanger-transfer-efficiency.md) tracks that work.
+The presence bitmap of §5.4, the cancel message, the rank throttle of §5.5, and the tail duplication are implemented.
+The answering side builds the bitmap from an existence check on both Stores and sends it ahead of the blocks of the same request, and it removes the hashes a cancel retracts from its queue.
+The requesting side releases the absent hashes, stops asking the node for those ranks for the period, assigns a block to two Sessions in the tail, and retracts its copy with a cancel once the other Session saved the block; a block that arrives after the retraction is dropped without blame.
+The per-request retraction and the fetch throughput of §5 are designed but not implemented; [the plan](../plans/file-exchanger-transfer-efficiency.md) tracks that work.
 There is no REST API to start publishing and subscribing.
 
 For confirmed bugs, see [issues.md](../issues.md).

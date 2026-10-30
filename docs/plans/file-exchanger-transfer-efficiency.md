@@ -79,7 +79,7 @@ The NodeFinder wire and the data plane of the Store are unaffected; the publishe
 | No. | Content | Depends on | Status |
 | --- | --- | --- | --- |
 | [1](#s-1) | Presence bitmap and rank throttle | | done |
-| [2](#s-2) | Cancel message and tail duplication | 1 | todo |
+| [2](#s-2) | Cancel message and tail duplication | 1 | done |
 | [3](#s-3) | Fetch throughput in the dialing order and the pending count | 1 | todo |
 | [4](#s-4) | Per-request retraction | 2, 3 | todo |
 

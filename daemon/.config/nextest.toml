@@ -1,0 +1,8 @@
+[test-groups]
+# The integration tests below transfer files over loopback TCP with real timers. Running them all at once on a
+# four-core CI runner oversubscribes the CPU and pushes the tests that wait on a transfer past their wait limit.
+heavy-integration = { max-threads = 2 }
+
+[[profile.default.overrides]]
+filter = 'test(/file_exchanger::tests|service::tests|file_subscriber::store::tests/)'
+test-group = 'heavy-integration'

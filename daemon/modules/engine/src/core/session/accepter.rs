@@ -327,6 +327,7 @@ mod tests {
     use crate::{
         base::{connection::ConnectionTcpAccepter, runtime::Shutdown},
         prelude::*,
+        test_support::TEST_WATCHDOG,
     };
 
     use super::{SessionAccepter, SessionOption, SessionType};
@@ -349,7 +350,7 @@ mod tests {
         // 接続を待つ accept に入るまで待つ
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        assert!(tokio::time::timeout(Duration::from_secs(5), session_accepter.shutdown()).await.is_ok());
+        assert!(tokio::time::timeout(TEST_WATCHDOG, session_accepter.shutdown()).await.is_ok());
 
         Ok(())
     }

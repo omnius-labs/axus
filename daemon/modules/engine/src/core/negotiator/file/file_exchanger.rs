@@ -118,7 +118,7 @@ impl FileExchanger {
 
 #[cfg(test)]
 mod tests {
-    use std::{future::Future, path::Path, sync::Arc, time::Duration};
+    use std::{path::Path, sync::Arc, time::Duration};
 
     use chrono::Utc;
     use parking_lot::Mutex;
@@ -128,7 +128,6 @@ mod tests {
     };
     use rand_core::UnwrapErr;
     use testresult::TestResult;
-    use tokio::time::Instant;
     use tokio_util::sync::CancellationToken;
 
     use omnius_core_base::{
@@ -161,11 +160,11 @@ mod tests {
         model::NodeProfile,
         prelude::*,
         protocol::file::ExchangeMessageCodec,
+        test_support::{TEST_WATCHDOG, Watchdog},
     };
 
     use super::*;
 
-    const TEST_TIMEOUT: Duration = Duration::from_secs(30);
     const BLOCK_SIZE: u32 = 256;
 
     fn fast_intervals() -> FileExchangerIntervals {
@@ -197,21 +196,20 @@ mod tests {
         }
     }
 
-    async fn wait_for<F, Fut>(mut condition: F) -> TestResult
-    where
-        F: FnMut() -> Fut,
-        Fut: Future<Output = bool>,
-    {
-        let deadline = Instant::now() + TEST_TIMEOUT;
-        while !condition().await {
-            assert!(Instant::now() < deadline, "the condition did not hold within the timeout");
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        Ok(())
-    }
-
     fn content(len: usize) -> Vec<u8> {
         (0..len).map(|i| (i % 251) as u8).collect()
+    }
+
+    fn status_name(status: &SubscribedFileStatus) -> &'static str {
+        match status {
+            SubscribedFileStatus::Unknown => "Unknown",
+            SubscribedFileStatus::Downloading => "Downloading",
+            SubscribedFileStatus::Decoding => "Decoding",
+            SubscribedFileStatus::Finalizing => "Finalizing",
+            SubscribedFileStatus::Completed => "Completed",
+            SubscribedFileStatus::Failed => "Failed",
+            SubscribedFileStatus::Canceled => "Canceled",
+        }
     }
 
     /// What a node needs to be reached: the key it proves in the Session and the address it listens on.
@@ -378,7 +376,10 @@ mod tests {
             tokio::fs::write(&source, content).await?;
             let publisher = &self.ctx().file_publisher;
             publisher.import(source.to_str().unwrap(), "source.bin", BLOCK_SIZE, None, 0).await?;
-            wait_for(|| async { !publisher.get_published_root_hashes().await.unwrap().is_empty() }).await?;
+            Watchdog::wait_for("the published root hash appears", || async {
+                !publisher.get_published_root_hashes().await.unwrap().is_empty()
+            })
+            .await?;
             Ok(publisher.get_published_root_hashes().await?.pop().unwrap())
         }
 
@@ -389,20 +390,43 @@ mod tests {
         }
 
         async fn wait_completed(&self, id: &str) -> TestResult {
-            let subscriber = self.ctx().file_subscriber.clone();
-            wait_for(|| {
-                let subscriber = subscriber.clone();
-                let id = id.to_string();
-                async move {
-                    let file = subscriber.find_file(&id).await.unwrap().unwrap();
-                    assert!(
-                        !matches!(file.status, SubscribedFileStatus::Failed | SubscribedFileStatus::Canceled),
-                        "the subscription ended without completing: {:?}",
-                        file.failed_reason
-                    );
-                    file.status == SubscribedFileStatus::Completed
-                }
-            })
+            let ctx = self.ctx().clone();
+            Watchdog::wait_for_with_snapshot(
+                "the subscription completes",
+                || {
+                    let subscriber = ctx.file_subscriber.clone();
+                    let id = id.to_string();
+                    async move {
+                        let Some(file) = subscriber.find_file(&id).await.unwrap() else {
+                            return false;
+                        };
+                        assert!(
+                            !matches!(file.status, SubscribedFileStatus::Failed | SubscribedFileStatus::Canceled),
+                            "the subscription ended without completing: {:?}",
+                            file.failed_reason
+                        );
+                        file.status == SubscribedFileStatus::Completed
+                    }
+                },
+                || {
+                    let ctx = ctx.clone();
+                    let id = id.to_string();
+                    async move {
+                        match ctx.file_subscriber.find_file(&id).await.ok().flatten() {
+                            Some(file) => format!(
+                                "status={}, downloaded={}/{}, rank={}, failed_reason={:?}, sessions={}",
+                                status_name(&file.status),
+                                file.block_count_downloaded,
+                                file.block_count_total,
+                                file.rank,
+                                file.failed_reason,
+                                ctx.registry.count_by_root_hash(&file.root_hash),
+                            ),
+                            None => String::from("the file row is missing"),
+                        }
+                    }
+                },
+            )
             .await
         }
 
@@ -461,7 +485,7 @@ mod tests {
 
         async fn dial(&self, target: &NodeProfile, root_hash: &OmniHash) -> TestResult<Session> {
             let session = self.endpoint.session_connector.connect(&target.addrs()[0], &SessionType::FileExchanger).await?;
-            ExchangeHandshake::dial(&session, root_hash, TEST_TIMEOUT).await?;
+            ExchangeHandshake::dial(&session, root_hash, TEST_WATCHDOG).await?;
             Ok(session)
         }
 
@@ -475,7 +499,7 @@ mod tests {
                         _ = token.cancelled() => return,
                     };
                     let Ok(session) = session else { return };
-                    if ExchangeHandshake::accept(&session, TEST_TIMEOUT, |_| true).await.is_err() {
+                    if ExchangeHandshake::accept(&session, TEST_WATCHDOG, |_| true).await.is_err() {
                         continue;
                     }
                     let (token, requests) = (token.clone(), this.requests.clone());
@@ -554,7 +578,9 @@ mod tests {
         let subscriber = TestNode::new().await?;
         publisher.knows(&[&subscriber.endpoint.profile]);
         subscriber.knows(&[&publisher.endpoint.profile]);
-        let content = content(64 * 1024);
+        // A multi-rank file: the 256-byte blocks spread the content over several Merkle ranks without making the
+        // transfer the test's bottleneck.
+        let content = content(16 * 1024);
         let root_hash = publisher.publish(&content).await?;
 
         let (id, output) = subscriber.subscribe(&root_hash, "output.bin").await?;
@@ -603,7 +629,7 @@ mod tests {
 
         let (id, output) = subscriber.subscribe(&root_hash, "output.bin").await?;
         let (ctx, fast_id, slow_id, watched_root) = (subscriber.ctx().clone(), fast.id(), slow.id(), root_hash.clone());
-        wait_for(|| {
+        Watchdog::wait_for("the fast node keeps the Session and the slow node loses it", || {
             let (ctx, fast_id, slow_id, watched_root) = (ctx.clone(), fast_id.clone(), slow_id.clone(), watched_root.clone());
             async move { ctx.registry.contains(&fast_id, &watched_root) && !ctx.registry.contains(&slow_id, &watched_root) }
         })
@@ -637,7 +663,7 @@ mod tests {
         subscriber.knows(&[&first_publisher.endpoint.profile, &second_publisher.endpoint.profile]);
 
         let (id, output) = subscriber.subscribe(&root_hash, "output.bin").await?;
-        wait_for(|| {
+        Watchdog::wait_for("both publishers hold a Session for the tail", || {
             let ctx = subscriber.ctx().clone();
             let root_hash = root_hash.clone();
             async move { ctx.registry.count_by_root_hash(&root_hash) >= 2 }
@@ -665,7 +691,7 @@ mod tests {
         publisher.knows(&[]);
         relay.knows(&[&publisher.endpoint.profile, &third.endpoint.profile]);
         third.knows(&[&relay.endpoint.profile]);
-        let content = content(64 * 1024);
+        let content = content(32 * 1024);
         let root_hash = publisher.publish(&content).await?;
 
         let (relay_id, relay_output) = relay.subscribe(&root_hash, "relay.bin").await?;
@@ -695,7 +721,7 @@ mod tests {
         subscriber.knows(&[&peer.endpoint.profile]);
         let ctx = subscriber.ctx().clone();
         let peer_id = peer.id();
-        wait_for(|| {
+        Watchdog::wait_for("the peer is excluded", || {
             let (ctx, peer_id) = (ctx.clone(), peer_id.clone());
             async move { ctx.is_excluded(&peer_id) }
         })
@@ -746,7 +772,7 @@ mod tests {
         let (id, _output) = subscriber.subscribe(&root_hash, "output.bin").await?;
         subscriber.knows(&[&peer.endpoint.profile]);
         let requests = peer.requests.clone();
-        wait_for(|| {
+        Watchdog::wait_for("the peer receives a request", || {
             let requests = requests.clone();
             async move { requests.load(std::sync::atomic::Ordering::SeqCst) > 0 }
         })
@@ -754,7 +780,7 @@ mod tests {
         let first = peer.request_count();
 
         // The unanswered requests are retracted, and their blocks come back to be asked again.
-        wait_for(|| {
+        Watchdog::wait_for("the retracted blocks are asked again", || {
             let requests = requests.clone();
             async move { requests.load(std::sync::atomic::Ordering::SeqCst) > 1 }
         })
@@ -796,7 +822,7 @@ mod tests {
 
         let (id, output) = subscriber.subscribe(&root_hash, "output.bin").await?;
         let requests = peer.requests.clone();
-        wait_for(|| {
+        Watchdog::wait_for("the unanswered request is retracted and asked again", || {
             let requests = requests.clone();
             async move { requests.load(std::sync::atomic::Ordering::SeqCst) > 1 }
         })
@@ -836,7 +862,7 @@ mod tests {
 
         let (id, output) = subscriber.subscribe(&root_hash, "output.bin").await?;
         let requests = peer.requests.clone();
-        wait_for(|| {
+        Watchdog::wait_for("the peer receives a request for the rank", || {
             let requests = requests.clone();
             async move { requests.load(std::sync::atomic::Ordering::SeqCst) > 0 }
         })
@@ -876,7 +902,7 @@ mod tests {
         let (id, output) = subscriber.subscribe(&root_hash, "output.bin").await?;
         subscriber.knows(&[&peer.endpoint.profile]);
         let requests = peer.requests.clone();
-        wait_for(|| {
+        Watchdog::wait_for("the peer receives a request", || {
             let requests = requests.clone();
             async move { requests.load(std::sync::atomic::Ordering::SeqCst) > 0 }
         })
@@ -923,7 +949,7 @@ mod tests {
         subscriber.knows(&[&peer.endpoint.profile]);
         let ctx = subscriber.ctx().clone();
         let peer_id = peer.id();
-        wait_for(|| {
+        Watchdog::wait_for("the peer is excluded", || {
             let (ctx, peer_id) = (ctx.clone(), peer_id.clone());
             async move { ctx.is_excluded(&peer_id) }
         })
@@ -963,7 +989,7 @@ mod tests {
 
         let ctx = publisher.ctx().clone();
         let peer_id = peer.id();
-        wait_for(|| {
+        Watchdog::wait_for("the peer is excluded", || {
             let (ctx, peer_id) = (ctx.clone(), peer_id.clone());
             async move { ctx.is_excluded(&peer_id) }
         })
@@ -1071,7 +1097,7 @@ mod tests {
         subscriber.subscribe(&unknown, "output.bin").await?;
         let ctx = subscriber.ctx().clone();
         let publisher_id = publisher.id();
-        wait_for(|| {
+        Watchdog::wait_for("the pair is set aside", || {
             let (ctx, publisher_id, unknown) = (ctx.clone(), publisher_id.clone(), unknown.clone());
             async move { ctx.is_pair_set_aside(&publisher_id, &unknown) }
         })
@@ -1095,7 +1121,7 @@ mod tests {
 
         // The subscriber has the file now, so neither side wants blocks, and the Session is closed instead of occupying a slot.
         let (publisher_ctx, subscriber_ctx) = (publisher.ctx().clone(), subscriber.ctx().clone());
-        wait_for(|| {
+        Watchdog::wait_for("both Sessions close", || {
             let (publisher_ctx, subscriber_ctx, root_hash) = (publisher_ctx.clone(), subscriber_ctx.clone(), root_hash.clone());
             async move { publisher_ctx.registry.count_by_root_hash(&root_hash) == 0 && subscriber_ctx.registry.count_by_root_hash(&root_hash) == 0 }
         })
@@ -1136,7 +1162,7 @@ mod tests {
         let root_hash = publisher.publish(&content(1024)).await?;
 
         let locations = publisher.locations.clone().unwrap();
-        wait_for(|| {
+        Watchdog::wait_for("the provided root hash is advertised", || {
             let (locations, root_hash) = (locations.clone(), root_hash.clone());
             async move { locations.asset_keys() == vec![crate::model::AssetKey::file(root_hash)] }
         })
@@ -1149,7 +1175,7 @@ mod tests {
     async fn a_file_advertised_through_node_finder_is_found_and_transferred() -> TestResult {
         let publisher = TestNode::with_node_finder(&[]).await?;
         let subscriber = TestNode::with_node_finder(&[&publisher.endpoint.profile]).await?;
-        let content = content(32 * 1024);
+        let content = content(8 * 1024);
         let root_hash = publisher.publish(&content).await?;
 
         let (id, output) = subscriber.subscribe(&root_hash, "output.bin").await?;

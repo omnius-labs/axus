@@ -102,12 +102,11 @@ mod tests {
         tsid::{TsidProvider, TsidProviderImpl},
     };
 
-    use crate::{base::runtime::Shutdown as _, core::negotiator::file::FilePublisher, prelude::*};
+    use crate::{base::runtime::Shutdown as _, core::negotiator::file::FilePublisher, prelude::*, test_support::TEST_WATCHDOG};
 
     use super::{FileSubscriber, SubscribedFile, SubscribedFileStatus};
 
     const BLOCK_SIZE: u32 = 256;
-    const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn multi_level_file_round_trip() -> TestResult {
@@ -160,7 +159,7 @@ mod tests {
         let subscriber = FileSubscriber::new(&create_dir(dir.path(), "subscriber")?, tsid_provider, clock, sleeper).await?;
 
         publisher.import(source_path.to_str().unwrap(), "source.bin", BLOCK_SIZE, None, 0).await?;
-        let root_hash = tokio::time::timeout(TEST_TIMEOUT, async {
+        let root_hash = tokio::time::timeout(TEST_WATCHDOG, async {
             loop {
                 if let Some(root_hash) = publisher.get_published_root_hashes().await?.pop() {
                     return Result::Ok(root_hash);
@@ -181,7 +180,7 @@ mod tests {
 
         // FileExchanger の代わりに、subscriber が待っている block を publisher から読んで渡す
         let mut max_rank = 0;
-        tokio::time::timeout(TEST_TIMEOUT, async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             loop {
                 let file = subscriber.store.find_file(&id).await?.unwrap();
                 if file.rank != SubscribedFile::UNKNOWN_ROOT_RANK {
@@ -231,7 +230,7 @@ mod tests {
     }
 
     async fn wait_completed(subscriber: &FileSubscriber, id: &str) -> Result<()> {
-        tokio::time::timeout(TEST_TIMEOUT, async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             loop {
                 let file = subscriber.store.find_file(id).await?.unwrap();
                 match file.status {

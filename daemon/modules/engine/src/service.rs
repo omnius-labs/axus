@@ -205,11 +205,10 @@ mod tests {
         },
         model::{AssetKey, NodeProfile},
         prelude::*,
+        test_support::{TEST_WATCHDOG, Watchdog},
     };
 
     use super::{AxusService, AxusServiceOption};
-
-    const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
     #[tokio::test]
     async fn oversized_configuration_fails_before_starting_workers() -> TestResult {
@@ -259,16 +258,20 @@ mod tests {
             move |_| vec![asset_key.clone()]
         });
 
-        let found = tokio::time::timeout(TEST_TIMEOUT, async {
-            loop {
-                let node_profiles = seeker.node_finder.find_node_profile(&asset_key).await?;
-                if !node_profiles.is_empty() {
-                    return Result::Ok(node_profiles);
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await??;
+        Watchdog::wait_for_with_snapshot(
+            "the seeker finds the owner",
+            || {
+                let finder = seeker.node_finder.clone();
+                let asset_key = asset_key.clone();
+                async move { !finder.find_node_profile(&asset_key).await.unwrap().is_empty() }
+            },
+            || {
+                let finder = seeker.node_finder.clone();
+                async move { format!("sessions={}", finder.get_session_count().await) }
+            },
+        )
+        .await?;
+        let found = seeker.node_finder.find_node_profile(&asset_key).await?;
 
         assert!(found.iter().all(|node_profile| node_profile.id() == owner_id.as_slice()));
         // owner は特定のアドレスで待ち受けているため、そのアドレスを広告する
@@ -312,11 +315,17 @@ mod tests {
                 AxusService::new(&b_dir, format!("127.0.0.1:{b_port}"), dir.path(), fast_option(vec![a_node_profile])),
             )?;
 
-            tokio::time::timeout(TEST_TIMEOUT, async {
-                while a.node_finder.get_session_count().await != 1 || b.node_finder.get_session_count().await != 1 {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-            })
+            Watchdog::wait_for_with_snapshot(
+                "both nodes keep one Session",
+                || {
+                    let (a, b) = (a.node_finder.clone(), b.node_finder.clone());
+                    async move { a.get_session_count().await == 1 && b.get_session_count().await == 1 }
+                },
+                || {
+                    let (a, b) = (a.node_finder.clone(), b.node_finder.clone());
+                    async move { format!("a={}, b={}", a.get_session_count().await, b.get_session_count().await) }
+                },
+            )
             .await?;
 
             // 重複した Session を閉じた後も、残した 1 本が閉じずに続くことを確かめる
@@ -375,24 +384,34 @@ mod tests {
             move |_| vec![asset_key.clone()]
         });
 
-        let found = tokio::time::timeout(TEST_TIMEOUT, async {
-            loop {
-                let node_profiles = seeker.node_finder.find_node_profile(&asset_key).await?;
-                if !node_profiles.is_empty() {
-                    return Result::Ok(node_profiles);
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await??;
+        Watchdog::wait_for_with_snapshot(
+            "the seeker finds the owner through the hub",
+            || {
+                let finder = seeker.node_finder.clone();
+                let asset_key = asset_key.clone();
+                async move { !finder.find_node_profile(&asset_key).await.unwrap().is_empty() }
+            },
+            || {
+                let finder = seeker.node_finder.clone();
+                async move { format!("sessions={}", finder.get_session_count().await) }
+            },
+        )
+        .await?;
+        let found = seeker.node_finder.find_node_profile(&asset_key).await?;
         assert!(found.iter().all(|node_profile| **node_profile == owner_node_profile));
 
         // seeker と owner は hub から互いの NodeProfile を受け取り、広告されたアドレスで直接つながる
-        tokio::time::timeout(TEST_TIMEOUT, async {
-            while seeker.node_finder.get_session_count().await < 2 {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
+        Watchdog::wait_for_with_snapshot(
+            "the seeker dials the owner and the hub",
+            || {
+                let finder = seeker.node_finder.clone();
+                async move { finder.get_session_count().await >= 2 }
+            },
+            || {
+                let finder = seeker.node_finder.clone();
+                async move { format!("sessions={}", finder.get_session_count().await) }
+            },
+        )
         .await?;
 
         seeker.shutdown().await;
@@ -424,7 +443,9 @@ mod tests {
         );
         let addr = service.node_finder.my_node_profile().addrs()[0].clone();
 
-        let session = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&addr, &SessionType::FileExchanger)).await??;
+        let session = tokio::time::timeout(TEST_WATCHDOG, connector.connect(&addr, &SessionType::FileExchanger))
+            .await
+            .expect("the FileExchanger use is accepted after startup")?;
 
         assert_eq!(session.typ, SessionType::FileExchanger);
         service.shutdown().await;

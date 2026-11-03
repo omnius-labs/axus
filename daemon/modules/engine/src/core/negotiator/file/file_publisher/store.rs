@@ -382,6 +382,8 @@ mod tests {
     use std::{sync::Arc, time::Duration};
     use testresult::TestResult;
 
+    use crate::test_support::TEST_WATCHDOG;
+
     fn dependencies() -> (Arc<Mutex<dyn TsidProvider + Send + Sync>>, Arc<dyn Clock<Utc> + Send + Sync>) {
         (
             Arc::new(Mutex::new(TsidProviderImpl::new(ClockUtc, ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng)), 8))),
@@ -704,7 +706,7 @@ mod tests {
             let running_store = store.clone();
             let committing_root = root.clone();
             let handle = tokio::spawn(async move { running_store.commit(&file, &committing_root, &blocks).await });
-            tokio::time::timeout(Duration::from_secs(10), reached.notified()).await?;
+            tokio::time::timeout(TEST_WATCHDOG, reached.notified()).await?;
             handle.abort();
             assert!(handle.await.unwrap_err().is_cancelled());
             drop(store);
@@ -755,7 +757,7 @@ mod tests {
         assert!(store.cleanup_blocks(&id).await.is_err());
         let sleeper = Arc::new(RecordingSleeper { delays: Mutex::new(Vec::new()) });
         let task = TaskEncoder::new(store.clone(), clock, sleeper.clone()).await?;
-        tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             while store.needs_sweep() {
                 tokio::task::yield_now().await;
             }
@@ -885,7 +887,7 @@ mod tests {
         assert!(store.repo.find_uncommitted_file_by_id(&id).await?.unwrap().status == PublishedUncommittedFileStatus::Pending);
         drop(store);
         let publisher = FilePublisher::new(&state, ids, clock, Arc::new(SleeperImpl)).await?;
-        tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             while publisher.get_published_root_hashes().await?.is_empty() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
@@ -905,7 +907,7 @@ mod tests {
         let (ids, clock) = dependencies();
         let publisher = FilePublisher::new(&dir.path().join("publisher"), ids, clock, Arc::new(SleeperImpl)).await?;
         let id = publisher.import(source.to_str().unwrap(), "source", 256, None, 0).await?;
-        tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             while publisher.store.repo.find_uncommitted_blocks_by_file_id(&id).await?.is_empty() {
                 tokio::task::yield_now().await;
             }
@@ -932,7 +934,7 @@ mod tests {
         let (ids, clock) = dependencies();
         let publisher = FilePublisher::new(&dir.path().join("publisher"), ids, clock, Arc::new(SleeperImpl)).await?;
         let id = publisher.import(source.to_str().unwrap(), "source", 256, None, 0).await?;
-        tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             loop {
                 if publisher
                     .store
@@ -957,7 +959,7 @@ mod tests {
     }
 
     async fn wait_published(publisher: &FilePublisher) -> Result<()> {
-        tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             while publisher.get_published_root_hashes().await?.is_empty() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }

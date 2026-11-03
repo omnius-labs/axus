@@ -468,11 +468,10 @@ mod tests {
         core::session::model::{Session, SessionHandshakeType, SessionType},
         model::{AssetKey, NodeProfile},
         protocol::node::MAX_FRAME_LENGTH,
+        test_support::TEST_WATCHDOG,
     };
 
     use super::*;
-
-    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
     fn node_profile() -> NodeProfile {
         NodeProfile::random_for_test(vec![OmniAddr::new("addr")])
@@ -578,7 +577,7 @@ mod tests {
         let (session, peer, peer_node_profile) = session_pair()?;
         let answer = answer_handshake(peer.clone(), peer_node_profile);
         session_sender.send(SessionStatus::new(session)).await?;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
+        tokio::time::timeout(TEST_WATCHDOG, answer).await??;
 
         let status: NodeMessage = tokio::time::timeout(Duration::from_secs(1), peer.receiver.lock().await.recv_message_with::<NodeMessageCodec>()).await??;
         assert_eq!(status, NodeMessage::Status);
@@ -598,10 +597,10 @@ mod tests {
         let (session, peer, peer_node_profile) = session_pair()?;
         let answer = answer_handshake(peer.clone(), peer_node_profile);
         session_sender.send(SessionStatus::new(session)).await?;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
+        tokio::time::timeout(TEST_WATCHDOG, answer).await??;
 
         // Status は届くが、相手からは何も送らないので受信期限で閉じる
-        let closed = tokio::time::timeout(Duration::from_secs(3), async {
+        let closed = tokio::time::timeout(TEST_WATCHDOG, async {
             loop {
                 match peer.receiver.lock().await.recv().await {
                     Ok(_) => continue,
@@ -630,7 +629,7 @@ mod tests {
         let (session, peer, peer_node_profile) = session_pair()?;
         let answer = answer_handshake(peer.clone(), peer_node_profile);
         session_sender.send(SessionStatus::new(session)).await?;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
+        tokio::time::timeout(TEST_WATCHDOG, answer).await??;
 
         // 周期が 30 秒でも、outbox に積んだ広告はすぐ送られる
         let statuses = wait_for_session(&task).await?;
@@ -646,7 +645,7 @@ mod tests {
     }
 
     async fn wait_for_session(task: &Arc<TaskCommunicator>) -> Result<Arc<SessionStatus>> {
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             loop {
                 if let Some((_, status)) = task.sessions.statuses().await.into_iter().next() {
                     break status;
@@ -674,7 +673,7 @@ mod tests {
         let answer_b = answer_handshake(peer_b.clone(), profile_b);
         session_sender.send(SessionStatus::new(session_a)).await?;
         session_sender.send(SessionStatus::new(session_b)).await?;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             answer_a.await?;
             answer_b.await?;
             while task.sessions.statuses().await.len() != 2 {
@@ -726,7 +725,7 @@ mod tests {
         let answer_b = answer_handshake(peer_b.clone(), profile_b);
         session_sender.send(SessionStatus::new(session_a)).await?;
         session_sender.send(SessionStatus::new(session_b)).await?;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             answer_a.await?;
             answer_b.await?;
             while task.sessions.statuses().await.len() != 2 {
@@ -776,7 +775,7 @@ mod tests {
         let answer_b = answer_handshake(peer_b.clone(), profile_b);
         session_sender.send(SessionStatus::new(session_a)).await?;
         session_sender.send(SessionStatus::new(session_b)).await?;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             answer_a.await?;
             answer_b.await?;
             while task.sessions.statuses().await.len() != 2 {
@@ -814,7 +813,7 @@ mod tests {
         let (session, peer, peer_node_profile) = session_pair()?;
         let answer = answer_handshake(peer.clone(), peer_node_profile);
         session_sender.send(SessionStatus::new(session)).await?;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
+        tokio::time::timeout(TEST_WATCHDOG, answer).await??;
         let status = wait_for_session(&task).await?;
 
         // 自分が sender しかいないので、hop が 1 なら中継先が無い。hop 0 なら中継もしない。
@@ -850,7 +849,7 @@ mod tests {
         let (session, peer, peer_node_profile) = session_pair()?;
         let answer = answer_handshake(peer.clone(), peer_node_profile);
         session_sender.send(SessionStatus::new(session)).await?;
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, answer).await??;
+        tokio::time::timeout(TEST_WATCHDOG, answer).await??;
 
         // 上限を超える hop は wire の段階で拒否され、Session が閉じる
         let bytes = crate::generated::axus::node::NodeMessage::AnnounceLocations {
@@ -867,7 +866,7 @@ mod tests {
         .export()?;
         peer.sender.lock().await.send(Bytes::from(bytes)).await?;
 
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             loop {
                 match peer.receiver.lock().await.recv().await {
                     Ok(_) => continue,

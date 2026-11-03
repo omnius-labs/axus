@@ -546,6 +546,8 @@ mod tests {
     use std::{sync::Arc, time::Duration};
     use testresult::TestResult;
 
+    use crate::test_support::TEST_WATCHDOG;
+
     fn dependencies() -> (Arc<Mutex<dyn TsidProvider + Send + Sync>>, Arc<dyn Clock<Utc> + Send + Sync>) {
         (
             Arc::new(Mutex::new(TsidProviderImpl::new(ClockUtc, ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng)), 8))),
@@ -582,7 +584,7 @@ mod tests {
     }
 
     async fn wait_status(store: &FileSubscriberStore, id: &str, status: SubscribedFileStatus) -> TestResult {
-        tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             while store.find_file(id).await?.unwrap().status != status {
                 tokio::task::yield_now().await;
             }
@@ -1085,7 +1087,7 @@ mod tests {
             }
         }
         async fn wait_count(&self, count: usize) -> TestResult {
-            tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::time::timeout(TEST_WATCHDOG, async {
                 while self.durations.lock().len() < count {
                     tokio::task::yield_now().await;
                 }
@@ -1152,7 +1154,7 @@ mod tests {
         sleeper.wait_count(1).await?;
         tokio::fs::rename(&unavailable, &parent).await?;
         sleeper.permits.add_permits(1);
-        tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             while store.needs_sweep() || file.temporary_output_path().exists() {
                 tokio::task::yield_now().await;
             }
@@ -1183,7 +1185,7 @@ mod tests {
             sleeper.wait_count(count).await?;
             sleeper.permits.add_permits(1);
         }
-        tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             while file.temporary_output_path().exists() {
                 tokio::task::yield_now().await;
             }
@@ -1407,7 +1409,7 @@ mod tests {
         let task_decoder = TaskDecoder::new(store.clone(), clock, Arc::new(SleeperImpl)).await?;
         let temporary = store.find_file(&id).await?.unwrap().temporary_output_path();
         let subscriber = FileSubscriber { store, task_decoder };
-        tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             loop {
                 if tokio::fs::metadata(&temporary).await.is_ok_and(|meta| meta.len() > 0) {
                     break;

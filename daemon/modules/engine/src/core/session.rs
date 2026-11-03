@@ -55,9 +55,8 @@ mod tests {
             model::{SessionOption, SessionType},
         },
         prelude::*,
+        test_support::TEST_WATCHDOG,
     };
-
-    const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
     #[tokio::test]
     #[ignore]
@@ -134,17 +133,17 @@ mod tests {
         let session_connector = SessionConnector::new(tcp_connector.clone(), signer.clone(), Arc::new(ClockUtc), rng, SessionOption::default());
 
         for _ in 0..3 {
-            match tokio::time::timeout(TEST_TIMEOUT, session_connector.connect(&addr, &SessionType::FileExchanger)).await? {
+            match tokio::time::timeout(TEST_WATCHDOG, session_connector.connect(&addr, &SessionType::FileExchanger)).await? {
                 Ok(_) => panic!("unsupported FileExchanger session was accepted"),
                 Err(e) => assert_eq!(e.kind(), &ErrorKind::Reject),
             }
         }
 
-        let result = tokio::time::timeout(TEST_TIMEOUT, request_session(tcp_connector.as_ref(), signer.as_ref(), &addr, V1RequestType::Unknown)).await??;
+        let result = tokio::time::timeout(TEST_WATCHDOG, request_session(tcp_connector.as_ref(), signer.as_ref(), &addr, V1RequestType::Unknown)).await??;
         assert_eq!(result, V1ResultType::Reject);
 
-        let client = tokio::time::timeout(TEST_TIMEOUT, session_connector.connect(&addr, &SessionType::NodeFinder)).await??;
-        let server = tokio::time::timeout(TEST_TIMEOUT, session_accepter.accept(&SessionType::NodeFinder)).await??;
+        let client = tokio::time::timeout(TEST_WATCHDOG, session_connector.connect(&addr, &SessionType::NodeFinder)).await??;
+        let server = tokio::time::timeout(TEST_WATCHDOG, session_accepter.accept(&SessionType::NodeFinder)).await??;
         assert_eq!(client.typ, SessionType::NodeFinder);
         assert_eq!(server.typ, SessionType::NodeFinder);
 
@@ -173,8 +172,8 @@ mod tests {
         .await;
         let session_connector = SessionConnector::new(tcp_connector, signer, Arc::new(ClockUtc), rng, SessionOption::default());
 
-        let client = tokio::time::timeout(TEST_TIMEOUT, session_connector.connect(&addr, &SessionType::FileExchanger)).await??;
-        let server = tokio::time::timeout(TEST_TIMEOUT, session_accepter.accept(&SessionType::FileExchanger)).await??;
+        let client = tokio::time::timeout(TEST_WATCHDOG, session_connector.connect(&addr, &SessionType::FileExchanger)).await??;
+        let server = tokio::time::timeout(TEST_WATCHDOG, session_accepter.accept(&SessionType::FileExchanger)).await??;
         assert_eq!(client.typ, SessionType::FileExchanger);
         assert_eq!(server.typ, SessionType::FileExchanger);
 
@@ -189,7 +188,7 @@ mod tests {
         let silent = open_silent_connections(&tcp_connector, 63).await?;
 
         let client = tokio::time::timeout(Duration::from_millis(500), connector.connect(&test_addr(), &SessionType::NodeFinder)).await??;
-        let server = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&SessionType::NodeFinder)).await??;
+        let server = tokio::time::timeout(TEST_WATCHDOG, accepter.accept(&SessionType::NodeFinder)).await??;
         assert_eq!(client.typ, server.typ);
 
         accepter.shutdown().await;
@@ -216,15 +215,15 @@ mod tests {
             &omnius_core_omnikit::ErrorKind::EndOfStream
         );
 
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::timeout(TEST_WATCHDOG, async {
             for stream in &silent {
                 assert!(stream.receiver.lock().await.recv().await.is_err());
             }
         })
         .await?;
 
-        let client = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&test_addr(), &SessionType::NodeFinder)).await??;
-        let server = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&SessionType::NodeFinder)).await??;
+        let client = tokio::time::timeout(TEST_WATCHDOG, connector.connect(&test_addr(), &SessionType::NodeFinder)).await??;
+        let server = tokio::time::timeout(TEST_WATCHDOG, accepter.accept(&SessionType::NodeFinder)).await??;
         assert_eq!(client.typ, server.typ);
         accepter.shutdown().await;
         Ok(())
@@ -349,7 +348,7 @@ mod tests {
                 .await?;
             Result::Ok(())
         };
-        let (result, peer_result) = tokio::time::timeout(TEST_TIMEOUT, async { tokio::join!(connect, peer) }).await?;
+        let (result, peer_result) = tokio::time::timeout(TEST_WATCHDOG, async { tokio::join!(connect, peer) }).await?;
         assert!(result.is_err());
         peer_result?;
         Ok(())
@@ -364,12 +363,12 @@ mod tests {
         let (accepter, connector, _) = create_sessions(option, &[SessionType::FileExchanger]).await?;
         let addr = test_addr();
 
-        let stale = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&addr, &SessionType::FileExchanger)).await??;
+        let stale = tokio::time::timeout(TEST_WATCHDOG, connector.connect(&addr, &SessionType::FileExchanger)).await??;
         tokio::time::sleep(Duration::from_millis(400)).await;
-        let fresh = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&addr, &SessionType::FileExchanger)).await??;
+        let fresh = tokio::time::timeout(TEST_WATCHDOG, connector.connect(&addr, &SessionType::FileExchanger)).await??;
 
         // The stale Session is skipped, and the accepted one is the later connection.
-        let accepted = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&SessionType::FileExchanger)).await??;
+        let accepted = tokio::time::timeout(TEST_WATCHDOG, accepter.accept(&SessionType::FileExchanger)).await??;
         fresh
             .stream
             .sender
@@ -378,7 +377,7 @@ mod tests {
             .send_message_with::<HelloMessageCodec>(&HelloMessage { version: SessionVersion::V1 })
             .await?;
         let _: HelloMessage = accepted.stream.receiver.lock().await.recv_message_with::<HelloMessageCodec>().await?;
-        assert!(tokio::time::timeout(TEST_TIMEOUT, stale.stream.receiver.lock().await.recv()).await?.is_err());
+        assert!(tokio::time::timeout(TEST_WATCHDOG, stale.stream.receiver.lock().await.recv()).await?.is_err());
 
         accepter.shutdown().await;
         Ok(())
@@ -397,8 +396,8 @@ mod tests {
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let client = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&addr, &SessionType::NodeFinder)).await??;
-        let server = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&SessionType::NodeFinder)).await??;
+        let client = tokio::time::timeout(TEST_WATCHDOG, connector.connect(&addr, &SessionType::NodeFinder)).await??;
+        let server = tokio::time::timeout(TEST_WATCHDOG, accepter.accept(&SessionType::NodeFinder)).await??;
         assert_eq!(client.typ, SessionType::NodeFinder);
         assert_eq!(server.typ, SessionType::NodeFinder);
         assert!(!waiting.is_finished());
@@ -421,8 +420,8 @@ mod tests {
                 ..SessionOption::default()
             },
         )?;
-        let client = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&test_addr(), &SessionType::NodeFinder)).await??;
-        let server = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&SessionType::NodeFinder)).await??;
+        let client = tokio::time::timeout(TEST_WATCHDOG, connector.connect(&test_addr(), &SessionType::NodeFinder)).await??;
+        let server = tokio::time::timeout(TEST_WATCHDOG, accepter.accept(&SessionType::NodeFinder)).await??;
         assert_eq!(client.typ, server.typ);
         accepter.shutdown().await;
         Ok(())
@@ -441,9 +440,9 @@ mod tests {
                 request_type: V1RequestType::NodeFinder,
             })
             .await?;
-        let result: V1ResultMessage = tokio::time::timeout(TEST_TIMEOUT, peer.receiver.lock().await.recv_message_with::<V1ResultMessageCodec>()).await??;
+        let result: V1ResultMessage = tokio::time::timeout(TEST_WATCHDOG, peer.receiver.lock().await.recv_message_with::<V1ResultMessageCodec>()).await??;
         assert_eq!(result.result_type, V1ResultType::Accept);
-        let _session = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&SessionType::NodeFinder)).await??;
+        let _session = tokio::time::timeout(TEST_WATCHDOG, accepter.accept(&SessionType::NodeFinder)).await??;
         drop(peer);
 
         let peer = secure_framed_stream(tcp_connector.connect(&test_addr()).await?, OmniSecureStreamType::Connected).await?;
@@ -495,7 +494,7 @@ mod tests {
                 }
                 Result::Ok(())
             };
-            let (result, peer_result) = tokio::time::timeout(TEST_TIMEOUT, async { tokio::join!(connector.connect(&addr, &SessionType::NodeFinder), peer) }).await?;
+            let (result, peer_result) = tokio::time::timeout(TEST_WATCHDOG, async { tokio::join!(connector.connect(&addr, &SessionType::NodeFinder), peer) }).await?;
             peer_result?;
             if length == SessionOption::HANDSHAKE_MAX_FRAME_LENGTH {
                 assert!(result.is_ok());
@@ -510,11 +509,11 @@ mod tests {
     async fn established_sessions_use_the_frame_limit_for_their_purpose() -> TestResult {
         let (accepter, connector, _) = create_sessions(SessionOption::default(), &[SessionType::NodeFinder, SessionType::FileExchanger]).await?;
         for typ in [SessionType::NodeFinder, SessionType::FileExchanger] {
-            let client = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&test_addr(), &typ)).await??;
-            let server = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&typ)).await??;
+            let client = tokio::time::timeout(TEST_WATCHDOG, connector.connect(&test_addr(), &typ)).await??;
+            let server = tokio::time::timeout(TEST_WATCHDOG, accepter.accept(&typ)).await??;
             let length = typ.max_frame_length();
             let frame = Bytes::from(vec![0; length]);
-            let (sent, received) = tokio::time::timeout(TEST_TIMEOUT, async {
+            let (sent, received) = tokio::time::timeout(TEST_WATCHDOG, async {
                 tokio::join!(async { client.stream.sender.lock().await.send(frame.clone()).await }, async {
                     server.stream.receiver.lock().await.recv().await
                 })
@@ -522,7 +521,7 @@ mod tests {
             .await?;
             sent?;
             assert_eq!(received?, frame);
-            let (sent, received) = tokio::time::timeout(TEST_TIMEOUT, async {
+            let (sent, received) = tokio::time::timeout(TEST_WATCHDOG, async {
                 tokio::join!(async { server.stream.sender.lock().await.send(frame.clone()).await }, async {
                     client.stream.receiver.lock().await.recv().await
                 })
@@ -605,8 +604,8 @@ mod tests {
                 Result::Ok(())
             }
         });
-        let client = tokio::time::timeout(TEST_TIMEOUT, connector.connect(&OmniAddr::create_tcp(addr.ip(), addr.port()), &SessionType::NodeFinder)).await??;
-        let server = tokio::time::timeout(TEST_TIMEOUT, accepter.accept(&SessionType::NodeFinder)).await??;
+        let client = tokio::time::timeout(TEST_WATCHDOG, connector.connect(&OmniAddr::create_tcp(addr.ip(), addr.port()), &SessionType::NodeFinder)).await??;
+        let server = tokio::time::timeout(TEST_WATCHDOG, accepter.accept(&SessionType::NodeFinder)).await??;
         assert_eq!(client.cert.public_key, server_signer.sign(b"expected peer")?.public_key);
         assert_eq!(server.cert.public_key, client_signer.sign(b"expected peer")?.public_key);
         client_to_server.lock().clear();
@@ -620,7 +619,7 @@ mod tests {
             let plaintext = format!("Axus secret payload {direction} / 57e807fe-c5b4-4739-bb66-3427eccf87a5 / ");
             let message = TestMessage { value: plaintext.repeat(1024) };
             let encoded = message.export()?;
-            let (sent, received) = tokio::time::timeout(TEST_TIMEOUT, async {
+            let (sent, received) = tokio::time::timeout(TEST_WATCHDOG, async {
                 tokio::join!(async { sender.sender.lock().await.send_message(&message).await }, async {
                     receiver.receiver.lock().await.recv_message::<TestMessage>().await
                 })
@@ -637,7 +636,7 @@ mod tests {
         drop(client);
         drop(server);
         accepter.shutdown().await;
-        tokio::time::timeout(TEST_TIMEOUT, relay).await???;
+        tokio::time::timeout(TEST_WATCHDOG, relay).await???;
         Ok(())
     }
 
@@ -686,7 +685,7 @@ mod tests {
                     role: 1,
                 })
                 .await?;
-            let _: ProfileMessage = tokio::time::timeout(TEST_TIMEOUT, stream.receiver.lock().await.recv_message())
+            let _: ProfileMessage = tokio::time::timeout(TEST_WATCHDOG, stream.receiver.lock().await.recv_message())
                 .await
                 .map_err(|e| Error::from_error(e, ErrorKind::NetworkError))??;
             streams.push(stream);

@@ -4,5 +4,5 @@
 heavy-integration = { max-threads = 2 }
 
 [[profile.default.overrides]]
-filter = 'test(/file_exchanger::tests|service::tests|file_subscriber::store::tests/)'
+filter = 'test(/file_exchanger::tests|service::tests|file_subscriber::store::tests|rest_api_publish_subscribe_download_flow/)'
 test-group = 'heavy-integration'

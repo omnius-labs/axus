@@ -72,7 +72,13 @@ impl DaemonState {
         let file_service = axus_service.file_service();
 
         let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
-        let uploads = UploadService::new(&state_dir, conf.api.max_upload_size, clock).await?;
+        let uploads = match UploadService::new(&state_dir, conf.api.max_upload_size, clock).await {
+            Ok(uploads) => uploads,
+            Err(error) => {
+                axus_service.shutdown().await;
+                return Err(error);
+            }
+        };
         let ids: Arc<parking_lot::Mutex<dyn TsidProvider + Send + Sync>> =
             Arc::new(parking_lot::Mutex::new(TsidProviderImpl::new(ClockUtc, ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng)), 8)));
         let publish = Arc::new(PublishService::new(file_service.clone(), uploads.clone(), ids));

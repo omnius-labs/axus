@@ -118,7 +118,7 @@ async fn get_publish(app: &Router, id: &str) -> models::Publish {
 
 // omnius-lint:allow(free-fn) shared helper for the REST API tests
 async fn wait_publish(app: &Router, id: &str, expected: models::PublishStatus) -> models::Publish {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
     loop {
         let publish = get_publish(app, id).await;
         if publish.status == expected {
@@ -152,7 +152,7 @@ async fn get_subscribe(app: &Router, id: &str) -> models::Subscribe {
 
 // omnius-lint:allow(free-fn) shared helper for the REST API tests
 async fn wait_subscribe(app: &Router, id: &str, expected: models::SubscribeStatus) -> models::Subscribe {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
     loop {
         let subscribe = get_subscribe(app, id).await;
         if subscribe.status == expected {

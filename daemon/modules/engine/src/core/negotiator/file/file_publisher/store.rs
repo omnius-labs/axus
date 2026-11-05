@@ -147,6 +147,10 @@ impl FilePublisherStore {
         }
 
         let source = Path::new(source_path);
+        let metadata = tokio::fs::metadata(source).await?;
+        if metadata.len() != size as u64 {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message(format!("source size {} does not equal the declared size {size}", metadata.len())));
+        }
         let destination = self.source_dir.join(id);
         Self::move_source(source, &destination).await?;
 

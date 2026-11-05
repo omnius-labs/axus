@@ -419,6 +419,9 @@ impl FilePublisherStore {
         let result = self.commit_locked(file, root_hash, blocks).await;
         if result.is_err() {
             self.sweep_after_failure_locked().await;
+            if let Err(error) = self.sweep_sources_locked().await {
+                warn!(?error, "publish source sweep after a failed commit failed");
+            }
         }
         result
     }

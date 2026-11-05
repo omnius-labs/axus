@@ -121,12 +121,13 @@ impl UploadService {
         }
 
         let staging_path = self.dir.join(&id);
-        let file = tokio::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&staging_path)
-            .await
-            .map_err(|error| ApiError::internal(format!("cannot create the upload staging file: {error}")))?;
+        let file = tokio::fs::OpenOptions::new().create_new(true).write(true).open(&staging_path).await.map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                ApiError::conflict("publish id already exists")
+            } else {
+                ApiError::internal(format!("cannot create the upload staging file: {error}"))
+            }
+        })?;
         file.sync_all()
             .await
             .map_err(|error| ApiError::internal(format!("cannot sync the upload staging file: {error}")))?;
@@ -156,15 +157,20 @@ impl UploadService {
 
     pub async fn get(&self, id: &str) -> Option<UploadState> {
         let entry = self.uploads.lock().await.get(id).cloned()?;
-        Some(entry.state.lock().await.clone())
+        let state = entry.state.lock().await.clone();
+        (state.expires_at > self.clock.now()).then_some(state)
     }
 
     pub async fn list(&self) -> Vec<UploadState> {
         let entries = self.uploads.lock().await.values().cloned().collect::<Vec<_>>();
         {
             let mut states = Vec::with_capacity(entries.len());
+            let now = self.clock.now();
             for entry in entries {
-                states.push(entry.state.lock().await.clone());
+                let state = entry.state.lock().await.clone();
+                if state.expires_at > now {
+                    states.push(state);
+                }
             }
             states
         }
@@ -252,6 +258,12 @@ impl UploadService {
         let _io = entry.io_lock.lock().await;
 
         let state = entry.state.lock().await.clone();
+        if state.expires_at <= self.clock.now() {
+            if self.uploads.lock().await.remove(id).is_some() {
+                let _ = tokio::fs::remove_file(&state.staging_path).await;
+            }
+            return Err(ApiError::not_found("publish upload expired"));
+        }
         if state.uploaded_size != state.size {
             return Err(ApiError::invalid(format!(
                 "uploaded size {} does not equal the declared size {}",
@@ -287,7 +299,6 @@ impl UploadService {
         let Some(entry) = self.uploads.lock().await.remove(id) else {
             return false;
         };
-        let _io = entry.io_lock.lock().await;
         let path = entry.state.lock().await.staging_path.clone();
         let _ = tokio::fs::remove_file(path).await;
         true
@@ -296,7 +307,6 @@ impl UploadService {
     async fn reap(&self) {
         let entries = self.uploads.lock().await.iter().map(|(id, entry)| (id.clone(), entry.clone())).collect::<Vec<_>>();
         for (id, entry) in entries {
-            let _io = entry.io_lock.lock().await;
             let expired = {
                 let state = entry.state.lock().await;
                 state.expires_at <= self.clock.now()
@@ -355,6 +365,20 @@ mod tests {
         service.reap().await;
 
         assert!(service.get("upload-1").await.is_none());
+        assert!(!state.staging_path.exists());
+        service.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn expired_upload_cannot_be_committed_test() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let clock = Arc::new(FakeClockUtc::new(Utc::now()));
+        let service = UploadService::new(dir.path(), 0, clock.clone()).await?;
+        let state = service.create("upload-3".to_string(), "file.bin".to_string(), 4, 256, None, 0).await?;
+
+        clock.advance(std::time::Duration::from_secs(25 * 60 * 60));
+        assert!(service.commit("upload-3").await.is_err());
         assert!(!state.staging_path.exists());
         service.shutdown().await;
         Ok(())

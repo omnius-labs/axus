@@ -113,6 +113,7 @@ Blocks whose deletion failed are reclaimed by the sweep as blocks of a temporary
 Because the temporary ID is renewed per attempt, a late-running reclamation never deletes a new attempt's blocks, and a file can be re-imported without waiting for reclamation.
 
 remove targets a committed file and stops the publication.
+It also deletes every publish record for that committed file, so every publish ID that reached the file returns `NotFound` after the remove.
 If the same root hash is published under another file name, the block rows and bodies remain until the last committed file disappears.
 
 ### 4.2 Subscriber side

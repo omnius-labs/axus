@@ -1,6 +1,7 @@
 use std::{
-    collections::HashSet,
-    path::Path,
+    collections::{HashMap, HashSet},
+    ffi::OsString,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -22,6 +23,7 @@ use super::{repo::FilePublisherRepo, *};
 pub struct FilePublisherStore {
     repo: FilePublisherRepo,
     blocks_storage: KeyValueRocksdbStorage,
+    staged_dir: PathBuf,
     lock: TokioMutex<()>,
     tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
@@ -39,9 +41,12 @@ impl FilePublisherStore {
     pub async fn open(state_dir: &Path, tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>>, clock: Arc<dyn Clock<Utc> + Send + Sync>) -> Result<Arc<Self>> {
         let repo_dir = state_dir.join("repo");
         tokio::fs::create_dir_all(&repo_dir).await?;
+        let staged_dir = state_dir.join("staged");
+        tokio::fs::create_dir_all(&staged_dir).await?;
         let store = Arc::new(Self {
             repo: FilePublisherRepo::new(&repo_dir, clock.clone()).await?,
             blocks_storage: KeyValueRocksdbStorage::new(state_dir.join("blocks"), tsid_provider.clone()).await?,
+            staged_dir,
             lock: TokioMutex::new(()),
             tsid_provider,
             clock,
@@ -59,8 +64,90 @@ impl FilePublisherStore {
             store.blocks_storage.shrink(|key| !key.starts_with(b"U/")).await?;
             store.repo.recover().await?;
             store.sweep_locked().await?;
+            store.reclaim_staged_sources_locked().await?;
         }
         Ok(store)
+    }
+
+    /// Takes over a file, deleting it once its row no longer needs it.
+    /// The file must be on the same volume as `state_dir`, because it moves by rename.
+    pub async fn import_staged(&self, staged_file: &Path, file_name: &str, block_size: u32) -> Result<String> {
+        let name = self.tsid_provider.lock().create().to_string();
+        let source = self.staged_dir.join(name);
+        let path = source
+            .to_str()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidFormat).with_message("invalid state directory"))?
+            .to_string();
+        tokio::fs::rename(staged_file, &source).await?;
+        let result = self.import(&path, file_name, block_size, None, 0).await;
+        if result.is_err() {
+            self.delete_staged_source(&path).await;
+        }
+        result
+    }
+
+    async fn delete_staged_source(&self, file_path: &str) {
+        let path = Path::new(file_path);
+        if path.parent() != Some(self.staged_dir.as_path()) {
+            return;
+        }
+        if let Err(error) = tokio::fs::remove_file(path).await
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            // The startup reclamation deletes a source no row needs.
+            warn!(?error, "staged source deletion failed");
+        }
+    }
+
+    /// Deletes the sources left behind by an exit between a row's change and the deletion.
+    async fn reclaim_staged_sources_locked(&self) -> Result<()> {
+        let needed: HashSet<OsString> = self
+            .repo
+            .get_uncommitted_files()
+            .await?
+            .into_iter()
+            .filter(|file| file.status != PublishedUncommittedFileStatus::Failed)
+            .filter_map(|file| Path::new(&file.file_path).file_name().map(OsString::from))
+            .collect();
+        let mut entries = tokio::fs::read_dir(&self.staged_dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            if !needed.contains(&entry.file_name())
+                && let Err(error) = tokio::fs::remove_file(entry.path()).await
+            {
+                warn!(?error, "staged source reclamation failed");
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn publications(&self) -> Result<Vec<Publication>> {
+        // A commit moves a row between the two sets, so reading uncommitted first can only see it twice, never miss it.
+        let uncommitted = self.repo.get_uncommitted_files().await?;
+        let committed = self.repo.get_committed_files_with_import_id().await?;
+        let mut publications: HashMap<String, Publication> = uncommitted.into_iter().map(|file| (file.id.clone(), Publication::from_uncommitted(file))).collect();
+        for (id, file) in committed {
+            publications.insert(id.clone(), Publication::from_committed(id, file));
+        }
+        let mut publications: Vec<Publication> = publications.into_values().collect();
+        publications.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        Ok(publications)
+    }
+
+    pub async fn find_publication(&self, id: &str) -> Result<Option<Publication>> {
+        // A commit moves the row out of the uncommitted set in one transaction, so this order cannot miss it.
+        if let Some(file) = self.repo.find_uncommitted_file_by_id(id).await? {
+            return Ok(Some(Publication::from_uncommitted(file)));
+        }
+        let file = self.repo.find_committed_file_by_import_id(id).await?;
+        Ok(file.map(|file| Publication::from_committed(id.to_string(), file)))
+    }
+
+    pub async fn contains_uncommitted_file(&self, id: &str) -> Result<bool> {
+        self.repo.contains_uncommitted_file(id).await
+    }
+
+    pub async fn find_committed_file_by_import_id(&self, id: &str) -> Result<Option<PublishedCommittedFile>> {
+        self.repo.find_committed_file_by_import_id(id).await
     }
 
     pub async fn import(&self, file_path: &str, file_name: &str, block_size: u32, attrs: Option<&str>, priority: i64) -> Result<String> {
@@ -150,12 +237,22 @@ impl FilePublisherStore {
 
     pub async fn fail(&self, id: &str, reason: &str) -> Result<()> {
         let _guard = self.lock.lock().await;
-        self.repo.update_uncommitted_file_as_failed(id, reason).await
+        let file = self.repo.find_uncommitted_file_by_id(id).await?;
+        self.repo.update_uncommitted_file_as_failed(id, reason).await?;
+        if let Some(file) = file {
+            self.delete_staged_source(&file.file_path).await;
+        }
+        Ok(())
     }
 
     pub async fn cancel(&self, id: &str) -> Result<()> {
         let _guard = self.lock.lock().await;
-        self.repo.delete_uncommitted_file(id).await
+        let file = self.repo.find_uncommitted_file_by_id(id).await?;
+        self.repo.delete_uncommitted_file(id).await?;
+        if let Some(file) = file {
+            self.delete_staged_source(&file.file_path).await;
+        }
+        Ok(())
     }
 
     pub async fn cleanup_blocks(&self, id: &str) -> Result<()> {
@@ -302,6 +399,7 @@ impl FilePublisherStore {
                 .collect();
             self.repo.commit_file_with_blocks(&committed, &committed_blocks, &file.id).await?;
         }
+        self.delete_staged_source(&file.file_path).await;
         Ok(true)
     }
 
@@ -823,6 +921,141 @@ mod tests {
         store.cancel(&retry).await?;
         store.fail(&retry, "late failure").await?;
         assert!(store.repo.find_uncommitted_file_by_id(&retry).await?.is_none());
+        Ok(())
+    }
+
+    async fn staged_file(dir: &Path, name: &str) -> TestResult<PathBuf> {
+        let path = dir.join(name);
+        tokio::fs::write(&path, b"staged").await?;
+        Ok(path)
+    }
+
+    fn staged_entries(state: &Path) -> usize {
+        std::fs::read_dir(state.join("staged")).unwrap().count()
+    }
+
+    #[tokio::test]
+    async fn import_id_reads_the_root_hash_after_commit_repeated_import_and_reopen() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let state = dir.path().join("state");
+        let store = FilePublisherStore::open(&state, ids.clone(), clock.clone()).await?;
+        let first = store.import("source", "a", 256, None, 0).await?;
+        let publication = store.find_publication(&first).await?.unwrap();
+        assert_eq!(publication.status, PublicationStatus::Pending);
+        assert!(publication.root_hash.is_none());
+        let root = commit_dummy(&store, &first).await?;
+        let second = store.import("source", "a", 256, None, 0).await?;
+        assert_eq!(commit_dummy(&store, &second).await?, root);
+        for id in [&first, &second] {
+            let publication = store.find_publication(id).await?.unwrap();
+            assert_eq!(publication.status, PublicationStatus::Committed);
+            assert_eq!(publication.root_hash, Some(root.clone()));
+            assert_eq!(&publication.id, id);
+        }
+        let listed = store.publications().await?;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, first.min(second.clone()));
+        drop(store);
+        let store = FilePublisherStore::open(&state, ids, clock).await?;
+        assert_eq!(store.find_publication(&second).await?.unwrap().root_hash, Some(root));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn import_id_disappears_with_the_committed_file() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FilePublisherStore::open(dir.path(), ids, clock).await?;
+        let first = store.import("source", "a", 256, None, 0).await?;
+        let root = commit_dummy(&store, &first).await?;
+        let second = store.import("source", "b", 256, None, 0).await?;
+        commit_dummy(&store, &second).await?;
+        store.remove(&root, "a").await?;
+        assert!(store.find_publication(&first).await?.is_none());
+        assert_eq!(store.find_publication(&second).await?.unwrap().root_hash, Some(root));
+        assert_eq!(store.publications().await?.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn import_id_of_a_failed_file_reports_the_reason() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FilePublisherStore::open(dir.path(), ids, clock).await?;
+        let id = store.import("source", "a", 256, None, 0).await?;
+        store.claim(&id).await?;
+        assert_eq!(store.find_publication(&id).await?.unwrap().status, PublicationStatus::Processing);
+        store.fail(&id, "failure").await?;
+        let publication = store.find_publication(&id).await?.unwrap();
+        assert_eq!(publication.status, PublicationStatus::Failed);
+        assert_eq!(publication.failed_reason.as_deref(), Some("failure"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn staged_source_is_deleted_after_commit_cancel_and_failure() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let state = dir.path().join("state");
+        let store = FilePublisherStore::open(&state, ids, clock).await?;
+        let committed = store.import_staged(&staged_file(dir.path(), "committed").await?, "committed", 256).await?;
+        let canceled = store.import_staged(&staged_file(dir.path(), "canceled").await?, "canceled", 256).await?;
+        let failed = store.import_staged(&staged_file(dir.path(), "failed").await?, "failed", 256).await?;
+        assert!(!dir.path().join("committed").exists());
+        assert_eq!(staged_entries(&state), 3);
+        commit_dummy(&store, &committed).await?;
+        assert_eq!(staged_entries(&state), 2);
+        store.cancel(&canceled).await?;
+        assert_eq!(staged_entries(&state), 1);
+        store.fail(&failed, "failure").await?;
+        assert_eq!(staged_entries(&state), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn staged_source_of_a_rejected_import_is_deleted() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let state = dir.path().join("state");
+        let store = FilePublisherStore::open(&state, ids, clock).await?;
+        let error = store.import_staged(&staged_file(dir.path(), "source").await?, "name", 0).await.unwrap_err();
+        assert_eq!(error.kind(), &ErrorKind::InvalidFormat);
+        assert_eq!(staged_entries(&state), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn staged_orphan_is_reclaimed_at_reopen_while_a_needed_source_stays() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let state = dir.path().join("state");
+        let store = FilePublisherStore::open(&state, ids.clone(), clock.clone()).await?;
+        let id = store.import_staged(&staged_file(dir.path(), "source").await?, "name", 256).await?;
+        store.claim(&id).await?;
+        tokio::fs::write(state.join("staged/orphan"), b"orphan").await?;
+        drop(store);
+        let store = FilePublisherStore::open(&state, ids, clock).await?;
+        assert!(!state.join("staged/orphan").exists());
+        assert_eq!(staged_entries(&state), 1);
+        assert_eq!(store.find_publication(&id).await?.unwrap().status, PublicationStatus::Pending);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn staged_import_publishes_the_same_root_as_a_host_path_import() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let publisher = FilePublisher::new(&dir.path().join("state"), ids, clock, Arc::new(SleeperImpl)).await?;
+        let id = publisher.import_staged(&staged_file(dir.path(), "source").await?, "name").await?;
+        wait_published(&publisher).await?;
+        let publication = publisher.find_publication(&id).await?.unwrap();
+        assert_eq!(publication.status, PublicationStatus::Committed);
+        assert_eq!(staged_entries(&dir.path().join("state")), 0);
+        assert!(publisher.delete_publication(&id).await?);
+        assert!(!publisher.delete_publication(&id).await?);
+        assert!(publisher.get_published_root_hashes().await?.is_empty());
+        publisher.shutdown().await;
         Ok(())
     }
 

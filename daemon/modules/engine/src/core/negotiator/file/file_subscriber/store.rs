@@ -203,6 +203,44 @@ impl FileSubscriberStore {
         Ok(())
     }
 
+    /// Deletes the output of a Completed row unless another row points at the same entry, which means the user
+    /// deleted the file and subscribed again, so what is there now belongs to that row.
+    pub async fn delete_output(&self, id: &str) -> Result<()> {
+        let Some(file) = self.repo.find_file_by_id(id).await? else {
+            return Ok(());
+        };
+        if file.status != SubscribedFileStatus::Completed {
+            return Ok(());
+        }
+        // Placement is the only way a new entry appears here, and this lock keeps it from happening between the check
+        // and the deletion, even for a row whose spelling takes another per-destination lock.
+        let _finalization_guard = self.finalization_lock.lock().await;
+        let output_lock = self.output_locks.get(&file.output_path());
+        let _guard = output_lock.lock().await;
+        let path = file.output_path();
+        for other in self.repo.find_other_files_in_output_directory(&file).await? {
+            // A case-insensitive or normalizing volume gives one entry several spellings, so names alone cannot tell.
+            if other.output_name == file.output_name || same_file::is_same_file(&path, other.output_path()).unwrap_or(false) {
+                return Ok(());
+            }
+        }
+        match tokio::fs::symlink_metadata(&path).await {
+            Ok(metadata) if metadata.is_dir() => return Ok(()),
+            Ok(_) => {}
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => Ok(()),
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub async fn files(&self) -> Result<Vec<SubscribedFile>> {
+        self.repo.get_committed_files().await
+    }
+
     pub async fn find_file(&self, id: &str) -> Result<Option<SubscribedFile>> {
         self.repo.find_file_by_id(id).await
     }
@@ -1234,6 +1272,133 @@ mod tests {
         .await??;
         assert!(store.find_file(&finishing).await?.unwrap().status == SubscribedFileStatus::Completed);
         drop(writer);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn subscribe_reports_an_in_progress_destination_as_already_existing() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let output = dir.path().join("output");
+        let first = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"first");
+        let second = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"second");
+        store.subscribe(&first, output.to_str().unwrap(), None, 0).await?;
+        let Err(error) = store.subscribe(&second, output.to_str().unwrap(), None, 0).await else {
+            panic!("an in-progress destination must be rejected");
+        };
+        assert!(matches!(error.kind(), ErrorKind::AlreadyExists));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_output_is_deleted_only_on_request() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let output = dir.path().join("output");
+        let id = rank_zero_subscription(&store, &output, b"content").await?;
+        write_temporary(&store, &id, b"content").await?;
+        assert!(store.begin_finalizing(&id).await?);
+        store.finalize(&id).await?;
+        store.remove(&id).await?;
+        assert_eq!(tokio::fs::read(&output).await?, b"content");
+        tokio::fs::remove_file(&output).await?;
+
+        let id = rank_zero_subscription(&store, &output, b"content").await?;
+        write_temporary(&store, &id, b"content").await?;
+        assert!(store.begin_finalizing(&id).await?);
+        store.finalize(&id).await?;
+        store.delete_output(&id).await?;
+        assert!(!output.exists());
+        store.remove(&id).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_output_keeps_a_file_that_another_row_points_at() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let output = dir.path().join("output");
+        let old = rank_zero_subscription(&store, &output, b"old").await?;
+        write_temporary(&store, &old, b"old").await?;
+        assert!(store.begin_finalizing(&old).await?);
+        store.finalize(&old).await?;
+        tokio::fs::remove_file(&output).await?;
+        let new = store
+            .subscribe(&OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"new"), output.to_str().unwrap(), None, 0)
+            .await?;
+        tokio::fs::write(&output, b"new").await?;
+        store.delete_output(&old).await?;
+        assert_eq!(tokio::fs::read(&output).await?, b"new");
+        store.remove(&old).await?;
+        assert!(store.find_file(&new).await?.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_output_keeps_a_file_that_another_row_reaches_by_another_name() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let output = dir.path().join("Output");
+        let old = rank_zero_subscription(&store, &output, b"content").await?;
+        write_temporary(&store, &old, b"content").await?;
+        assert!(store.begin_finalizing(&old).await?);
+        store.finalize(&old).await?;
+        // A hard link gives one entry a second name, as a case-insensitive volume does for `Output` and `output`.
+        let alias = dir.path().join("output");
+        tokio::fs::hard_link(&output, &alias).await?;
+        let mut row = store.repo.find_file_by_id(&old).await?.unwrap();
+        row.id = "second".to_string();
+        row.output_name = "output".to_string();
+        store.repo.insert_file_and_blocks(&row, &[]).await?;
+        store.delete_output(&old).await?;
+        assert_eq!(tokio::fs::read(&output).await?, b"content");
+        store.repo.delete_file("second").await?;
+        store.delete_output(&old).await?;
+        assert!(!output.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_output_waits_for_a_finalization_in_progress() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let output = dir.path().join("output");
+        let id = rank_zero_subscription(&store, &output, b"content").await?;
+        write_temporary(&store, &id, b"content").await?;
+        assert!(store.begin_finalizing(&id).await?);
+        store.finalize(&id).await?;
+
+        let finalizing = store.finalization_lock.lock().await;
+        let job = {
+            let store = store.clone();
+            let id = id.clone();
+            tokio::spawn(async move { store.delete_output(&id).await })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(output.exists());
+        drop(finalizing);
+        job.await??;
+        assert!(!output.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_output_ignores_rows_that_are_not_completed() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let output = dir.path().join("output");
+        let id = store
+            .subscribe(&OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"root"), output.to_str().unwrap(), None, 0)
+            .await?;
+        tokio::fs::write(&output, b"external").await?;
+        store.delete_output(&id).await?;
+        assert_eq!(tokio::fs::read(&output).await?, b"external");
         Ok(())
     }
 

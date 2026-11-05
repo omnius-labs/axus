@@ -110,6 +110,14 @@ impl FileExchanger {
         })
     }
 
+    pub fn file_publisher(&self) -> &Arc<FilePublisher> {
+        &self.ctx.file_publisher
+    }
+
+    pub fn file_subscriber(&self) -> &Arc<FileSubscriber> {
+        &self.ctx.file_subscriber
+    }
+
     #[cfg(test)]
     pub fn context(&self) -> &Arc<ExchangeContext> {
         &self.ctx

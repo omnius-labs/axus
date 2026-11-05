@@ -54,6 +54,16 @@ impl FileSubscriber {
         self.task_decoder.cancel(id).await;
         self.store.remove(id).await
     }
+    /// Removes the subscription and, unless another row points at the same destination, its Completed output.
+    pub async fn remove_with_output(&self, id: &str) -> Result<()> {
+        self.store.cancel(id).await?;
+        self.task_decoder.cancel(id).await;
+        self.store.delete_output(id).await?;
+        self.store.remove(id).await
+    }
+    pub async fn files(&self) -> Result<Vec<SubscribedFile>> {
+        self.store.files().await
+    }
     pub async fn write_block(&self, root_hash: &OmniHash, block_hash: &OmniHash, bytes: Bytes) -> Result<WriteBlockResult> {
         let written = self.store.write_block(root_hash, block_hash, bytes).await?;
         if written.rank_completed {
@@ -61,7 +71,6 @@ impl FileSubscriber {
         }
         Ok(written.result)
     }
-    #[cfg(test)]
     pub async fn find_file(&self, id: &str) -> Result<Option<SubscribedFile>> {
         self.store.find_file(id).await
     }

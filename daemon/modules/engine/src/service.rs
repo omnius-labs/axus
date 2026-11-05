@@ -8,6 +8,7 @@ use omnius_core_base::{
     sleeper::{Sleeper, SleeperImpl},
     tsid::TsidProviderImpl,
 };
+use omnius_core_omnikit::generated::omni_hash::OmniHash;
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 use rand::{
     SeedableRng,
@@ -22,18 +23,17 @@ use crate::{
     },
     core::{
         identity::NodeIdentity,
-        negotiator::{
-            FileExchanger, FileExchangerIntervals, FileExchangerOption, NodeFinder, NodeFinderIntervals, NodeFinderLocationFinder, NodeFinderOption, NodeFinderRepo,
-            NodeProfileFetcherImpl,
-        },
+        negotiator::{FileExchanger, FileExchangerOption, NodeFinder, NodeFinderLocationFinder, NodeFinderOption, NodeFinderRepo, NodeProfileFetcherImpl},
         session::{
             SessionAccepter, SessionConnector,
             model::{SessionOption, SessionType},
         },
     },
-    model::NodeProfile,
+    model::{NodeProfile, Publication, SubscribedFile},
     prelude::*,
 };
+
+pub use crate::core::negotiator::{FileExchangerIntervals, NodeFinderIntervals};
 
 pub struct AxusService {
     node_finder: Arc<NodeFinder>,
@@ -44,6 +44,7 @@ pub struct AxusService {
 pub struct AxusServiceOption {
     pub bootstrap_node_profiles: Vec<NodeProfile>,
     pub node_finder_intervals: NodeFinderIntervals,
+    pub file_exchanger_intervals: FileExchangerIntervals,
     /// 空なら、待ち受けアドレスから広告するアドレスを決める
     pub advertise_addrs: Vec<OmniAddr>,
     pub use_upnp: bool,
@@ -153,7 +154,7 @@ impl AxusService {
             sleeper,
             rng,
             FileExchangerOption::new(state_dir.join("file_exchanger")),
-            FileExchangerIntervals::default(),
+            option.file_exchanger_intervals,
         )
         .await
         {
@@ -165,6 +166,67 @@ impl AxusService {
         };
 
         Ok((node_finder, file_exchanger))
+    }
+
+    pub fn my_node_profile(&self) -> NodeProfile {
+        self.node_finder.my_node_profile()
+    }
+
+    /// Hands a file over to the publisher, which deletes it once it no longer needs it.
+    pub async fn publish_staged_file(&self, staged_file: &Path, file_name: &str) -> Result<Publication> {
+        let publisher = self.file_exchanger.file_publisher();
+        let id = publisher.import_staged(staged_file, file_name).await?;
+        publisher
+            .find_publication(&id)
+            .await?
+            .ok_or_else(|| Error::new(ErrorKind::NotFound).with_message("publication was deleted while it was created"))
+    }
+
+    pub async fn publications(&self) -> Result<Vec<Publication>> {
+        self.file_exchanger.file_publisher().publications().await
+    }
+
+    pub async fn find_publication(&self, id: &str) -> Result<Option<Publication>> {
+        self.file_exchanger.file_publisher().find_publication(id).await
+    }
+
+    /// Tells whether the ID was known.
+    pub async fn delete_publication(&self, id: &str) -> Result<bool> {
+        self.file_exchanger.file_publisher().delete_publication(id).await
+    }
+
+    pub async fn subscribe(&self, root_hash: &OmniHash, output_path: &Path) -> Result<SubscribedFile> {
+        let output_path = output_path
+            .to_str()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidFormat).with_message("invalid output path"))?;
+        let subscriber = self.file_exchanger.file_subscriber();
+        let id = subscriber.subscribe(root_hash, output_path, None, 0).await?;
+        subscriber
+            .find_file(&id)
+            .await?
+            .ok_or_else(|| Error::new(ErrorKind::NotFound).with_message("subscription was deleted while it was created"))
+    }
+
+    pub async fn subscriptions(&self) -> Result<Vec<SubscribedFile>> {
+        self.file_exchanger.file_subscriber().files().await
+    }
+
+    pub async fn find_subscription(&self, id: &str) -> Result<Option<SubscribedFile>> {
+        self.file_exchanger.file_subscriber().find_file(id).await
+    }
+
+    pub async fn cancel_subscription(&self, id: &str) -> Result<()> {
+        self.file_exchanger.file_subscriber().cancel(id).await
+    }
+
+    /// With `delete_output`, also deletes a Completed output unless another subscription points at the same destination.
+    pub async fn remove_subscription(&self, id: &str, delete_output: bool) -> Result<()> {
+        let subscriber = self.file_exchanger.file_subscriber();
+        if delete_output {
+            subscriber.remove_with_output(id).await
+        } else {
+            subscriber.remove(id).await
+        }
     }
 
     pub async fn shutdown(&self) {
@@ -189,6 +251,8 @@ mod tests {
 
     use testresult::TestResult;
 
+    use crate::model::{PublicationStatus, SubscribedFileStatus};
+
     use omnius_core_base::clock::{Clock, ClockUtc};
     use omnius_core_omnikit::generated::omni_hash::{OmniHash, OmniHashAlgorithmType};
     use omnius_core_omnikit::model::omni_addr::OmniAddr;
@@ -197,7 +261,7 @@ mod tests {
         base::connection::{ConnectionTcpConnectorImpl, TcpProxyOption, TcpProxyType},
         core::{
             identity::NodeIdentity,
-            negotiator::NodeFinderIntervals,
+            negotiator::{FileExchangerIntervals, NodeFinderIntervals},
             session::{
                 SessionConnector,
                 model::{SessionOption, SessionType},
@@ -422,6 +486,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_staged_file_reaches_a_subscriber_through_the_service_operations() -> TestResult {
+        transfer_through_the_service(rand::random_iter().take(3 * 1024 * 1024 + 17).collect()).await
+    }
+
+    #[tokio::test]
+    async fn an_empty_staged_file_reaches_a_subscriber_through_the_service_operations() -> TestResult {
+        transfer_through_the_service(Vec::new()).await
+    }
+
+    async fn transfer_through_the_service(content: Vec<u8>) -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let publisher = AxusService::new(dir.path().join("publisher"), format!("127.0.0.1:{}", free_port()?), dir.path(), fast_option(vec![])).await?;
+        let subscriber = AxusService::new(
+            dir.path().join("subscriber"),
+            format!("127.0.0.1:{}", free_port()?),
+            dir.path(),
+            fast_option(vec![publisher.my_node_profile()]),
+        )
+        .await?;
+
+        let staged = dir.path().join("staged");
+        tokio::fs::write(&staged, &content).await?;
+        let id = publisher.publish_staged_file(&staged, "name").await?.id;
+        let root_hash = {
+            let publisher = &publisher;
+            let id = &id;
+            Watchdog::wait_for("the publication commits", move || async move {
+                publisher.find_publication(id).await.unwrap().unwrap().status == PublicationStatus::Committed
+            })
+            .await?;
+            publisher.find_publication(id).await?.unwrap().root_hash.unwrap()
+        };
+
+        let output = dir.path().join("output");
+        let subscription = subscriber.subscribe(&root_hash, &output).await?.id;
+        {
+            let subscriber = &subscriber;
+            let subscription = &subscription;
+            Watchdog::wait_for("the subscription completes", move || async move {
+                subscriber.find_subscription(subscription).await.unwrap().unwrap().status == SubscribedFileStatus::Completed
+            })
+            .await?;
+        }
+        assert_eq!(tokio::fs::read(&output).await?, content);
+        assert_eq!(subscriber.subscriptions().await?.len(), 1);
+        assert_eq!(publisher.publications().await?.len(), 1);
+
+        subscriber.remove_subscription(&subscription, true).await?;
+        assert!(!output.exists());
+        assert!(publisher.delete_publication(&id).await?);
+
+        subscriber.shutdown().await;
+        publisher.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn the_file_exchanger_use_is_accepted_after_startup() -> TestResult {
         let dir = tempfile::tempdir()?;
         let service = AxusService::new(dir.path().join("node"), "127.0.0.1:0", dir.path(), fast_option(vec![])).await?;
@@ -494,6 +615,18 @@ mod tests {
                 // 受理 worker の 1 秒の待機より、Hello の受信期限を長くする
                 communicate: Duration::from_millis(500),
                 lookup: Duration::from_millis(100),
+            },
+            file_exchanger_intervals: FileExchangerIntervals {
+                status_cycle: Duration::from_millis(200),
+                // A loaded machine can miss the short receive deadline, so the only peer must return quickly.
+                timeout_exclusion: Duration::from_secs(2),
+                unwanted_cooldown: Duration::from_secs(2),
+                reject_retry: Duration::from_millis(300),
+                rank_absent_retry: Duration::from_millis(200),
+                poll: Duration::from_millis(20),
+                connect: Duration::from_millis(50),
+                wanted_refresh: Duration::from_millis(20),
+                ..Default::default()
             },
             ..Default::default()
         }

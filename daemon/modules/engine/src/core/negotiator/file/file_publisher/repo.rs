@@ -51,9 +51,16 @@ impl FilePublisherRepo {
     }
 
     async fn migrate(db: &SqlitePool) -> Result<()> {
-        let requests = vec![MigrationRequest {
-            name: "2024-06-23_init".to_string(),
-            queries: r#"
+        SqliteMigrator::migrate(db, Self::migrations()).await?;
+
+        Ok(())
+    }
+
+    fn migrations() -> Vec<MigrationRequest> {
+        vec![
+            MigrationRequest {
+                name: "2024-06-23_init".to_string(),
+                queries: r#"
 -- committed
 CREATE TABLE IF NOT EXISTS committed_files (
     root_hash TEXT NOT NULL,
@@ -96,12 +103,23 @@ CREATE TABLE IF NOT EXISTS uncommitted_blocks (
 );
 CREATE INDEX IF NOT EXISTS index_file_id_rank_index_for_uncommitted_blocks ON uncommitted_blocks (file_id, rank ASC, `index` ASC);
 "#
-            .to_string(),
-        }];
-
-        SqliteMigrator::migrate(db, requests).await?;
-
-        Ok(())
+                .to_string(),
+            },
+            MigrationRequest {
+                name: "2026-11-05_committed_imports".to_string(),
+                queries: r#"
+CREATE TABLE IF NOT EXISTS committed_imports (
+    import_id TEXT NOT NULL PRIMARY KEY,
+    root_hash TEXT NOT NULL,
+    file_name TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS index_root_hash_file_name_for_committed_imports ON committed_imports (root_hash, file_name);
+INSERT INTO committed_imports (import_id, root_hash, file_name)
+    SELECT '0.' || lower(hex(randomblob(16))), root_hash, file_name FROM committed_files;
+"#
+                .to_string(),
+            },
+        ]
     }
 
     pub async fn replace_failed_file(&self, old_id: &str, file: &PublishedUncommittedFile) -> Result<bool> {
@@ -200,6 +218,11 @@ INSERT INTO uncommitted_files (id, file_path, file_name, block_size, attrs, prio
             .bind(file_name)
             .execute(&mut *tx)
             .await?;
+        sqlx::query("DELETE FROM committed_imports WHERE root_hash = ? AND file_name = ?")
+            .bind(root_hash.to_string())
+            .bind(file_name)
+            .execute(&mut *tx)
+            .await?;
         sqlx::query("DELETE FROM committed_blocks WHERE root_hash = ? AND NOT EXISTS (SELECT 1 FROM committed_files WHERE root_hash = ?)")
             .bind(root_hash.to_string())
             .bind(root_hash.to_string())
@@ -237,6 +260,38 @@ SELECT root_hash, file_name, block_size, attrs, created_at, updated_at
 
         let res: Vec<PublishedCommittedFile> = res.into_iter().filter_map(|r| r.into().ok()).collect();
         Ok(res)
+    }
+
+    pub async fn find_committed_file_by_import_id(&self, import_id: &str) -> Result<Option<PublishedCommittedFile>> {
+        let res: Option<PublishedCommittedFileRow> = sqlx::query_as(
+            r#"
+SELECT f.root_hash, f.file_name, f.block_size, f.attrs, f.created_at, f.updated_at
+    FROM committed_imports i
+    JOIN committed_files f ON f.root_hash = i.root_hash AND f.file_name = i.file_name
+    WHERE i.import_id = ?
+"#,
+        )
+        .bind(import_id)
+        .fetch_optional(self.db.as_ref())
+        .await?;
+
+        res.map(|r| r.into()).transpose()
+    }
+
+    /// One row per committed file, under its oldest import ID.
+    pub async fn get_committed_files_with_import_id(&self) -> Result<Vec<(String, PublishedCommittedFile)>> {
+        let res: Vec<ImportedCommittedFileRow> = sqlx::query_as(
+            r#"
+SELECT MIN(i.import_id) AS import_id, f.root_hash, f.file_name, f.block_size, f.attrs, f.created_at, f.updated_at
+    FROM committed_imports i
+    JOIN committed_files f ON f.root_hash = i.root_hash AND f.file_name = i.file_name
+    GROUP BY f.root_hash, f.file_name
+"#,
+        )
+        .fetch_all(self.db.as_ref())
+        .await?;
+
+        res.into_iter().map(|row| Ok((row.import_id, row.file.into()?))).collect()
     }
 
     pub async fn find_committed_file_by_root_hash(&self, root_hash: &OmniHash) -> Result<Option<PublishedCommittedFile>> {
@@ -351,6 +406,13 @@ INSERT INTO committed_blocks (root_hash, block_hash, rank, `index`)
             query_builder.build().execute(&mut *tx).await?;
         }
 
+        sqlx::query("INSERT INTO committed_imports (import_id, root_hash, file_name) VALUES (?, ?, ?) ON CONFLICT DO NOTHING")
+            .bind(uncommitted_file_id)
+            .bind(file.root_hash.to_string())
+            .bind(&file.file_name)
+            .execute(&mut *tx)
+            .await?;
+
         sqlx::query(
             r#"
 DELETE FROM uncommitted_files
@@ -403,6 +465,13 @@ INSERT INTO committed_files (root_hash, file_name, block_size, attrs, created_at
         .bind(row.updated_at)
         .execute(&mut *tx)
         .await?;
+
+        sqlx::query("INSERT INTO committed_imports (import_id, root_hash, file_name) VALUES (?, ?, ?) ON CONFLICT DO NOTHING")
+            .bind(uncommitted_file_id)
+            .bind(file.root_hash.to_string())
+            .bind(&file.file_name)
+            .execute(&mut *tx)
+            .await?;
 
         sqlx::query(
             r#"
@@ -683,6 +752,13 @@ DELETE FROM uncommitted_blocks
 }
 
 #[derive(sqlx::FromRow)]
+struct ImportedCommittedFileRow {
+    import_id: String,
+    #[sqlx(flatten)]
+    file: PublishedCommittedFileRow,
+}
+
+#[derive(sqlx::FromRow)]
 struct PublishedCommittedFileRow {
     root_hash: String,
     file_name: String,
@@ -890,6 +966,43 @@ mod tests {
                 assert_eq!(fullfsync, 1);
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_import_migration_gives_an_existing_committed_file_a_stable_id() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let options = sqlx::sqlite::SqliteConnectOptions::new().filename(dir.path().join("sqlite.db")).create_if_missing(true);
+        let db = sqlx::sqlite::SqlitePool::connect_with(options).await?;
+        let mut migrations = FilePublisherRepo::migrations();
+        migrations.truncate(1);
+        omnius_core_migration::sqlite::SqliteMigrator::migrate(&db, migrations).await?;
+        let root = hash(b"root");
+        sqlx::query("INSERT INTO committed_files (root_hash, file_name, block_size, attrs, created_at, updated_at) VALUES (?, 'old', 256, NULL, ?, ?)")
+            .bind(root.to_string())
+            .bind(Utc::now().naive_utc())
+            .bind(Utc::now().naive_utc())
+            .execute(&db)
+            .await?;
+        db.close().await;
+
+        let (repo, _) = create_repo(dir.path()).await?;
+        let imported = repo.get_committed_files_with_import_id().await?;
+        assert_eq!(imported.len(), 1);
+        let id = imported[0].0.clone();
+        assert!(!id.is_empty());
+        assert_eq!(repo.find_committed_file_by_import_id(&id).await?.unwrap().root_hash, root);
+
+        drop(repo);
+        let (repo, _) = create_repo(dir.path()).await?;
+        assert_eq!(repo.get_committed_files_with_import_id().await?[0].0, id);
+
+        // An ID from the clock sorts after a migrated one, so the list keeps showing the oldest.
+        let reimport = uncommitted_file("1793857970.533921675.ab428ee5648b9f5b", "old", Utc::now());
+        repo.insert_uncommitted_file(&reimport).await?;
+        repo.commit_file_without_blocks(&committed_file(&root, "old", Utc::now()), &reimport.id).await?;
+        assert_eq!(repo.get_committed_files_with_import_id().await?[0].0, id);
+        assert_eq!(repo.find_committed_file_by_import_id(&reimport.id).await?.unwrap().root_hash, root);
         Ok(())
     }
 

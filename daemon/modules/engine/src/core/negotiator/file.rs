@@ -45,7 +45,7 @@ use file_subscriber::*;
 #[allow(unused)]
 pub use location_finder::*;
 #[allow(unused)]
-use model::*;
+pub use model::*;
 #[allow(unused)]
 use serve_queue::*;
 #[allow(unused)]

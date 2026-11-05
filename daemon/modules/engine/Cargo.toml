@@ -5,6 +5,7 @@ edition = { workspace = true }
 authors = { workspace = true }
 
 [dependencies]
+same-file = { workspace = true }
 omnius-core-base = { workspace = true }
 omnius-core-migration = { workspace = true }
 omnius-core-omnikit = { workspace = true }

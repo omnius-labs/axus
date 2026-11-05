@@ -1,5 +1,5 @@
 use super::*;
-use crate::{base::runtime::Shutdown, prelude::*};
+use crate::{base::runtime::Shutdown, generated::axus::file::MAX_BLOCK_LENGTH, prelude::*};
 use async_trait::async_trait;
 use chrono::Utc;
 use omnius_core_base::{clock::Clock, sleeper::Sleeper, tsid::TsidProvider};
@@ -41,6 +41,31 @@ impl FilePublisher {
         let id = self.store.import(file_path, file_name, block_size, attrs, priority).await?;
         self.task_encoder.wake();
         Ok(id)
+    }
+    /// Publishes a file the caller hands over, with the largest block size.
+    pub async fn import_staged(&self, staged_file: &Path, file_name: &str) -> Result<String> {
+        let id = self.store.import_staged(staged_file, file_name, MAX_BLOCK_LENGTH).await?;
+        self.task_encoder.wake();
+        Ok(id)
+    }
+    pub async fn publications(&self) -> Result<Vec<Publication>> {
+        self.store.publications().await
+    }
+    pub async fn find_publication(&self, id: &str) -> Result<Option<Publication>> {
+        self.store.find_publication(id).await
+    }
+    /// Cancels an uncommitted file or stops a committed one, and tells whether the import ID was known.
+    pub async fn delete_publication(&self, id: &str) -> Result<bool> {
+        let uncommitted = self.store.contains_uncommitted_file(id).await?;
+        if uncommitted {
+            self.cancel(id).await?;
+        }
+        // The commit may have moved the row before the cancel saw it.
+        if let Some(file) = self.store.find_committed_file_by_import_id(id).await? {
+            self.remove(&file.root_hash, &file.file_name).await?;
+            return Ok(true);
+        }
+        Ok(uncommitted)
     }
     pub async fn cancel(&self, id: &str) -> Result<()> {
         self.store.cancel(id).await?;

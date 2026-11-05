@@ -115,6 +115,7 @@ bytes = "1"
 headers = "0.4"
 http = "1"
 url = "2.5.4"
+same-file = "1.0.6"
 
 [workspace.lints.clippy]
 uninlined_format_args = "allow"

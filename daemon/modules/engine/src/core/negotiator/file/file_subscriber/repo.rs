@@ -254,6 +254,15 @@ SELECT *
         res.into_iter().map(SubscribedFileRow::into).collect()
     }
 
+    pub async fn find_other_files_in_output_directory(&self, file: &SubscribedFile) -> Result<Vec<SubscribedFile>> {
+        let res: Vec<SubscribedFileRow> = sqlx::query_as("SELECT * FROM files WHERE output_directory = ? AND id != ?")
+            .bind(&file.output_directory)
+            .bind(&file.id)
+            .fetch_all(self.db.as_ref())
+            .await?;
+        res.into_iter().map(SubscribedFileRow::into).collect()
+    }
+
     pub async fn find_file_by_id(&self, id: &str) -> Result<Option<SubscribedFile>> {
         let res: Option<SubscribedFileRow> = sqlx::query_as(
             r#"
@@ -423,7 +432,13 @@ INSERT INTO files (id, root_hash, output_directory, output_name, rank, block_cou
         .bind(row.created_at)
         .bind(row.updated_at)
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(|error| match &error {
+            sqlx::Error::Database(database) if database.is_unique_violation() => {
+                Error::new(ErrorKind::AlreadyExists).with_message("output entry is reserved by another subscription")
+            }
+            _ => error.into(),
+        })?;
 
         const CHUNK_SIZE: i64 = 100;
 

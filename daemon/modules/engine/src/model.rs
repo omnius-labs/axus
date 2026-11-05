@@ -8,3 +8,5 @@ pub use file_ref::*;
 #[allow(unused)]
 pub use memo_ref::*;
 pub use node_profile::*;
+
+pub use crate::core::negotiator::{Publication, PublicationStatus, SubscribedFile, SubscribedFileStatus};

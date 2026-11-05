@@ -86,7 +86,10 @@ impl Executor {
             eprintln!("failed to load daemon config from {}: {error:?}", config_dir.display());
         })?;
 
-        let _lock = Self::acquire_state_lock(&conf.core.state_dir).await?;
+        // Logging starts after the lock, so a daemon already running would otherwise exit without a word.
+        let _lock = Self::acquire_state_lock(&conf.core.state_dir).await.inspect_err(|error| {
+            eprintln!("{error:?}");
+        })?;
 
         let token = CancellationToken::new();
         _ = Self::spawn_signal_handler(&token)?;

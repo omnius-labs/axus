@@ -67,10 +67,13 @@ impl FilePublisher {
         self.store.remove_publish(id).await
     }
 
-    pub async fn cancel(&self, id: &str) -> Result<()> {
-        self.store.cancel(id).await?;
+    pub async fn cancel(&self, id: &str) -> Result<bool> {
         self.task_encoder.cancel(id);
-        self.store.cleanup_blocks(id).await
+        let removed = self.store.cancel(id).await?;
+        if removed {
+            self.store.cleanup_blocks(id).await?;
+        }
+        Ok(removed)
     }
     pub async fn remove(&self, root_hash: &OmniHash, file_name: &str) -> Result<()> {
         self.store.remove(root_hash, file_name).await
@@ -88,7 +91,7 @@ impl FilePublisher {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, sync::Arc, time::Duration};
+    use std::{sync::Arc, time::Duration};
 
     use chrono::Utc;
     use omnius_core_base::{

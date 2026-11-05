@@ -235,10 +235,8 @@ impl FilePublisherStore {
         for file in self.repo.get_uncommitted_files().await? {
             records.push(PublishRecord::Uncommitted(file));
         }
-        for file in self.repo.get_committed_files().await? {
-            if file.source_id.is_some() {
-                records.push(PublishRecord::Committed(file));
-            }
+        for file in self.repo.get_committed_publishes().await? {
+            records.push(PublishRecord::Committed(file));
         }
         Ok(records)
     }
@@ -321,14 +319,14 @@ impl FilePublisherStore {
         Ok(())
     }
 
-    pub async fn cancel(&self, id: &str) -> Result<()> {
+    pub async fn cancel(&self, id: &str) -> Result<bool> {
         let _guard = self.lock.lock().await;
-        let file = self.repo.find_uncommitted_file_by_id(id).await?;
+        let Some(file) = self.repo.find_uncommitted_file_by_id(id).await? else {
+            return Ok(false);
+        };
         self.repo.delete_uncommitted_file(id).await?;
-        if let Some(file) = file {
-            self.delete_owned_source(&file).await;
-        }
-        Ok(())
+        self.delete_owned_source(&file).await;
+        Ok(true)
     }
 
     pub async fn cleanup_blocks(&self, id: &str) -> Result<()> {

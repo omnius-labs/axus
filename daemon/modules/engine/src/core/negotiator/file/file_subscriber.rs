@@ -67,6 +67,10 @@ impl FileSubscriber {
     pub async fn list_files(&self) -> Result<Vec<SubscribedFile>> {
         self.store.list_files().await
     }
+
+    pub async fn set_status_for_test(&self, id: &str, expected: &SubscribedFileStatus, status: &SubscribedFileStatus) -> Result<()> {
+        self.store.set_status_for_test(id, expected, status).await
+    }
     pub async fn get_provided_root_hashes(&self) -> Result<Vec<OmniHash>> {
         self.store.get_provided_root_hashes().await
     }

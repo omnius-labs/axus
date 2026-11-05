@@ -93,7 +93,7 @@ Starting a subscription returns `202` with the resource.
 Progress is read from the same resource, and cancel and remove are operations on it.
 A `Failed` publish is removed by cancel or remove; the API does not retry it.
 A generic operation resource is not introduced.
-The publisher records the original publish ID on the committed file, so the resource ID stays readable after commit.
+The publisher records every publish ID that reached the committed file, so each resource ID stays readable after commit, including when the same file is published again.
 
 **Rationale**
 A publish and a subscription are persistent tasks with their own IDs and state, unlike a copy or a move that has no natural resource.
@@ -198,7 +198,7 @@ The API and P2P have separate listen addresses, and the health handler reports t
 The daemon implements the publish and subscribe resources of §5.1: upload content, commit, get, list, cancel, and remove for a publish, and create, get, list, cancel, remove, and download content for a subscribe.
 The generated router serves the JSON endpoints, and the two content paths are hand-written routes because the generated router cannot stream a request or response body.
 The upload state is kept in daemon memory under `core.state_dir/uploads`, and the daemon removes that directory at startup.
-A completed publish keeps its publish ID through the committed-file record, so `GET /publishes/{id}` remains readable after commit and after a restart.
+A completed publish keeps its publish ID in the publisher's publish records, so `GET /publishes/{id}` remains readable after commit and after a restart, including when the same file is published again.
 The API is local-only and unauthenticated; a non-loopback `api.listen_addr` logs a warning.
 The design decisions above are implemented, and there is no remaining work in this document.
 

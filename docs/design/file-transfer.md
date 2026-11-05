@@ -103,7 +103,7 @@ Pending, Processing, and Failed are the states of an uncommitted file, and only 
 Until the root hash is finalized, a temporary ID is used; after finalization the file is committed to the content identifier, so a process that failed midway is distinguished from a file that can be advertised.
 
 An uncommitted file's row disappears on commit and cancel, and only Failed remains to show the reason for the failure.
-When a committed file with the same root hash and file name already exists, a new committed file is not created and the uncommitted file row disappears.
+When a committed file with the same root hash and file name already exists, the commit adds a publish record for the new uncommitted ID and deletes the uncommitted row, so the existing committed file and both publish IDs stay readable.
 Only one uncommitted file per path and file name can exist.
 Importing a pair with a Pending or Processing file is rejected with `AlreadyExists`.
 Importing a pair with a Failed file deletes that row and creates a Pending row with a new temporary ID.

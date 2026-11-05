@@ -6,7 +6,7 @@ use axum::{
     http::{HeaderMap, Method, Request, StatusCode, header},
 };
 use bytes::Bytes;
-use omnius_axus_engine::{FileExchangerIntervals, NodeFinderIntervals, service::AxusServiceOption};
+use omnius_axus_engine::{FileExchangerIntervals, NodeFinderIntervals, SubscribedFileStatus, service::AxusServiceOption};
 use omnius_axus_interface::{models, types::Nullable};
 use omnius_core_omnikit::generated::omni_hash::{OmniHash, OmniHashAlgorithmType};
 use testresult::TestResult;
@@ -394,5 +394,137 @@ async fn rest_api_restart_test() -> TestResult {
     assert_eq!(std::fs::read_dir(dir.path().join("uploads"))?.count(), 0);
 
     second.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rest_api_publish_list_and_terminal_rules_test() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let state = Arc::new(DaemonState::new_for_test(config(dir.path(), 0, vec![]), fast_option()).await?);
+    let app = super::ApiServer::router(state.clone());
+
+    let first = create_publish(&app, "first.bin", 4, 256).await;
+    let second = create_publish(&app, "second.bin", 4, 256).await;
+
+    let (status, _, body) = send(&app, Method::GET, "/api/v1/publishes?limit=1&offset=0", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let page = json::<models::PublishList>(&body);
+    assert_eq!(page.total, 2);
+    assert_eq!(page.publishes.len(), 1);
+
+    let (status, _, body) = send(&app, Method::GET, "/api/v1/publishes?limit=1&offset=1", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let next = json::<models::PublishList>(&body);
+    assert_eq!(next.total, 2);
+    assert_eq!(next.publishes.len(), 1);
+    assert_ne!(page.publishes[0].id, next.publishes[0].id);
+
+    for publish in [first, second] {
+        let (status, _, _) = send(&app, Method::POST, &format!("/api/v1/publishes/{}/cancel", publish.id), None, None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+    }
+
+    let content = vec![3u8; 4];
+    let publish = create_publish(&app, "done.bin", content.len() as u64, 256).await;
+    let (status, _, _) = send(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/publishes/{}/content?offset=0", publish.id),
+        Some("application/octet-stream"),
+        Some(content.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, _) = send(&app, Method::POST, &format!("/api/v1/publishes/{}/commit", publish.id), None, None).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    wait_publish(&app, &publish.id, models::PublishStatus::Succeeded).await;
+
+    let (status, _, _) = send(&app, Method::POST, &format!("/api/v1/publishes/{}/cancel", publish.id), None, None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _, _) = send(&app, Method::DELETE, &format!("/api/v1/publishes/{}", publish.id), None, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let duplicate_content = vec![9u8; 4];
+    let original = create_publish(&app, "duplicate.bin", duplicate_content.len() as u64, 256).await;
+    let (status, _, _) = send(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/publishes/{}/content?offset=0", original.id),
+        Some("application/octet-stream"),
+        Some(duplicate_content.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, _) = send(&app, Method::POST, &format!("/api/v1/publishes/{}/commit", original.id), None, None).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    wait_publish(&app, &original.id, models::PublishStatus::Succeeded).await;
+
+    let copy = create_publish(&app, "duplicate.bin", duplicate_content.len() as u64, 256).await;
+    let (status, _, _) = send(
+        &app,
+        Method::PUT,
+        &format!("/api/v1/publishes/{}/content?offset=0", copy.id),
+        Some("application/octet-stream"),
+        Some(duplicate_content),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, _) = send(&app, Method::POST, &format!("/api/v1/publishes/{}/commit", copy.id), None, None).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let copy = wait_publish(&app, &copy.id, models::PublishStatus::Succeeded).await;
+    assert!(copy.root_hash.is_some());
+
+    let (status, _, _) = send(&app, Method::GET, &format!("/api/v1/publishes/{}", original.id), None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = send(&app, Method::GET, &format!("/api/v1/publishes/{}", copy.id), None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = send(&app, Method::DELETE, &format!("/api/v1/publishes/{}", original.id), None, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, _) = send(&app, Method::GET, &format!("/api/v1/publishes/{}", original.id), None, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, _) = send(&app, Method::GET, &format!("/api/v1/publishes/{}", copy.id), None, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let root_hash = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"terminal").to_string();
+    let subscribe = create_subscribe(&app, &root_hash, &dir.path().join("terminal.bin")).await;
+    let (status, _, body) = send(&app, Method::POST, &format!("/api/v1/subscribes/{}/cancel", subscribe.id), None, None).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(json::<models::SubscribeResponse>(&body).subscribe.status, models::SubscribeStatus::Canceled);
+    let (status, _, body) = send(&app, Method::POST, &format!("/api/v1/subscribes/{}/cancel", subscribe.id), None, None).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(json::<models::SubscribeResponse>(&body).subscribe.status, models::SubscribeStatus::Canceled);
+    let (status, _, _) = send(&app, Method::DELETE, &format!("/api/v1/subscribes/{}", subscribe.id), None, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    state.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rest_api_finalizing_cancel_and_remove_conflict_test() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let state = Arc::new(DaemonState::new_for_test(config(dir.path(), 0, vec![]), fast_option()).await?);
+    let app = super::ApiServer::router(state.clone());
+
+    let root_hash = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"finalizing").to_string();
+    let subscribe = create_subscribe(&app, &root_hash, &dir.path().join("finalizing.bin")).await;
+    state
+        .file_service()
+        .set_subscribe_status_for_test(&subscribe.id, &SubscribedFileStatus::Downloading, &SubscribedFileStatus::Finalizing)
+        .await?;
+
+    let (status, _, _) = send(&app, Method::POST, &format!("/api/v1/subscribes/{}/cancel", subscribe.id), None, None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _, _) = send(&app, Method::DELETE, &format!("/api/v1/subscribes/{}", subscribe.id), None, None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    state
+        .file_service()
+        .set_subscribe_status_for_test(&subscribe.id, &SubscribedFileStatus::Finalizing, &SubscribedFileStatus::Canceled)
+        .await?;
+    let (status, _, _) = send(&app, Method::DELETE, &format!("/api/v1/subscribes/{}", subscribe.id), None, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    state.shutdown().await;
     Ok(())
 }

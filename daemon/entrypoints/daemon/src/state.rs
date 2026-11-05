@@ -112,6 +112,11 @@ impl DaemonState {
         self.axus_service.node_profile()
     }
 
+    #[cfg(test)]
+    pub fn file_service(&self) -> Arc<omnius_axus_engine::FileService> {
+        self.axus_service.file_service()
+    }
+
     pub async fn shutdown(&self) {
         self.uploads.shutdown().await;
         self.axus_service.shutdown().await;

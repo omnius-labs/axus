@@ -128,8 +128,14 @@ impl PublishService {
         match self.file_service.get_publish(id).await.map_err(ApiError::from)? {
             Some(PublishRecord::Committed(_)) => Err(ApiError::conflict("a succeeded publish is removed, not cancelled")),
             Some(PublishRecord::Uncommitted(_)) => {
-                self.file_service.cancel_publish(id).await.map_err(ApiError::from)?;
-                Ok(())
+                if self.file_service.cancel_publish(id).await.map_err(ApiError::from)? {
+                    return Ok(());
+                }
+                match self.file_service.get_publish(id).await.map_err(ApiError::from)? {
+                    Some(PublishRecord::Committed(_)) => Err(ApiError::conflict("a succeeded publish is removed, not cancelled")),
+                    Some(PublishRecord::Uncommitted(_)) => Err(ApiError::conflict("the publish state changed while cancelling; retry")),
+                    None => Ok(()),
+                }
             }
             None => Err(ApiError::not_found("publish not found")),
         }

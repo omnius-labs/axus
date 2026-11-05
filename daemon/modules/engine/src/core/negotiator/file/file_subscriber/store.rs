@@ -207,6 +207,11 @@ impl FileSubscriberStore {
         self.repo.find_file_by_id(id).await
     }
 
+    pub async fn set_status_for_test(&self, id: &str, expected: &SubscribedFileStatus, status: &SubscribedFileStatus) -> Result<()> {
+        self.repo.transition(id, expected, status, None).await?;
+        Ok(())
+    }
+
     pub async fn list_files(&self) -> Result<Vec<SubscribedFile>> {
         self.repo.get_committed_files().await
     }

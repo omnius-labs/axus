@@ -40,7 +40,7 @@ impl FileService {
         self.publisher.encoded_block_count(id).await
     }
 
-    pub async fn cancel_publish(&self, id: &str) -> Result<()> {
+    pub async fn cancel_publish(&self, id: &str) -> Result<bool> {
         self.publisher.cancel(id).await
     }
 
@@ -62,6 +62,10 @@ impl FileService {
 
     pub async fn cancel_subscribe(&self, id: &str) -> Result<()> {
         self.subscriber.cancel(id).await
+    }
+
+    pub async fn set_subscribe_status_for_test(&self, id: &str, expected: &crate::SubscribedFileStatus, status: &crate::SubscribedFileStatus) -> Result<()> {
+        self.subscriber.set_status_for_test(id, expected, status).await
     }
 
     pub async fn remove_subscribe(&self, id: &str) -> Result<()> {

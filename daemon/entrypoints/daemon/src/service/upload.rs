@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    io::SeekFrom,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -7,7 +8,11 @@ use std::{
 use chrono::{DateTime, Duration, Utc};
 use futures_util::StreamExt as _;
 use omnius_core_base::clock::Clock;
-use tokio::{io::AsyncWriteExt as _, sync::Mutex, task::JoinHandle};
+use tokio::{
+    io::{AsyncSeekExt as _, AsyncWriteExt as _},
+    sync::Mutex,
+    task::JoinHandle,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::{error::ApiError, prelude::*};
@@ -30,6 +35,14 @@ pub struct UploadState {
     pub expires_at: DateTime<Utc>,
 }
 
+struct UploadEntry {
+    /// Serializes the chunk writes, commit, cancel, and the reaper's delete
+    /// for one upload. The state lock is held only for a short update so a
+    /// slow request body does not block other uploads or the upload list.
+    io_lock: Mutex<()>,
+    state: Mutex<UploadState>,
+}
+
 pub struct StagedUpload {
     pub id: String,
     pub path: PathBuf,
@@ -48,7 +61,7 @@ pub struct UploadService {
     dir: PathBuf,
     max_upload_size: u64,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
-    uploads: Mutex<HashMap<String, UploadState>>,
+    uploads: Mutex<HashMap<String, Arc<UploadEntry>>>,
     token: CancellationToken,
     handle: Mutex<Option<JoinHandle<()>>>,
 }
@@ -133,63 +146,98 @@ impl UploadService {
             updated_at: now,
             expires_at: now + Duration::hours(UPLOAD_EXPIRY_HOURS),
         };
-        self.uploads.lock().await.insert(id, state.clone());
+        let entry = Arc::new(UploadEntry {
+            io_lock: Mutex::new(()),
+            state: Mutex::new(state.clone()),
+        });
+        self.uploads.lock().await.insert(id, entry);
         Ok(state)
     }
 
     pub async fn get(&self, id: &str) -> Option<UploadState> {
-        self.uploads.lock().await.get(id).cloned()
+        let entry = self.uploads.lock().await.get(id).cloned()?;
+        Some(entry.state.lock().await.clone())
     }
 
     pub async fn list(&self) -> Vec<UploadState> {
-        self.uploads.lock().await.values().cloned().collect()
+        let entries = self.uploads.lock().await.values().cloned().collect::<Vec<_>>();
+        {
+            let mut states = Vec::with_capacity(entries.len());
+            for entry in entries {
+                states.push(entry.state.lock().await.clone());
+            }
+            states
+        }
     }
 
     pub async fn write_stream(&self, id: &str, offset: u64, body: axum::body::Body) -> std::result::Result<(), ApiError> {
-        let mut uploads = self.uploads.lock().await;
-        let state = uploads.get_mut(id).ok_or_else(|| ApiError::not_found("publish upload not found or already committed"))?;
+        let Some(entry) = self.uploads.lock().await.get(id).cloned() else {
+            return Err(ApiError::not_found("publish upload not found or already committed"));
+        };
+        let _io = entry.io_lock.lock().await;
 
-        if state.expires_at <= self.clock.now() {
-            let expired = uploads.remove(id).expect("the upload was found");
-            drop(uploads);
-            let _ = tokio::fs::remove_file(expired.staging_path).await;
-            return Err(ApiError::not_found("publish upload expired"));
-        }
-        if offset != state.uploaded_size {
-            return Err(ApiError::conflict(format!("offset must equal the current uploaded size {}", state.uploaded_size)));
-        }
-        if state.uploaded_size == state.size {
-            return Err(ApiError::payload_too_large("the upload already reached the declared size"));
-        }
+        let staging_path = {
+            let state = entry.state.lock().await;
+            if state.expires_at <= self.clock.now() {
+                let staging_path = state.staging_path.clone();
+                drop(state);
+                let _ = self.uploads.lock().await.remove(id);
+                let _ = tokio::fs::remove_file(staging_path).await;
+                return Err(ApiError::not_found("publish upload expired"));
+            }
+            if offset != state.uploaded_size {
+                return Err(ApiError::conflict(format!("offset must equal the current uploaded size {}", state.uploaded_size)));
+            }
+            if state.uploaded_size == state.size {
+                return Err(ApiError::payload_too_large("the upload already reached the declared size"));
+            }
+            state.staging_path.clone()
+        };
 
-        let remaining = state.size - state.uploaded_size;
         let available = available_space(&self.dir).map_err(|error| ApiError::internal(format!("cannot read available space: {error}")))?;
         if available == 0 {
             return Err(ApiError::insufficient_storage("no space is available for the upload"));
         }
 
         let mut file = tokio::fs::OpenOptions::new()
-            .append(true)
-            .open(&state.staging_path)
+            .write(true)
+            .open(&staging_path)
             .await
             .map_err(|error| ApiError::internal(format!("cannot open the upload staging file: {error}")))?;
+        file.seek(SeekFrom::Start(offset))
+            .await
+            .map_err(|error| ApiError::internal(format!("cannot seek the upload staging file: {error}")))?;
+
         let mut stream = body.into_data_stream();
         let mut written = 0u64;
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|error| ApiError::invalid(format!("cannot read the request body: {error}")))?;
             let chunk_len = chunk.len() as u64;
-            if chunk_len > remaining - written {
-                return Err(ApiError::payload_too_large("the chunk exceeds the declared upload size"));
-            }
+
+            let start = {
+                let mut state = entry.state.lock().await;
+                if chunk_len > state.size - state.uploaded_size {
+                    return Err(ApiError::payload_too_large("the chunk exceeds the declared upload size"));
+                }
+                let start = state.uploaded_size;
+                state.uploaded_size += chunk_len;
+                state.updated_at = self.clock.now();
+                state.expires_at = self.clock.now() + Duration::hours(UPLOAD_EXPIRY_HOURS);
+                start
+            };
+
             if available < written + chunk_len {
+                let mut state = entry.state.lock().await;
+                state.uploaded_size = start;
                 return Err(ApiError::insufficient_storage("not enough space for the chunk"));
             }
             file.write_all(&chunk)
                 .await
                 .map_err(|error| ApiError::internal(format!("cannot write the upload staging file: {error}")))?;
+            file.set_len(start + chunk_len)
+                .await
+                .map_err(|error| ApiError::internal(format!("cannot truncate the upload staging file: {error}")))?;
             written += chunk_len;
-            state.uploaded_size += chunk_len;
-            state.updated_at = self.clock.now();
         }
         file.sync_all()
             .await
@@ -198,10 +246,12 @@ impl UploadService {
     }
 
     pub async fn commit(&self, id: &str) -> std::result::Result<Option<StagedUpload>, ApiError> {
-        let mut uploads = self.uploads.lock().await;
-        let Some(state) = uploads.get(id).cloned() else {
+        let Some(entry) = self.uploads.lock().await.get(id).cloned() else {
             return Ok(None);
         };
+        let _io = entry.io_lock.lock().await;
+
+        let state = entry.state.lock().await.clone();
         if state.uploaded_size != state.size {
             return Err(ApiError::invalid(format!(
                 "uploaded size {} does not equal the declared size {}",
@@ -217,7 +267,10 @@ impl UploadService {
             .await
             .map_err(|error| ApiError::internal(format!("cannot sync the upload staging file: {error}")))?;
         drop(file);
-        uploads.remove(id);
+
+        if self.uploads.lock().await.remove(id).is_none() {
+            return Ok(None);
+        }
 
         Ok(Some(StagedUpload {
             id: state.id,
@@ -231,28 +284,30 @@ impl UploadService {
     }
 
     pub async fn cancel(&self, id: &str) -> bool {
-        let state = self.uploads.lock().await.remove(id);
-        if let Some(state) = state {
-            let _ = tokio::fs::remove_file(state.staging_path).await;
-            true
-        } else {
-            false
-        }
+        let Some(entry) = self.uploads.lock().await.remove(id) else {
+            return false;
+        };
+        let _io = entry.io_lock.lock().await;
+        let path = entry.state.lock().await.staging_path.clone();
+        let _ = tokio::fs::remove_file(path).await;
+        true
     }
 
     async fn reap(&self) {
-        let now = self.clock.now();
-        let mut expired = Vec::new();
-        {
-            let mut uploads = self.uploads.lock().await;
-            let ids: Vec<String> = uploads.iter().filter(|(_, state)| state.expires_at <= now).map(|(id, _)| id.clone()).collect();
-            for id in ids {
-                if let Some(state) = uploads.remove(&id) {
-                    expired.push(state.staging_path);
-                }
+        let entries = self.uploads.lock().await.iter().map(|(id, entry)| (id.clone(), entry.clone())).collect::<Vec<_>>();
+        for (id, entry) in entries {
+            let _io = entry.io_lock.lock().await;
+            let expired = {
+                let state = entry.state.lock().await;
+                state.expires_at <= self.clock.now()
+            };
+            if !expired {
+                continue;
             }
-        }
-        for path in expired {
+            if self.uploads.lock().await.remove(&id).is_none() {
+                continue;
+            }
+            let path = entry.state.lock().await.staging_path.clone();
             let _ = tokio::fs::remove_file(path).await;
         }
     }
@@ -301,6 +356,27 @@ mod tests {
 
         assert!(service.get("upload-1").await.is_none());
         assert!(!state.staging_path.exists());
+        service.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_extends_the_upload_expiry_test() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let clock = Arc::new(FakeClockUtc::new(Utc::now()));
+        let service = UploadService::new(dir.path(), 0, clock.clone()).await?;
+        service.create("upload-2".to_string(), "file.bin".to_string(), 4, 256, None, 0).await?;
+
+        clock.advance(std::time::Duration::from_secs(23 * 60 * 60));
+        service.write_stream("upload-2", 0, axum::body::Body::from(vec![0u8; 2])).await?;
+
+        clock.advance(std::time::Duration::from_secs(23 * 60 * 60));
+        service.reap().await;
+        assert!(service.get("upload-2").await.is_some());
+
+        clock.advance(std::time::Duration::from_secs(2 * 60 * 60));
+        service.reap().await;
+        assert!(service.get("upload-2").await.is_none());
         service.shutdown().await;
         Ok(())
     }

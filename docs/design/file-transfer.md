@@ -80,7 +80,7 @@ The subscribing side does not check the root layer's rank and uses the next rank
 
 ## 4. State transitions
 
-The external API does not expose the internal state names directly and converts them into a stable contract following the long-running operation representation of [daemon-api.md](./daemon-api.md#5-design-decisions).
+The external API does not expose the raw engine enum; it uses the stable contract of [the API state mapping](./daemon-api.md#api-state-names-are-a-stable-mapping-of-engine-states).
 
 ### 4.1 Publisher side
 

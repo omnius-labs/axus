@@ -52,6 +52,7 @@ The daemon combines, in one process, one node's network connections, node lookup
 - The operational infrastructure, including distribution, monitoring, and backup, is not covered.
 - The internal design of `core-rs` is not covered; only the contract as seen from Axus is.
 - The complete wire format of the REST API and RocketPack is left to each source of truth.
+- NodeFinder, peer, and transfer statistics APIs are not covered; no design owns them yet.
 
 Keeping these out of scope means the design documents carry no client UI, deployment topology, or copies of externally defined formats.
 
@@ -154,7 +155,7 @@ The following order is tentative; only the dependencies in the table must be pre
 
 | # | Item | Prerequisite dependency |
 | --- | --- | --- |
-| 1 | Define the REST API for publish, subscribe, progress, and cancel | Judgment on long-running operations and reach in [daemon-api.md](./design/daemon-api.md#52-deferred) |
+| 1 | Define the REST API for publish, subscribe, progress, and cancel | The decided contracts in [daemon-api.md](./design/daemon-api.md#51-decided) |
 | 2 | Define Web of Trust, Profile, and memo in order | [trust-security.md](./design/trust-security.md#4-design-decisions) |
 
 For confirmed bugs and fix directions, see [issues.md](./issues.md).

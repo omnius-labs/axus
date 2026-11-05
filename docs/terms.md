@@ -40,6 +40,11 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 | temporary output | file-transfer | - | `.<entry name>.axus-<subscription ID>.part` | File created in the same directory as the output destination with a conventional name per subscription, into which the decoded result is written | - |
 | Finalizing | file-transfer | `SubscribedFileStatus::Finalizing` | - | Subscription state from persisting the temporary output to begin finalization until reaching Completed or Failed | - |
 | Task | file-transfer | `TaskDecoder`, `TaskEncoder` | - | Component that controls encoding/decoding, cancellation before finalization, and retries of sweep and output placement; distinct from the FileExchanger connection task | - |
+| publish | daemon-api | `Publish` | `/publishes/{id}` | API resource that owns one upload, its encoding, and the committed file; distinct from the `FilePublisher` component | - |
+| subscribe | daemon-api | `Subscribe` | `/subscribes/{id}` | API resource that owns one subscription; distinct from the `FileSubscriber` component | - |
+| publish ID | daemon-api | `Publish.id` | `/publishes/{id}` | ID issued when a publish is created; the uncommitted file keeps it through commit | uncommitted file ID |
+| Uploading | daemon-api | `PublishStatus::Uploading` | `Uploading` | API state from publish creation until commit, held in daemon memory | - |
+| `api.max_upload_size` | daemon-api | - | `api.max_upload_size` | Maximum declared upload size in bytes; `0` means unlimited | - |
 | AssetKey | node-finder | `AssetKey` | - | Identifier whose location NodeFinder looks up | file reference |
 | bootstrap node | node-finder | `bootstrap_node_profiles` | `p2p.bootstrap_nodes` | NodeProfile given by configuration and added to the known nodes at startup | - |
 | location info | node-finder | `AnnounceLocations` | - | Mapping of an AssetKey to the NodeProfiles of the nodes that advertise it | - |
@@ -68,6 +73,28 @@ The DB commit is one step that makes up each of the two operations.
 
 **What goes wrong if misread**
 Treating the output finalization as only the DB commit of Completed returns success before the placement and directory persistence finish, and the output can be lost after a failure.
+
+<a id="t-publish-resource-vs-filepublisher"></a>
+#### Publish resource and FilePublisher
+
+**Boundary**
+A publish is the API resource that a client creates, uploads content to, commits, and polls.
+FilePublisher is the engine component that turns the uploaded content into blocks and a root hash.
+The resource ID stays with the committed file after FilePublisher deletes the uncommitted row.
+
+**What goes wrong if misread**
+Treating the publish resource as the FilePublisher component makes the API depend on the engine's internal type and loses the resource ID when the uncommitted row disappears.
+
+<a id="t-subscribe-resource-vs-filesubscriber"></a>
+#### Subscribe resource and FileSubscriber
+
+**Boundary**
+A subscribe is the API resource that a client creates, polls, cancels, removes, and downloads.
+FileSubscriber is the engine component that fetches and decodes the content.
+The resource wraps one subscription row and does not introduce a second task.
+
+**What goes wrong if misread**
+Treating the subscribe resource as a second task duplicates the subscription state and makes cancel and progress read from two sources.
 
 <a id="t-root-hash-vs-output-reservation"></a>
 #### root hash and output reservation

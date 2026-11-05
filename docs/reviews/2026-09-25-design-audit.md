@@ -200,7 +200,7 @@ Filed in issues.md as publisher-commit-not-crash-safe.
 **Type: design point** / **Confidence: high**
 
 **Location**
-`write_block` at [subscriber.rs:123](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/subscriber.rs#L123) saves the received value at [subscriber.rs:130](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/subscriber.rs#L130) without checking it.
+`write_block` at [file_subscriber.rs:56](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber.rs#L56) (then `subscriber.rs:123`) saves the received value at [store.rs:144](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L144) (then `subscriber.rs:130`) without checking it.
 
 **What is wrong**
 file-transfer.md says the content hash is verified before the commit, but whether to check at the save entry or in the protocol layer is undecided.

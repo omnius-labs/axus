@@ -23,7 +23,7 @@ use crate::{
     core::{
         identity::NodeIdentity,
         negotiator::{
-            FileExchanger, FileExchangerIntervals, FileExchangerOption, NodeFinder, NodeFinderIntervals, NodeFinderLocationFinder, NodeFinderOption, NodeFinderRepo,
+            FileExchanger, FileExchangerIntervals, FileExchangerOption, FileService, NodeFinder, NodeFinderIntervals, NodeFinderLocationFinder, NodeFinderOption, NodeFinderRepo,
             NodeProfileFetcherImpl,
         },
         session::{
@@ -44,6 +44,7 @@ pub struct AxusService {
 pub struct AxusServiceOption {
     pub bootstrap_node_profiles: Vec<NodeProfile>,
     pub node_finder_intervals: NodeFinderIntervals,
+    pub file_exchanger_intervals: FileExchangerIntervals,
     /// 空なら、待ち受けアドレスから広告するアドレスを決める
     pub advertise_addrs: Vec<OmniAddr>,
     pub use_upnp: bool,
@@ -153,7 +154,7 @@ impl AxusService {
             sleeper,
             rng,
             FileExchangerOption::new(state_dir.join("file_exchanger")),
-            FileExchangerIntervals::default(),
+            option.file_exchanger_intervals,
         )
         .await
         {
@@ -165,6 +166,14 @@ impl AxusService {
         };
 
         Ok((node_finder, file_exchanger))
+    }
+
+    pub fn file_service(&self) -> Arc<FileService> {
+        self.file_exchanger.file_service()
+    }
+
+    pub fn node_profile(&self) -> NodeProfile {
+        self.node_finder.my_node_profile()
     }
 
     pub async fn shutdown(&self) {

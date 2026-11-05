@@ -5,6 +5,9 @@ use omnius_core_omnikit::generated::omni_hash::OmniHash;
 pub struct PublishedCommittedFile {
     pub root_hash: OmniHash,
     pub file_name: String,
+    pub source_id: Option<String>,
+    pub size: Option<i64>,
+    pub priority: i64,
     pub block_size: u32,
     pub attrs: Option<String>,
     pub created_at: DateTime<Utc>,

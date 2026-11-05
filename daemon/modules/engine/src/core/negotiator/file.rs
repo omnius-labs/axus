@@ -9,6 +9,7 @@ mod fetch_score;
 mod file_exchanger;
 mod file_exchanger_intervals;
 mod file_publisher;
+mod file_service;
 mod file_subscriber;
 mod location_finder;
 mod model;
@@ -41,11 +42,13 @@ pub use file_exchanger_intervals::*;
 #[allow(unused)]
 use file_publisher::*;
 #[allow(unused)]
+pub use file_service::*;
+#[allow(unused)]
 use file_subscriber::*;
 #[allow(unused)]
 pub use location_finder::*;
 #[allow(unused)]
-use model::*;
+pub use model::*;
 #[allow(unused)]
 use serve_queue::*;
 #[allow(unused)]

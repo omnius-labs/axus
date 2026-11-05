@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -22,6 +22,7 @@ use super::{repo::FilePublisherRepo, *};
 pub struct FilePublisherStore {
     repo: FilePublisherRepo,
     blocks_storage: KeyValueRocksdbStorage,
+    source_dir: PathBuf,
     lock: TokioMutex<()>,
     tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
@@ -39,9 +40,12 @@ impl FilePublisherStore {
     pub async fn open(state_dir: &Path, tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>>, clock: Arc<dyn Clock<Utc> + Send + Sync>) -> Result<Arc<Self>> {
         let repo_dir = state_dir.join("repo");
         tokio::fs::create_dir_all(&repo_dir).await?;
+        let source_dir = state_dir.join("sources");
+        tokio::fs::create_dir_all(&source_dir).await?;
         let store = Arc::new(Self {
             repo: FilePublisherRepo::new(&repo_dir, clock.clone()).await?,
             blocks_storage: KeyValueRocksdbStorage::new(state_dir.join("blocks"), tsid_provider.clone()).await?,
+            source_dir,
             lock: TokioMutex::new(()),
             tsid_provider,
             clock,
@@ -59,6 +63,7 @@ impl FilePublisherStore {
             store.blocks_storage.shrink(|key| !key.starts_with(b"U/")).await?;
             store.repo.recover().await?;
             store.sweep_locked().await?;
+            store.sweep_sources_locked().await?;
         }
         Ok(store)
     }
@@ -86,8 +91,10 @@ impl FilePublisherStore {
             id: id.clone(),
             file_path: file_path.to_string(),
             file_name: file_name.to_string(),
+            size: None,
             block_size,
             attrs: attrs.map(str::to_string),
+            source_owned: false,
             priority,
             status: PublishedUncommittedFileStatus::Pending,
             failed_reason: None,
@@ -106,6 +113,158 @@ impl FilePublisherStore {
             self.repo.insert_uncommitted_file(&file).await?;
         }
         Ok(id)
+    }
+
+    /// Imports a source file owned by the daemon, moving it out of the API
+    /// staging directory before the row becomes visible to the TaskEncoder.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn import_owned(&self, id: &str, source_path: &str, file_name: &str, size: i64, block_size: u32, attrs: Option<&str>, priority: i64) -> Result<()> {
+        if id.is_empty() {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("publish id must not be empty"));
+        }
+        if size < 0 {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("file size must not be negative"));
+        }
+        if block_size == 0 {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("block size must be nonzero"));
+        }
+        if block_size > MAX_BLOCK_LENGTH {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message(format!("block size must be at most {MAX_BLOCK_LENGTH} bytes")));
+        }
+
+        let _guard = self.lock.lock().await;
+        if self.repo.contains_uncommitted_file(id).await? || self.repo.find_committed_file_by_source_id(id).await?.is_some() {
+            return Err(Error::new(ErrorKind::AlreadyExists).with_message("publish id already exists"));
+        }
+        if self
+            .repo
+            .get_uncommitted_files()
+            .await?
+            .iter()
+            .any(|file| file.file_name == file_name && file.status != PublishedUncommittedFileStatus::Failed)
+        {
+            return Err(Error::new(ErrorKind::AlreadyExists).with_message("a publish with the same file name is already in progress"));
+        }
+
+        let source = Path::new(source_path);
+        let destination = self.source_dir.join(id);
+        Self::move_source(source, &destination).await?;
+
+        let now = self.clock.now();
+        let file = PublishedUncommittedFile {
+            id: id.to_string(),
+            file_path: destination.to_string_lossy().to_string(),
+            file_name: file_name.to_string(),
+            size: Some(size),
+            block_size,
+            attrs: attrs.map(str::to_string),
+            source_owned: true,
+            priority,
+            status: PublishedUncommittedFileStatus::Pending,
+            failed_reason: None,
+            created_at: now,
+            updated_at: now,
+        };
+        if let Err(error) = self.repo.insert_uncommitted_file(&file).await {
+            let _ = tokio::fs::remove_file(&destination).await;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn move_source(source: &Path, destination: &Path) -> Result<()> {
+        match tokio::fs::rename(source, destination).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+                tokio::fs::copy(source, destination).await?;
+                let file = tokio::fs::OpenOptions::new().write(true).open(destination).await?;
+                file.sync_all().await?;
+                drop(file);
+                tokio::fs::remove_file(source).await?;
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    async fn delete_owned_source(&self, file: &PublishedUncommittedFile) {
+        if !file.source_owned {
+            return;
+        }
+        match tokio::fs::remove_file(&file.file_path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                warn!(?error, path = file.file_path, "published source deletion failed");
+                self.sweep_needed.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    async fn sweep_sources_locked(&self) -> Result<()> {
+        let mut entries = tokio::fs::read_dir(&self.source_dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            if !entry.file_type().await?.is_file() {
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if !self.repo.contains_uncommitted_file(&name).await?
+                && let Err(error) = tokio::fs::remove_file(entry.path()).await
+            {
+                warn!(?error, path = ?entry.path(), "orphan publish source deletion failed");
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn get_publish(&self, id: &str) -> Result<Option<PublishRecord>> {
+        if let Some(file) = self.repo.find_uncommitted_file_by_id(id).await? {
+            return Ok(Some(PublishRecord::Uncommitted(file)));
+        }
+        Ok(self.repo.find_committed_file_by_source_id(id).await?.map(PublishRecord::Committed))
+    }
+
+    pub async fn list_publishes(&self) -> Result<Vec<PublishRecord>> {
+        let mut records = Vec::new();
+        for file in self.repo.get_uncommitted_files().await? {
+            records.push(PublishRecord::Uncommitted(file));
+        }
+        for file in self.repo.get_committed_files().await? {
+            if file.source_id.is_some() {
+                records.push(PublishRecord::Committed(file));
+            }
+        }
+        Ok(records)
+    }
+
+    pub async fn encoded_block_count(&self, id: &str) -> Result<i64> {
+        if self.repo.find_uncommitted_file_by_id(id).await?.is_some() {
+            return self.repo.count_uncommitted_blocks(id).await;
+        }
+        if let Some(file) = self.repo.find_committed_file_by_source_id(id).await? {
+            return self.repo.count_committed_blocks(&file.root_hash).await;
+        }
+        Ok(0)
+    }
+
+    pub async fn remove_publish(&self, id: &str) -> Result<()> {
+        let _guard = self.lock.lock().await;
+        if let Some(file) = self.repo.find_committed_file_by_source_id(id).await? {
+            self.repo.remove_committed_file(&file.root_hash, &file.file_name).await?;
+            if !self.repo.contains_committed_file(&file.root_hash).await? {
+                self.delete_prefix(&format!("C/{}/", file.root_hash)).await?;
+            }
+            return Ok(());
+        }
+        let Some(file) = self.repo.find_uncommitted_file_by_id(id).await? else {
+            return Err(Error::new(ErrorKind::NotFound).with_message("publish not found"));
+        };
+        self.repo.delete_uncommitted_file(id).await?;
+        self.delete_owned_source(&file).await;
+        self.cleanup_blocks_locked(id).await?;
+        Ok(())
     }
 
     pub async fn next_file(&self) -> Result<Option<PublishedUncommittedFile>> {
@@ -150,12 +309,22 @@ impl FilePublisherStore {
 
     pub async fn fail(&self, id: &str, reason: &str) -> Result<()> {
         let _guard = self.lock.lock().await;
-        self.repo.update_uncommitted_file_as_failed(id, reason).await
+        let file = self.repo.find_uncommitted_file_by_id(id).await?;
+        self.repo.update_uncommitted_file_as_failed(id, reason).await?;
+        if let Some(file) = file {
+            self.delete_owned_source(&file).await;
+        }
+        Ok(())
     }
 
     pub async fn cancel(&self, id: &str) -> Result<()> {
         let _guard = self.lock.lock().await;
-        self.repo.delete_uncommitted_file(id).await
+        let file = self.repo.find_uncommitted_file_by_id(id).await?;
+        self.repo.delete_uncommitted_file(id).await?;
+        if let Some(file) = file {
+            self.delete_owned_source(&file).await;
+        }
+        Ok(())
     }
 
     pub async fn cleanup_blocks(&self, id: &str) -> Result<()> {
@@ -265,6 +434,9 @@ impl FilePublisherStore {
         let committed = PublishedCommittedFile {
             root_hash: root_hash.clone(),
             file_name: file.file_name.clone(),
+            source_id: Some(file.id.clone()),
+            size: file.size,
+            priority: file.priority,
             block_size: file.block_size,
             attrs: file.attrs.clone(),
             created_at: now,
@@ -302,6 +474,7 @@ impl FilePublisherStore {
                 .collect();
             self.repo.commit_file_with_blocks(&committed, &committed_blocks, &file.id).await?;
         }
+        self.delete_owned_source(file).await;
         Ok(true)
     }
 

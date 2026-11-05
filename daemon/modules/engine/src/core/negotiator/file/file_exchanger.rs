@@ -110,6 +110,10 @@ impl FileExchanger {
         })
     }
 
+    pub fn file_service(&self) -> Arc<FileService> {
+        Arc::new(FileService::new(self.ctx.file_publisher.clone(), self.ctx.file_subscriber.clone()))
+    }
+
     #[cfg(test)]
     pub fn context(&self) -> &Arc<ExchangeContext> {
         &self.ctx

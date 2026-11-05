@@ -1,9 +1,17 @@
 openapi: 3.0.3
 info:
     title: Axus
-    version: 0.2.0
+    version: 0.3.0
     description: |
-        Axus daemon API.
+        Axus daemon API for publishing and subscribing to files.
+
+        A publish starts with an upload created by `POST /publishes`.
+        Its content is written to `PUT /publishes/{publishId}/content`
+        and encoding starts with `POST /publishes/{publishId}/commit`.
+        A subscribe starts with `POST /subscribes` and its completed
+        output is read from `GET /subscribes/{subscribeId}/content`.
+
+        The API is intended for a local client and has no authentication.
     license:
         name: MIT
 
@@ -14,6 +22,10 @@ servers:
 tags:
     - name: Health
       description: Daemon liveness checks.
+    - name: Publishes
+      description: Uploading, encoding, and removing published files.
+    - name: Subscribes
+      description: Fetching, decoding, removing, and downloading subscriptions.
 
 paths:
     /health:
@@ -35,8 +47,464 @@ paths:
                 "500":
                     $ref: "#/components/responses/InternalServerError"
 
+    /publishes:
+        post:
+            tags:
+                - Publishes
+            summary: Create a publish
+            description: |
+                Creates an `Uploading` publish and returns its ID. The
+                declared size is verified again at commit.
+            operationId: createPublish
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/PublishCreateRequest"
+            responses:
+                "201":
+                    description: Uploading publish created.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/PublishResponse"
+                "400":
+                    $ref: "#/components/responses/InvalidRequest"
+                "413":
+                    $ref: "#/components/responses/PayloadTooLarge"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+                "507":
+                    $ref: "#/components/responses/InsufficientStorage"
+        get:
+            tags:
+                - Publishes
+            summary: List publishes
+            operationId: listPublishes
+            parameters:
+                - $ref: "#/components/parameters/Limit"
+                - $ref: "#/components/parameters/Offset"
+            responses:
+                "200":
+                    description: Known publishes.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/PublishList"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /publishes/{publishId}:
+        get:
+            tags:
+                - Publishes
+            summary: Get a publish
+            operationId: getPublish
+            parameters:
+                - $ref: "#/components/parameters/PublishIdPath"
+            responses:
+                "200":
+                    description: Publish state.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/PublishResponse"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+        delete:
+            tags:
+                - Publishes
+            summary: Remove a publish
+            description: |
+                Cancels an `Uploading`, `Pending`, `Processing`, or
+                `Failed` publish. For a `Succeeded` publish, stops the
+                publication and deletes its blocks when no other file
+                references the root hash.
+            operationId: removePublish
+            parameters:
+                - $ref: "#/components/parameters/PublishIdPath"
+            responses:
+                "204":
+                    description: Publish removed.
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /publishes/{publishId}/content:
+        put:
+            tags:
+                - Publishes
+            summary: Write an upload chunk
+            description: |
+                Appends raw bytes at `offset`. The offset must equal the
+                current written size; a different offset returns `409`.
+            operationId: writePublishContent
+            parameters:
+                - $ref: "#/components/parameters/PublishIdPath"
+                - $ref: "#/components/parameters/PublishOffset"
+            requestBody:
+                required: true
+                content:
+                    application/octet-stream:
+                        schema:
+                            type: string
+                            format: binary
+            responses:
+                "204":
+                    description: Chunk accepted.
+                "400":
+                    $ref: "#/components/responses/InvalidRequest"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "413":
+                    $ref: "#/components/responses/PayloadTooLarge"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+                "507":
+                    $ref: "#/components/responses/InsufficientStorage"
+
+    /publishes/{publishId}/commit:
+        post:
+            tags:
+                - Publishes
+            summary: Commit an upload
+            description: |
+                Verifies that exactly the declared size was written, then
+                starts encoding. A mismatch returns `400`.
+            operationId: commitPublish
+            parameters:
+                - $ref: "#/components/parameters/PublishIdPath"
+            responses:
+                "202":
+                    description: Encoding started.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/PublishResponse"
+                "400":
+                    $ref: "#/components/responses/InvalidRequest"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /publishes/{publishId}/cancel:
+        post:
+            tags:
+                - Publishes
+            summary: Cancel a publish
+            description: |
+                Stops an `Uploading`, `Pending`, `Processing`, or `Failed`
+                publish. A `Succeeded` publish returns `409`; use `DELETE`.
+            operationId: cancelPublish
+            parameters:
+                - $ref: "#/components/parameters/PublishIdPath"
+            responses:
+                "204":
+                    description: Publish cancelled.
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /subscribes:
+        post:
+            tags:
+                - Subscribes
+            summary: Start a subscription
+            operationId: createSubscribe
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/SubscribeCreateRequest"
+            responses:
+                "202":
+                    description: Subscription started.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/SubscribeResponse"
+                "400":
+                    $ref: "#/components/responses/InvalidRequest"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+        get:
+            tags:
+                - Subscribes
+            summary: List subscriptions
+            operationId: listSubscribes
+            parameters:
+                - $ref: "#/components/parameters/Limit"
+                - $ref: "#/components/parameters/Offset"
+            responses:
+                "200":
+                    description: Known subscriptions.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/SubscribeList"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /subscribes/{subscribeId}:
+        get:
+            tags:
+                - Subscribes
+            summary: Get a subscription
+            operationId: getSubscribe
+            parameters:
+                - $ref: "#/components/parameters/SubscribeIdPath"
+            responses:
+                "200":
+                    description: Subscription state.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/SubscribeResponse"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+        delete:
+            tags:
+                - Subscribes
+            summary: Remove a subscription
+            description: |
+                Deletes the subscription row and the blocks that lost their
+                last reference. A `Finalizing` subscription returns `409`.
+            operationId: removeSubscribe
+            parameters:
+                - $ref: "#/components/parameters/SubscribeIdPath"
+            responses:
+                "204":
+                    description: Subscription removed.
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /subscribes/{subscribeId}/cancel:
+        post:
+            tags:
+                - Subscribes
+            summary: Cancel a subscription
+            description: |
+                Turns `Downloading` and `Decoding` into `Canceled` and
+                leaves `Completed`, `Failed`, and `Canceled` unchanged.
+            operationId: cancelSubscribe
+            parameters:
+                - $ref: "#/components/parameters/SubscribeIdPath"
+            responses:
+                "202":
+                    description: Cancellation requested.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/SubscribeResponse"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /subscribes/{subscribeId}/content:
+        get:
+            tags:
+                - Subscribes
+            summary: Read a completed subscription output
+            description: |
+                Returns the completed output as bytes. A byte range returns
+                `206` with `Content-Range`; a matching `If-None-Match`
+                returns `304`. The output is available only after
+                `Completed`.
+            operationId: readSubscribeContent
+            parameters:
+                - $ref: "#/components/parameters/SubscribeIdPath"
+                - in: header
+                  name: Range
+                  required: false
+                  schema:
+                      type: string
+                - in: header
+                  name: If-None-Match
+                  required: false
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Complete output.
+                    headers:
+                        Accept-Ranges:
+                            schema:
+                                type: string
+                        Content-Range:
+                            schema:
+                                type: string
+                        ETag:
+                            schema:
+                                type: string
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+                "206":
+                    description: Partial output.
+                    headers:
+                        Accept-Ranges:
+                            schema:
+                                type: string
+                        Content-Range:
+                            schema:
+                                type: string
+                        ETag:
+                            schema:
+                                type: string
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+                "304":
+                    description: Output not modified.
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "410":
+                    $ref: "#/components/responses/Gone"
+                "416":
+                    $ref: "#/components/responses/RangeNotSatisfiable"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
 components:
+    parameters:
+        PublishIdPath:
+            in: path
+            name: publishId
+            required: true
+            schema:
+                $ref: "#/components/schemas/PublishId"
+        SubscribeIdPath:
+            in: path
+            name: subscribeId
+            required: true
+            schema:
+                $ref: "#/components/schemas/SubscribeId"
+        PublishOffset:
+            in: query
+            name: offset
+            required: true
+            schema:
+                type: integer
+                format: int64
+                minimum: 0
+        Limit:
+            in: query
+            name: limit
+            required: false
+            schema:
+                type: integer
+                format: int64
+                minimum: 1
+                maximum: 1000
+                default: 100
+        Offset:
+            in: query
+            name: offset
+            required: false
+            schema:
+                type: integer
+                format: int64
+                minimum: 0
+                default: 0
+
     responses:
+        InvalidRequest:
+            description: The request is invalid.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: InvalidRequest
+                        message: The request is invalid.
+        NotFound:
+            description: The resource was not found.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: NotFound
+                        message: The resource was not found.
+        Conflict:
+            description: The request conflicts with the current state.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: Conflict
+                        message: The request conflicts with the current state.
+        Gone:
+            description: The resource is no longer available.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: Gone
+                        message: The resource is no longer available.
+        RangeNotSatisfiable:
+            description: The requested byte range cannot be satisfied.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: InvalidRequest
+                        message: The requested byte range cannot be satisfied.
+        PayloadTooLarge:
+            description: The declared upload size exceeds the configured limit.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: PayloadTooLarge
+                        message: The upload exceeds the maximum size.
+        InsufficientStorage:
+            description: The daemon does not have enough space for the upload.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: InsufficientStorage
+                        message: Not enough storage for the upload.
         InternalServerError:
             description: Internal server error.
             content:
@@ -55,6 +523,226 @@ components:
             properties:
                 result:
                     type: boolean
+
+        PublishId:
+            type: string
+            minLength: 1
+            description: Opaque daemon-issued publish identifier.
+
+        PublishCreateRequest:
+            type: object
+            additionalProperties: false
+            required:
+                - fileName
+                - size
+            properties:
+                fileName:
+                    type: string
+                    minLength: 1
+                size:
+                    type: integer
+                    format: int64
+                    minimum: 0
+                blockSize:
+                    type: integer
+                    format: int32
+                    minimum: 1
+                    maximum: 1048576
+                    default: 1048576
+                attrs:
+                    type: string
+                    nullable: true
+                priority:
+                    type: integer
+                    format: int64
+                    default: 0
+
+        PublishStatus:
+            type: string
+            enum:
+                - Uploading
+                - Pending
+                - Processing
+                - Succeeded
+                - Failed
+
+        Publish:
+            type: object
+            required:
+                - id
+                - fileName
+                - size
+                - blockSize
+                - priority
+                - status
+                - uploadedSize
+                - encodedBlockCount
+                - createdAt
+                - updatedAt
+            properties:
+                id:
+                    $ref: "#/components/schemas/PublishId"
+                fileName:
+                    type: string
+                size:
+                    type: integer
+                    format: int64
+                blockSize:
+                    type: integer
+                    format: int32
+                attrs:
+                    type: string
+                    nullable: true
+                priority:
+                    type: integer
+                    format: int64
+                status:
+                    $ref: "#/components/schemas/PublishStatus"
+                uploadedSize:
+                    type: integer
+                    format: int64
+                encodedBlockCount:
+                    type: integer
+                    format: int64
+                rootHash:
+                    type: string
+                    nullable: true
+                failedReason:
+                    type: string
+                    nullable: true
+                createdAt:
+                    type: string
+                    format: date-time
+                updatedAt:
+                    type: string
+                    format: date-time
+
+        PublishResponse:
+            type: object
+            required:
+                - publish
+            properties:
+                publish:
+                    $ref: "#/components/schemas/Publish"
+
+        PublishList:
+            type: object
+            required:
+                - publishes
+                - total
+            properties:
+                publishes:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/Publish"
+                total:
+                    type: integer
+                    format: int64
+
+        SubscribeId:
+            type: string
+            minLength: 1
+            description: Opaque daemon-issued subscription identifier.
+
+        SubscribeCreateRequest:
+            type: object
+            additionalProperties: false
+            required:
+                - rootHash
+                - outputPath
+            properties:
+                rootHash:
+                    type: string
+                    minLength: 1
+                outputPath:
+                    type: string
+                    minLength: 1
+                attrs:
+                    type: string
+                    nullable: true
+                priority:
+                    type: integer
+                    format: int64
+                    default: 0
+
+        SubscribeStatus:
+            type: string
+            enum:
+                - Downloading
+                - Decoding
+                - Finalizing
+                - Completed
+                - Failed
+                - Canceled
+
+        Subscribe:
+            type: object
+            required:
+                - id
+                - rootHash
+                - outputPath
+                - rank
+                - blockCountDownloaded
+                - blockCountTotal
+                - priority
+                - status
+                - createdAt
+                - updatedAt
+            properties:
+                id:
+                    $ref: "#/components/schemas/SubscribeId"
+                rootHash:
+                    type: string
+                outputPath:
+                    type: string
+                rank:
+                    type: integer
+                    format: int32
+                blockCountDownloaded:
+                    type: integer
+                    format: int32
+                blockCountTotal:
+                    type: integer
+                    format: int32
+                attrs:
+                    type: string
+                    nullable: true
+                priority:
+                    type: integer
+                    format: int64
+                status:
+                    $ref: "#/components/schemas/SubscribeStatus"
+                failedReason:
+                    type: string
+                    nullable: true
+                createdAt:
+                    type: string
+                    format: date-time
+                updatedAt:
+                    type: string
+                    format: date-time
+
+        SubscribeResponse:
+            type: object
+            required:
+                - subscribe
+            properties:
+                subscribe:
+                    $ref: "#/components/schemas/Subscribe"
+
+        SubscribeList:
+            type: object
+            required:
+                - subscribes
+                - total
+            properties:
+                subscribes:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/Subscribe"
+                total:
+                    type: integer
+                    format: int64
 
         ErrorResponse:
             type: object
@@ -75,4 +763,7 @@ components:
                 - InternalServerError
                 - InvalidRequest
                 - NotFound
-                - Forbidden
+                - Conflict
+                - Gone
+                - PayloadTooLarge
+                - InsufficientStorage

@@ -1,4 +1,6 @@
 pub mod health;
+pub mod publishes;
+pub mod subscribes;
 
 // Error handler for unhandled errors.
 #[async_trait::async_trait]

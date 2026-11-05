@@ -4,6 +4,8 @@ Cargo.toml
 README.md
 src/apis/health.rs
 src/apis/mod.rs
+src/apis/publishes.rs
+src/apis/subscribes.rs
 src/header.rs
 src/lib.rs
 src/models.rs

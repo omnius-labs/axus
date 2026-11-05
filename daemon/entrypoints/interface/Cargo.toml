@@ -2,7 +2,7 @@
 name = "omnius-axus-interface"
 version = "0.1.0"
 authors = ["OpenAPI Generator team and contributors"]
-description = "Axus daemon API. "
+description = "Axus daemon API for publishing and subscribing to files.  A publish starts with an upload created by `POST /publishes`. Its content is written to `PUT /publishes/{publishId}/content` and encoding starts with `POST /publishes/{publishId}/commit`. A subscribe starts with `POST /subscribes` and its completed output is read from `GET /subscribes/{subscribeId}/content`.  The API is intended for a local client and has no authentication. "
 license = "MIT"
 edition = "2024"
 

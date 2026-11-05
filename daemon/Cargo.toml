@@ -53,7 +53,7 @@ tokio = { version = "1.52.3", features = [
   "sync",
   "time",
 ] }
-tokio-util = { version = "0.7.18", features = ["codec"] }
+tokio-util = { version = "0.7.18", features = ["codec", "io"] }
 tokio-stream = "0.1.18"
 tokio-postgres = { version = "0.7.17", features = ["with-chrono-0_4"] }
 tracing = { version = "0.1.44", features = ["valuable"] }

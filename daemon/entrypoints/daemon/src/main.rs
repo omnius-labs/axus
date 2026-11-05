@@ -5,9 +5,10 @@ use crate::{executor::Executor, prelude::*};
 mod config;
 mod error;
 mod executor;
+mod interface;
 mod prelude;
 mod result;
-mod server;
+mod service;
 mod state;
 
 pub use error::*;

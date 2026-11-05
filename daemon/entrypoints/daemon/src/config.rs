@@ -22,6 +22,8 @@ struct CoreConfigToml {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct ApiConfigToml {
     pub listen_addr: String,
+    #[serde(default)]
+    pub max_upload_size: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -59,6 +61,7 @@ pub struct CoreConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiConfig {
     pub listen_addr: String,
+    pub max_upload_size: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +94,7 @@ impl DaemonConfig {
             },
             api: ApiConfig {
                 listen_addr: toml.api.listen_addr,
+                max_upload_size: toml.api.max_upload_size,
             },
             p2p: P2pConfig {
                 listen_addr: toml.p2p.listen_addr,
@@ -126,6 +130,7 @@ mod tests {
 
             [api]
             listen_addr = "0.0.0.0:6051"
+            max_upload_size = 4096
 
             [p2p]
             listen_addr = "0.0.0.0:6052"
@@ -142,6 +147,7 @@ mod tests {
 
         assert_eq!(conf.core.state_dir, tempdir.path().join("./state"));
         assert_eq!(conf.api.listen_addr, "0.0.0.0:6051");
+        assert_eq!(conf.api.max_upload_size, 4096);
         assert_eq!(conf.p2p.listen_addr, "0.0.0.0:6052");
         assert!(conf.p2p.advertise_addrs.is_empty());
         assert!(!conf.p2p.use_upnp);
@@ -192,6 +198,7 @@ mod tests {
 
         assert_eq!(conf.core.state_dir, config_dir.join("./state"));
         assert_eq!(conf.api.listen_addr, "127.0.0.1:5050");
+        assert_eq!(conf.api.max_upload_size, 0);
         assert_eq!(conf.p2p.listen_addr, "127.0.0.1:5051");
         assert!(conf.p2p.advertise_addrs.is_empty());
         assert!(!conf.p2p.use_upnp);

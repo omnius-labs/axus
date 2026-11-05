@@ -1,5 +1,6 @@
 use std::backtrace::Backtrace;
 
+use axum::response::IntoResponse as _;
 use omnius_core_base::error::OmniError;
 
 pub struct Error {
@@ -225,5 +226,133 @@ impl From<omnius_axus_engine::Error> for Error {
             omnius_axus_engine::ErrorKind::AlreadyConnected => Error::from_error(e, ErrorKind::AlreadyConnected),
             omnius_axus_engine::ErrorKind::NotConnected => Error::from_error(e, ErrorKind::NotConnected),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiStatus {
+    InvalidRequest,
+    NotFound,
+    Conflict,
+    Gone,
+    PayloadTooLarge,
+    InsufficientStorage,
+    InternalServerError,
+}
+
+impl ApiStatus {
+    pub fn status_code(self) -> axum::http::StatusCode {
+        use axum::http::StatusCode;
+        match self {
+            Self::InvalidRequest => StatusCode::BAD_REQUEST,
+            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::Conflict => StatusCode::CONFLICT,
+            Self::Gone => StatusCode::GONE,
+            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::InsufficientStorage => StatusCode::INSUFFICIENT_STORAGE,
+            Self::InternalServerError => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ApiError {
+    pub status: ApiStatus,
+    pub body: omnius_axus_interface::models::ErrorResponse,
+}
+
+impl ApiError {
+    pub fn new(status: ApiStatus, message: impl Into<String>) -> Self {
+        use omnius_axus_interface::models::{ErrorKind as ApiErrorKind, ErrorResponse};
+        let kind = match status {
+            ApiStatus::InvalidRequest => ApiErrorKind::InvalidRequest,
+            ApiStatus::NotFound => ApiErrorKind::NotFound,
+            ApiStatus::Conflict => ApiErrorKind::Conflict,
+            ApiStatus::Gone => ApiErrorKind::Gone,
+            ApiStatus::PayloadTooLarge => ApiErrorKind::PayloadTooLarge,
+            ApiStatus::InsufficientStorage => ApiErrorKind::InsufficientStorage,
+            ApiStatus::InternalServerError => ApiErrorKind::InternalServerError,
+        };
+        let mut body = ErrorResponse::new(kind);
+        body.message = Some(message.into());
+        Self { status, body }
+    }
+
+    pub fn invalid(message: impl Into<String>) -> Self {
+        Self::new(ApiStatus::InvalidRequest, message)
+    }
+
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self::new(ApiStatus::NotFound, message)
+    }
+
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self::new(ApiStatus::Conflict, message)
+    }
+
+    pub fn gone(message: impl Into<String>) -> Self {
+        Self::new(ApiStatus::Gone, message)
+    }
+
+    pub fn payload_too_large(message: impl Into<String>) -> Self {
+        Self::new(ApiStatus::PayloadTooLarge, message)
+    }
+
+    pub fn insufficient_storage(message: impl Into<String>) -> Self {
+        Self::new(ApiStatus::InsufficientStorage, message)
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(ApiStatus::InternalServerError, message)
+    }
+
+    pub fn into_response(self) -> axum::response::Response {
+        (self.status.status_code(), axum::Json(self.body)).into_response()
+    }
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}: {:?}", self.status, self.body.message)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+impl From<omnius_axus_engine::Error> for ApiError {
+    fn from(error: omnius_axus_engine::Error) -> Self {
+        use omnius_axus_engine::ErrorKind;
+        let status = match error.kind() {
+            ErrorKind::InvalidFormat | ErrorKind::SerdeError | ErrorKind::EndOfStream | ErrorKind::UnsupportedType | ErrorKind::TimeError => ApiStatus::InvalidRequest,
+            ErrorKind::NotFound => ApiStatus::NotFound,
+            ErrorKind::AlreadyExists | ErrorKind::Reject | ErrorKind::RateLimitExceeded | ErrorKind::AlreadyConnected | ErrorKind::NotConnected => ApiStatus::Conflict,
+            ErrorKind::Unknown
+            | ErrorKind::IoError
+            | ErrorKind::DatabaseError
+            | ErrorKind::HttpClientError
+            | ErrorKind::CryptoError
+            | ErrorKind::UpnpError
+            | ErrorKind::NetworkError
+            | ErrorKind::TaskError
+            | ErrorKind::UnexpectedError => ApiStatus::InternalServerError,
+        };
+        Self::new(status, error.to_string())
+    }
+}
+
+impl From<Error> for ApiError {
+    fn from(error: Error) -> Self {
+        use ErrorKind as DaemonErrorKind;
+        let status = match error.kind() {
+            DaemonErrorKind::InvalidFormat | DaemonErrorKind::SerdeError | DaemonErrorKind::EndOfStream | DaemonErrorKind::UnsupportedType | DaemonErrorKind::TimeError => {
+                ApiStatus::InvalidRequest
+            }
+            DaemonErrorKind::NotFound => ApiStatus::NotFound,
+            DaemonErrorKind::AlreadyExists | DaemonErrorKind::Reject | DaemonErrorKind::RateLimitExceeded | DaemonErrorKind::AlreadyConnected | DaemonErrorKind::NotConnected => {
+                ApiStatus::Conflict
+            }
+            _ => ApiStatus::InternalServerError,
+        };
+        Self::new(status, error.to_string())
     }
 }

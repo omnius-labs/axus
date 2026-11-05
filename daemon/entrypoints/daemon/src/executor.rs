@@ -12,8 +12,8 @@ use omnius_core_base::file_lock::FileLock;
 
 use crate::{
     config::{DaemonConfig, LoggingConfig},
+    interface::ApiServer,
     prelude::*,
-    server::ApiServer,
     state::DaemonState,
 };
 

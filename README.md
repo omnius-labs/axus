@@ -56,6 +56,18 @@ The `[p2p]` section accepts the following keys.
 At startup the daemon logs its own URI as `node_profile` in the `node profile` message.
 Add that URI to `bootstrap_nodes` of another daemon to connect the two.
 
+The `[api]` section configures the REST API.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `listen_addr` | required | `host:port` that accepts REST API requests |
+| `max_upload_size` | `0` | Maximum declared upload size in bytes; `0` means unlimited |
+
+The REST API is intended for a local client and has no authentication.
+When `listen_addr` is not a loopback address, the daemon logs a warning at startup.
+The paths and schemas are defined in [openapi.yaml](./daemon/openapi.yaml).
+A publish starts from an HTTP upload, and a completed subscription is downloaded from its content path.
+
 ### Linting
 
 ```sh

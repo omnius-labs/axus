@@ -260,7 +260,7 @@ Filed in issues.md as kadex-find-drops-candidates.
 **Type: design point** / **Confidence: high**
 
 **Location**
-The health at [openapi.yaml:25](../../daemon/openapi.yaml#L25) has `security: []`, and [server.rs:37](../../daemon/entrypoints/daemon/src/server.rs#L37) listens on the configured address as-is.
+The health at [openapi.yaml:25](../../daemon/openapi.yaml#L25) has `security: []`, and [server.rs:37](../../daemon/entrypoints/daemon/src/interface/server.rs#L37) listens on the configured address as-is.
 
 **What is wrong**
 The REST API is said to be for local clients, but whether the daemon enforces the premise or protects with authentication is undecided.

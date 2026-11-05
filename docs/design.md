@@ -146,8 +146,9 @@ Concern-local deferred decisions live in the "Design decisions" sections of each
 ### 6.1 Current status
 
 Each detailed design document is the source of truth for the implementation status of its concern.
-Overall, the daemon startup path owns down to FileExchanger and connects to other daemons starting from the configured bootstrap nodes, but the REST API that starts file publishing and subscription is not defined, so the end-to-end path is not complete.
-From file publishing to decoding, including P2P transfer between daemons over loopback TCP, is confirmed by engine-internal tests.
+Overall, the daemon startup path owns down to FileExchanger and connects to other daemons starting from the configured bootstrap nodes.
+The REST API starts a publish from an HTTP upload, starts a subscription, reports progress, cancels or removes either resource, and serves a completed output.
+The path from upload to download between two daemons is confirmed by daemon tests.
 
 ### 6.2 Roadmap
 
@@ -155,7 +156,6 @@ The following order is tentative; only the dependencies in the table must be pre
 
 | # | Item | Prerequisite dependency |
 | --- | --- | --- |
-| 1 | Define the REST API for publish, subscribe, progress, and cancel | The decided contracts in [daemon-api.md](./design/daemon-api.md#51-decided) |
-| 2 | Define Web of Trust, Profile, and memo in order | [trust-security.md](./design/trust-security.md#4-design-decisions) |
+| 1 | Define Web of Trust, Profile, and memo in order | [trust-security.md](./design/trust-security.md#4-design-decisions) |
 
 For confirmed bugs and fix directions, see [issues.md](./issues.md).

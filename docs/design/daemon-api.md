@@ -29,7 +29,7 @@ The semantics of the P2P transport, lookup, and the file protocol belong to thei
 
 [Executor](../../daemon/entrypoints/daemon/src/executor.rs) decides the configuration directory, reads the configuration, creates `core.state_dir`, and acquires `axus.lock` in it.
 This lock prevents multiple daemons using the same persistent state.
-Then it initializes logging, constructs [DaemonState](../../daemon/entrypoints/daemon/src/state.rs), and starts [ApiServer](../../daemon/entrypoints/daemon/src/server.rs).
+Then it initializes logging, constructs [DaemonState](../../daemon/entrypoints/daemon/src/state.rs), and starts [ApiServer](../../daemon/entrypoints/daemon/src/interface/server.rs).
 SIGINT and SIGTERM are converted to a common cancellation token, and the HTTP server and engine shutdowns are managed at the same process boundary.
 
 DaemonState holds the daemon's owned objects and, at shutdown, stops the lower-level tasks starting from `AxusService::shutdown()`.
@@ -195,6 +195,11 @@ There are no deferred decisions.
 
 Executor assembles the config, file lock, signal handling, and HTTP server, and DaemonState owns AxusService and manages it until shutdown.
 The API and P2P have separate listen addresses, and the health handler reports that the daemon is running.
-The endpoints for publishing files, subscribing, progress, and cancel are not defined.
+The daemon implements the publish and subscribe resources of §5.1: upload content, commit, get, list, cancel, and remove for a publish, and create, get, list, cancel, remove, and download content for a subscribe.
+The generated router serves the JSON endpoints, and the two content paths are hand-written routes because the generated router cannot stream a request or response body.
+The upload state is kept in daemon memory under `core.state_dir/uploads`, and the daemon removes that directory at startup.
+A completed publish keeps its publish ID through the committed-file record, so `GET /publishes/{id}` remains readable after commit and after a restart.
+The API is local-only and unauthenticated; a non-loopback `api.listen_addr` logs a warning.
+The design decisions above are implemented, and there is no remaining work in this document.
 
 For confirmed bugs, see [issues.md](../issues.md).

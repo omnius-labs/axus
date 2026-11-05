@@ -863,6 +863,7 @@ The answering side builds the bitmap from an existence check on both Stores and 
 The requesting side releases the absent hashes, stops asking the node for those ranks for the period, assigns a block to two Sessions in the tail, and retracts its copy with a cancel once the other Session saved the block; a block that arrives after the retraction is not blamed and is stored when it is still needed.
 The fetch throughput of §5.6 is implemented: the received bytes of the blocks whose content hash matched are recorded per node ID over the period, the dialing candidates are ordered by it with a node without a record at a random position, and a slow node keeps fewer requests awaiting responses.
 The per-request retraction of §5.5 is implemented: a request whose last answer is older than the soft deadline is retracted with a cancel and its blocks go back to the assignment, while the Session stays open and is closed only at the request deadline.
-There is no REST API to start publishing and subscribing.
+The REST API starts a publish from an HTTP upload and starts a subscription for a root hash.
+A completed subscription output is served from `GET /subscribes/{id}/content`, and the API state names follow the mapping in [daemon-api.md](./daemon-api.md#api-state-names-are-a-stable-mapping-of-engine-states).
 
 For confirmed bugs, see [issues.md](../issues.md).

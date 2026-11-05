@@ -14,6 +14,4 @@ Add a row when starting work, advance its state, and delete the row and child do
 
 ## 2. List
 
-| Plan | Purpose | State | Prerequisite |
-| --- | --- | --- | --- |
-| [rest-api](./plans/rest-api.md) | A local client publishes by HTTP upload and downloads a completed subscription | in progress | - |
+There are no plans in progress.

@@ -27,12 +27,10 @@ Confirmed bugs are tracked in this document family and are not filed as GitHub I
 
 | Item | Severity | Investigated |
 | --- | --- | --- |
-| [output_lock is common across all subscriptions and a writing subscription stops other subscriptions' finalization](./issues/output-lock-shared-across-subscriptions.md) | Medium | 2026-11-12 |
-| [A vanished destination directory of Failed or Canceled rows makes sweep retries continue and remove impossible](./issues/vanished-output-directory-blocks-sweep-and-remove.md) | Medium | 2026-11-12 |
 | [delete_bulk succeeds deleting nothing when it contains a missing key](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | Low | 2026-11-12 |
 | [TaskCommunicator::start does not exit its loop even when the accept channel is closed](./issues/task-communicator-spins-on-closed-session-channel.md) | Low | 2026-11-12 |
 
-The two Medium items are both on the subscriber output path: the shared lock delays finalization, and the vanished directory blocks reclamation. The two Low items are independent of them and of each other.
+The two Low items are independent of each other.
 
 ## 3. Not included here
 

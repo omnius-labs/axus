@@ -206,7 +206,7 @@ impl TaskDecoder {
             let Some(mut output) = self.store.create_output(&file).await? else {
                 return Ok(None);
             };
-            let result = async {
+            let decoded = async {
                 if self.decode_bytes(&mut output.file, &file.root_hash, &hashes, token).await?.is_none() {
                     return Ok(None);
                 }
@@ -218,22 +218,38 @@ impl TaskDecoder {
                     tokio::select! { _ = self.sleeper.sleep(Duration::from_secs(1)) => {}, _ = token.cancelled() => {} }
                     return Ok(None);
                 }
-                if token.is_cancelled() || !self.store.begin_finalizing(id).await? {
-                    return Ok(None);
-                }
                 Result::Ok(Some(()))
             }
             .await;
+            // Close the writer before the row becomes visible as Finalizing, so the
+            // finalization worker never waits on this destination's output lock.
             let closing = self.store.close_output(output).await;
-            if matches!(result, Ok(Some(()))) {
-                if let Err(error) = self.store.finalize(id).await {
-                    warn!(?error, "subscriber output finalization deferred");
+            if let Err(error) = closing {
+                if let Err(discard_error) = self.store.discard_output(id).await {
+                    warn!(?discard_error, "subscriber output discard failed");
                 }
-            } else {
-                self.store.discard_output(id).await?;
+                return Err(error);
             }
-            closing?;
-            result
+            match decoded {
+                Ok(Some(())) => {
+                    if token.is_cancelled() || !self.store.begin_finalizing(id).await? {
+                        self.store.discard_output(id).await?;
+                        return Ok(None);
+                    }
+                    if let Err(error) = self.store.finalize(id).await {
+                        warn!(?error, "subscriber output finalization deferred");
+                    }
+                    Ok(Some(()))
+                }
+                Ok(None) => {
+                    self.store.discard_output(id).await?;
+                    Ok(None)
+                }
+                Err(error) => {
+                    self.store.discard_output(id).await?;
+                    Err(error)
+                }
+            }
         } else {
             let mut output = Cursor::new(Vec::new());
             if self.decode_bytes(&mut output, &file.root_hash, &hashes, token).await?.is_none() {

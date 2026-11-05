@@ -37,9 +37,14 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 | fetch throughput | file-transfer | - | - | Received bytes per period of the blocks whose content hash matched, recorded per node ID and used to order the dialing candidates and to set the requests awaiting responses | - |
 | committed file | file-transfer | `PublishedCommittedFile` | - | Publisher-side file whose root hash is finalized and which can be advertised to the network; identified by the pair of root hash and file name | - |
 | uncommitted file | file-transfer | `PublishedUncommittedFile` | - | Publisher-side file from import until its root hash is finalized; identified by a temporary ID | - |
+| import ID | file-transfer | `Publication::id` | `id` of `/publications/{id}` | Temporary ID of an import that stays readable after the commit through a record mapping it to the committed file | - |
+| publication | file-transfer | `Publication` | `/publications` | The API's view of an import: an uncommitted file until the commit, and the committed file its import ID maps to afterwards | - |
+| staged file | file-transfer | - | - | Source file that the API layer handed over to the Store, which the Store deletes once it is no longer needed | - |
 | temporary output | file-transfer | - | `.<entry name>.axus-<subscription ID>.part` | File created in the same directory as the output destination with a conventional name per subscription, into which the decoded result is written | - |
 | Finalizing | file-transfer | `SubscribedFileStatus::Finalizing` | - | Subscription state from persisting the temporary output to begin finalization until reaching Completed or Failed | - |
 | Task | file-transfer | `TaskDecoder`, `TaskEncoder` | - | Component that controls encoding/decoding, cancellation before finalization, and retries of sweep and output placement; distinct from the FileExchanger connection task | - |
+| upload session | daemon-api | `UploadSession` | `/uploads` | In-memory state of a file being uploaded in chunks, identified by an upload ID and expiring after 24 hours | - |
+| download directory | daemon-api | `storage.download_dir` | `storage.download_dir` | Directory in which the REST API places the outputs of subscriptions | - |
 | AssetKey | node-finder | `AssetKey` | - | Identifier whose location NodeFinder looks up | file reference |
 | bootstrap node | node-finder | `bootstrap_node_profiles` | `p2p.bootstrap_nodes` | NodeProfile given by configuration and added to the known nodes at startup | - |
 | location info | node-finder | `AnnounceLocations` | - | Mapping of an AssetKey to the NodeProfiles of the nodes that advertise it | - |

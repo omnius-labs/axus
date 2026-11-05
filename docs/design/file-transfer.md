@@ -112,6 +112,12 @@ A Task that finished encoding without committing ends with cancel, shutdown, fai
 Blocks whose deletion failed are reclaimed by the sweep as blocks of a temporary ID with no Pending or Processing row (see [storage.md §4.3](./storage.md#43-publishing-commit-and-reclamation)).
 Because the temporary ID is renewed per attempt, a late-running reclamation never deletes a new attempt's blocks, and a file can be re-imported without waiting for reclamation.
 
+A staged file moves under `file_publisher/staged/` when the Store receives it.
+The Store deletes it once its row is committed, cancelled, or Failed, because a restart re-encodes from it only while the row is Pending or Processing.
+
+A commit records the temporary ID with the committed file's root hash and file name.
+Several import IDs can map to one committed file when the same content is imported under the same name again, and the records disappear when that committed file is removed.
+
 remove targets a committed file and stops the publication.
 If the same root hash is published under another file name, the block rows and bodies remain until the last committed file disappears.
 
@@ -147,7 +153,7 @@ The root hashes FileExchanger looks up peers for are limited to those of Downloa
 The range of subscriptions that provide blocks is handled by §5.1.
 Rank 0 is decoded into each subscription's temporary output.
 The temporary output is created in the same directory as the destination with a conventional name including the subscription ID. The daemon creates and deletes only files with this name.
-A completed output file is treated as the user's file and is not deleted by remove.
+A completed output file is treated as the user's file, and remove deletes it only when the caller asks and no other subscription row reaches the same entry.
 
 #### Output reservation and finalization
 
@@ -458,7 +464,7 @@ Serializing with a per-file lock requires managing a lock table, and cancel wait
 **Decision**
 cancel turns a subscription that is fetching or decoding into Canceled, keeping the row and blocks.
 remove deletes rows other than Finalizing and deletes blocks that have lost their references.
-Both are rejected during finalization, and output files are not deletion targets.
+Both are rejected during finalization, and an output file is a deletion target only when remove is explicitly asked to delete it.
 
 **Rationale**
 To keep a cancelled subscription as a record while still having a way to delete every row including Completed and Failed.
@@ -482,6 +488,31 @@ Failed rows remain to show the reason for the failure and are replaced by a new-
 **Rejected**
 Keeping a committed file as Completed requires a separate row deletion before re-import.
 Having a separate remove for uncommitted files creates two kinds of deletion operations on the publisher side and is hard to distinguish from stopping a publication.
+
+#### Keep the import ID of a committed file readable
+
+**Decision**
+A commit records its temporary ID with the committed file's root hash and file name in the same SQLite transaction, and removing the committed file removes those records.
+
+**Rationale**
+The client that started an import holds only the temporary ID, and the root hash is what it needs to share the file.
+The record has no expiry of its own because its lifetime is that of the committed file it points at.
+
+**Rejected**
+Keeping the uncommitted row as Completed blocks re-import and is already rejected in the decision above.
+Finding the committed file by its name in a list is ambiguous when different contents share a name.
+
+#### Let remove delete an output only on request
+
+**Decision**
+remove keeps the output by default and deletes it when asked, unless another row reaches the same entry, by the same name or by a name the volume treats as the same.
+
+**Rationale**
+A client on another host has no other way to reclaim the space of the download directory, while the default keeps the rule that an output belongs to the user.
+Another row at the same destination means the user deleted the file and subscribed again, so the file there belongs to that row.
+
+**Rejected**
+Always deleting loses received files when a client only meant to clear its history.
 
 #### Allow duplicate subscriptions to the same root hash
 
@@ -863,6 +894,6 @@ The answering side builds the bitmap from an existence check on both Stores and 
 The requesting side releases the absent hashes, stops asking the node for those ranks for the period, assigns a block to two Sessions in the tail, and retracts its copy with a cancel once the other Session saved the block; a block that arrives after the retraction is not blamed and is stored when it is still needed.
 The fetch throughput of §5.6 is implemented: the received bytes of the blocks whose content hash matched are recorded per node ID over the period, the dialing candidates are ordered by it with a node without a record at a random position, and a slow node keeps fewer requests awaiting responses.
 The per-request retraction of §5.5 is implemented: a request whose last answer is older than the soft deadline is retracted with a cancel and its blocks go back to the assignment, while the Session stays open and is closed only at the request deadline.
-There is no REST API to start publishing and subscribing.
+The REST API that starts publishing and subscribing is described in [daemon-api.md §4.3](./daemon-api.md#43-rest-api).
 
 For confirmed bugs, see [issues.md](../issues.md).

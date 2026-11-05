@@ -47,16 +47,24 @@ Persistent state is split into a directory per component.
 <state_dir>/
 ├── identity/
 ├── repo/
-├── file_publisher/
-│   ├── repo/
-│   └── blocks/
-└── file_subscriber/
-    ├── repo/
-    └── blocks/
+├── uploads/
+├── downloads/
+├── finder/
+└── file_exchanger/
+    ├── file_publisher/
+    │   ├── repo/
+    │   ├── staged/
+    │   └── blocks/
+    └── file_subscriber/
+        ├── repo/
+        └── blocks/
 ```
 
 Separating the publisher and subscriber storage areas prevents rebuilding or deleting one from directly breaking the other's state.
 Because a temporary output is placed at the destination by rename, it is created in the destination's parent directory and not in `state_dir`.
+`uploads/` holds the bytes of upload sessions, is emptied at startup, and must be on the same volume as `file_exchanger/file_publisher/staged/` because a finished upload moves there by rename.
+`file_exchanger/file_publisher/staged/` holds the sources of Pending and Processing rows, and a file no row points at is deleted at startup.
+`downloads/` is the default download directory, and `storage.download_dir` can place it elsewhere; a temporary output is created there too.
 `identity/` holds the node's signing key; deleting it makes the next startup create a different key and node ID, so unlike other directories it cannot be undone by recreation.
 Adding or migrating a directory name requires declaring a unit of migration and rollback.
 

@@ -44,16 +44,16 @@ To find out what runs now, read §6 first; for concern-specific details, read th
 
 Axus is a P2P file distribution service that runs on personal servers and PCs.
 It is developed as open source, with the aims of enabling safe and cheap file sharing between individuals and removing the single point of failure in BitTorrent search.
-The daemon combines, in one process, one node's network connections, node lookup, file encoding and decoding, persistent state, and the REST API for local clients.
+The daemon combines, in one process, one node's network connections, node lookup, file encoding and decoding, persistent state, and the REST API and static serving for a browser client.
 
 ### 2.1 Out of scope
 
-- The GUI that operates the daemon and its screen transitions are not covered.
+- The screens of the browser client that operates the daemon are not covered yet; roadmap item 1 in §6.2 adds them.
 - The operational infrastructure, including distribution, monitoring, and backup, is not covered.
 - The internal design of `core-rs` is not covered; only the contract as seen from Axus is.
 - The complete wire format of the REST API and RocketPack is left to each source of truth.
 
-Keeping these out of scope means the design documents carry no client UI, deployment topology, or copies of externally defined formats.
+Keeping these out of scope means the design documents carry no deployment topology or copies of externally defined formats.
 
 ## 3. Overall structure
 
@@ -74,7 +74,7 @@ Responsibilities are passed one-way from the client down to P2P communication.
 
 ```mermaid
 flowchart TD
-    Client[Local client]
+    Client[Browser client]
     Api[ApiServer]
     State[DaemonState]
     Service[AxusService]
@@ -145,8 +145,8 @@ Concern-local deferred decisions live in the "Design decisions" sections of each
 ### 6.1 Current status
 
 Each detailed design document is the source of truth for the implementation status of its concern.
-Overall, the daemon startup path owns down to FileExchanger and connects to other daemons starting from the configured bootstrap nodes, but the REST API that starts file publishing and subscription is not defined, so the end-to-end path is not complete.
-From file publishing to decoding, including P2P transfer between daemons over loopback TCP, is confirmed by engine-internal tests.
+Overall, the daemon startup path owns down to FileExchanger and connects to other daemons starting from the configured bootstrap nodes, and the REST API starts file publishing and subscription.
+The path from uploading a file on one daemon to downloading it from another over loopback TCP is confirmed by tests through the API; the browser client that would use the API does not exist yet.
 
 ### 6.2 Roadmap
 
@@ -154,7 +154,7 @@ The following order is tentative; only the dependencies in the table must be pre
 
 | # | Item | Prerequisite dependency |
 | --- | --- | --- |
-| 1 | Define the REST API for publish, subscribe, progress, and cancel | Judgment on long-running operations and reach in [daemon-api.md](./design/daemon-api.md#52-deferred) |
+| 1 | Add the browser client that operates the daemon through the REST API | Node information and share links in [daemon-api.md](./design/daemon-api.md#52-deferred) |
 | 2 | Define Web of Trust, Profile, and memo in order | [trust-security.md](./design/trust-security.md#4-design-decisions) |
 
 For confirmed bugs and fix directions, see [issues.md](./issues.md).

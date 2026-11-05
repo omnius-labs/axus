@@ -16,3 +16,4 @@ Add a row when starting work, advance its state, and delete the row and child do
 
 | Plan | Purpose | Status | Prerequisite |
 | --- | --- | --- | --- |
+| [rest-api](./plans/rest-api.md) | A browser client publishes, subscribes, watches progress, cancels, and downloads | in progress | - |

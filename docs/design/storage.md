@@ -186,6 +186,9 @@ Because the update is finalized first, the Task does not advance to Finalizing a
 Even if the temporary output deletion fails, Canceled is not returned, and the leftover temporary output is deleted by the sweep.
 Remove before finalization runs the same conditional update to Canceled, deletes the temporary output, and then deletes the row. If the deletion fails, it leaves the Canceled row and fails the remove. As long as the row remains, the temporary output's name can be derived from the row.
 The subscriber sweep deletes, in addition to the bodies of unreferenced roots, the temporary outputs pointed to by Canceled and Failed rows.
+For those rows, a destination directory that no longer exists counts as the temporary output already being gone, so neither remove nor the sweep waits for a directory that may never return.
+When such a disk returns, the startup sweep deletes the temporary output of a row that remains, and one whose row was removed has nothing to name it and stays until the user deletes it.
+Output operations serialize per destination, so a long write of one subscription does not delay the finalization of a subscription with another destination.
 
 ### 4.6 Startup recovery
 

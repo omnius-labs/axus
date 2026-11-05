@@ -26,8 +26,6 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 | Item | Severity | Investigated on | Issue |
 | --- | --- | --- | --- |
 | [Lock file of an abnormally terminated daemon remains and prevents restart](./issues/daemon-lock-survives-abnormal-exit.md) | Medium | 2026-10-06 | - |
-| [output_lock is common across all subscriptions and a writing subscription stops other subscriptions' finalization](./issues/output-lock-shared-across-subscriptions.md) | Medium | 2026-10-07 | - |
-| [A vanished destination directory of Failed or Canceled rows makes sweep retries continue and remove impossible](./issues/vanished-output-directory-blocks-sweep-and-remove.md) | Medium | 2026-10-07 | - |
 | [delete_bulk succeeds deleting nothing when it contains a missing key](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | Low | 2026-10-06 | - |
 | [TaskCommunicator::start does not exit its loop even when the accept channel is closed](./issues/task-communicator-spins-on-closed-session-channel.md) | Low | 2026-10-07 | - |
 

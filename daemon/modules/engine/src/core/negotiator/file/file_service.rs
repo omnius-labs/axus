@@ -64,6 +64,7 @@ impl FileService {
         self.subscriber.cancel(id).await
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn set_subscribe_status_for_test(&self, id: &str, expected: &crate::SubscribedFileStatus, status: &crate::SubscribedFileStatus) -> Result<()> {
         self.subscriber.set_status_for_test(id, expected, status).await
     }

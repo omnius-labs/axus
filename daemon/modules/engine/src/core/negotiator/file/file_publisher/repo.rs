@@ -288,7 +288,7 @@ SELECT root_hash, file_name, source_id, size, priority, block_size, attrs, creat
     pub async fn find_committed_file_by_source_id(&self, source_id: &str) -> Result<Option<PublishedCommittedFile>> {
         let record: Option<PublishRecordRow> = sqlx::query_as(
             r#"
-SELECT publish_id, root_hash, file_name, size, priority
+SELECT publish_id, root_hash, file_name, size, priority, created_at, updated_at
     FROM publish_records
     WHERE publish_id = ?
 "#,
@@ -317,13 +317,15 @@ SELECT root_hash, file_name, source_id, size, priority, block_size, attrs, creat
         row.source_id = Some(record.publish_id);
         row.size = record.size.or(row.size);
         row.priority = record.priority;
+        row.created_at = record.created_at;
+        row.updated_at = record.updated_at;
         Ok(Some(row.into()?))
     }
 
     pub async fn get_committed_publishes(&self) -> Result<Vec<PublishedCommittedFile>> {
         let rows: Vec<CommittedPublishRow> = sqlx::query_as(
             r#"
-SELECT p.publish_id, c.root_hash, c.file_name, COALESCE(p.size, c.size) AS size, p.priority, c.block_size, c.attrs, c.created_at, c.updated_at
+SELECT p.publish_id, c.root_hash, c.file_name, COALESCE(p.size, c.size) AS size, p.priority, c.block_size, c.attrs, p.created_at, p.updated_at
     FROM publish_records p
     JOIN committed_files c ON c.root_hash = p.root_hash AND c.file_name = p.file_name
 "#,
@@ -836,6 +838,8 @@ struct PublishRecordRow {
     file_name: String,
     size: Option<i64>,
     priority: i64,
+    created_at: NaiveDateTime,
+    updated_at: NaiveDateTime,
 }
 
 #[derive(sqlx::FromRow)]

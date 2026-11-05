@@ -812,6 +812,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn commit_after_sqlite_error_removes_owned_source_test() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FilePublisherStore::open(dir.path(), ids, clock).await?;
+        let source = dir.path().join("owned-source");
+        std::fs::write(&source, b"content")?;
+        let id = "owned-source-1".to_string();
+        store.import_owned(&id, source.to_str().unwrap(), "owned.bin", 7, 256, None, 0).await?;
+        let (file, root, blocks) = stage_blocks(&store, &id).await?;
+
+        store.repo.fail_after_commit();
+        assert!(store.commit(&file, &root, &blocks).await.is_err());
+        assert!(!store.source_dir.join(&id).exists());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn cancel_and_remove_retry_failed_block_deletions() -> TestResult {
         let dir = tempfile::tempdir()?;
         let (ids, clock) = dependencies();

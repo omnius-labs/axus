@@ -68,6 +68,7 @@ impl FileSubscriber {
         self.store.list_files().await
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn set_status_for_test(&self, id: &str, expected: &SubscribedFileStatus, status: &SubscribedFileStatus) -> Result<()> {
         self.store.set_status_for_test(id, expected, status).await
     }

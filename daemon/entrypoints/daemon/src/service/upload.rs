@@ -221,20 +221,14 @@ impl UploadService {
             let chunk_len = chunk.len() as u64;
 
             let start = {
-                let mut state = entry.state.lock().await;
+                let state = entry.state.lock().await;
                 if chunk_len > state.size - state.uploaded_size {
                     return Err(ApiError::payload_too_large("the chunk exceeds the declared upload size"));
                 }
-                let start = state.uploaded_size;
-                state.uploaded_size += chunk_len;
-                state.updated_at = self.clock.now();
-                state.expires_at = self.clock.now() + Duration::hours(UPLOAD_EXPIRY_HOURS);
-                start
+                state.uploaded_size
             };
 
             if available < written + chunk_len {
-                let mut state = entry.state.lock().await;
-                state.uploaded_size = start;
                 return Err(ApiError::insufficient_storage("not enough space for the chunk"));
             }
             file.write_all(&chunk)
@@ -243,6 +237,13 @@ impl UploadService {
             file.set_len(start + chunk_len)
                 .await
                 .map_err(|error| ApiError::internal(format!("cannot truncate the upload staging file: {error}")))?;
+            {
+                let mut state = entry.state.lock().await;
+                state.uploaded_size = start + chunk_len;
+                let now = self.clock.now();
+                state.updated_at = now;
+                state.expires_at = now + Duration::hours(UPLOAD_EXPIRY_HOURS);
+            }
             written += chunk_len;
         }
         file.sync_all()
@@ -380,6 +381,20 @@ mod tests {
         clock.advance(std::time::Duration::from_secs(25 * 60 * 60));
         assert!(service.commit("upload-3").await.is_err());
         assert!(!state.staging_path.exists());
+        service.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_write_does_not_advance_uploaded_size_test() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let clock = Arc::new(FakeClockUtc::new(Utc::now()));
+        let service = UploadService::new(dir.path(), 0, clock).await?;
+        let state = service.create("upload-4".to_string(), "file.bin".to_string(), 4, 256, None, 0).await?;
+        std::fs::remove_file(&state.staging_path)?;
+
+        assert!(service.write_stream("upload-4", 0, axum::body::Body::from(vec![0u8; 2])).await.is_err());
+        assert_eq!(service.get("upload-4").await.unwrap().uploaded_size, 0);
         service.shutdown().await;
         Ok(())
     }

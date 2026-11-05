@@ -207,6 +207,7 @@ impl FileSubscriberStore {
         self.repo.find_file_by_id(id).await
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn set_status_for_test(&self, id: &str, expected: &SubscribedFileStatus, status: &SubscribedFileStatus) -> Result<()> {
         self.repo.transition(id, expected, status, None).await?;
         Ok(())

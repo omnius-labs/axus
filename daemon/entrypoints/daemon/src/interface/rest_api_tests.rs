@@ -457,7 +457,7 @@ async fn rest_api_publish_list_and_terminal_rules_test() -> TestResult {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, _, _) = send(&app, Method::POST, &format!("/api/v1/publishes/{}/commit", original.id), None, None).await;
     assert_eq!(status, StatusCode::ACCEPTED);
-    wait_publish(&app, &original.id, models::PublishStatus::Succeeded).await;
+    let original = wait_publish(&app, &original.id, models::PublishStatus::Succeeded).await;
 
     let copy = create_publish(&app, "duplicate.bin", duplicate_content.len() as u64, 256).await;
     let (status, _, _) = send(
@@ -473,6 +473,12 @@ async fn rest_api_publish_list_and_terminal_rules_test() -> TestResult {
     assert_eq!(status, StatusCode::ACCEPTED);
     let copy = wait_publish(&app, &copy.id, models::PublishStatus::Succeeded).await;
     assert!(copy.root_hash.is_some());
+    assert!(copy.created_at >= original.created_at);
+
+    let (status, _, body) = send(&app, Method::GET, "/api/v1/publishes?limit=10", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let list = json::<models::PublishList>(&body);
+    assert!(list.publishes.windows(2).all(|pair| pair[0].created_at >= pair[1].created_at));
 
     let (status, _, _) = send(&app, Method::GET, &format!("/api/v1/publishes/{}", original.id), None, None).await;
     assert_eq!(status, StatusCode::OK);

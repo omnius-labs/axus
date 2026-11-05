@@ -43,5 +43,6 @@ axum-extra = { workspace = true }
 
 [dev-dependencies]
 testresult = { workspace = true }
+omnius-axus-engine = { workspace = true, features = ["test-support"] }
 serde_json = { version = "1", features = ["raw_value"] }
 tower = { version = "0.5", features = ["util"] }

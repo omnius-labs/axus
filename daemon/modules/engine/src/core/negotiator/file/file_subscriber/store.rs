@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::Path,
     sync::{
         Arc,
@@ -35,7 +35,7 @@ pub struct FileSubscriberStore {
     repo: FileSubscriberRepo,
     blocks_storage: KeyValueRocksdbStorage,
     lock: RwLock<()>,
-    output_lock: Arc<TokioMutex<()>>,
+    output_locks: Mutex<HashMap<String, Arc<TokioMutex<()>>>>,
     finalization_lock: TokioMutex<()>,
     finalization_notify: Notify,
     sweep_needed: AtomicBool,
@@ -56,7 +56,7 @@ impl FileSubscriberStore {
             repo: FileSubscriberRepo::new(&repo_dir, clock.clone()).await?,
             blocks_storage: KeyValueRocksdbStorage::new(state_dir.join("blocks"), tsid_provider.clone()).await?,
             lock: RwLock::new(()),
-            output_lock: Arc::new(TokioMutex::new(())),
+            output_locks: Mutex::new(HashMap::new()),
             finalization_lock: TokioMutex::new(()),
             finalization_notify: Notify::new(),
             sweep_needed: AtomicBool::new(false),
@@ -187,9 +187,11 @@ impl FileSubscriberStore {
         self.discard_output(id).await?;
         let _guard = self.lock.write().await;
         let Some(file) = self.repo.find_file_by_id(id).await? else {
+            self.output_locks.lock().remove(id);
             return Ok(());
         };
         self.repo.delete_file(id).await?;
+        self.output_locks.lock().remove(id);
         if self.repo.find_file_by_root_hash(&file.root_hash).await?.is_none() {
             let prefix = format!("{}/", file.root_hash);
             let keys: Vec<_> = self.blocks_storage.get_keys()?.filter(|key| key.starts_with(prefix.as_bytes())).collect();
@@ -251,8 +253,13 @@ impl FileSubscriberStore {
         self.repo.advance_layer(&next, &blocks).await
     }
 
+    fn output_lock(&self, id: &str) -> Arc<TokioMutex<()>> {
+        let mut locks = self.output_locks.lock();
+        locks.entry(id.to_string()).or_insert_with(|| Arc::new(TokioMutex::new(()))).clone()
+    }
+
     pub async fn create_output(&self, file: &SubscribedFile) -> Result<Option<OutputWriter>> {
-        let guard = self.output_lock.clone().lock_owned().await;
+        let guard = self.output_lock(&file.id).lock_owned().await;
         if !self.repo.find_file_by_id(&file.id).await?.is_some_and(|file| file.status == SubscribedFileStatus::Decoding) {
             return Ok(None);
         }
@@ -308,7 +315,8 @@ impl FileSubscriberStore {
 
     pub async fn finalize(&self, id: &str) -> Result<()> {
         let _guard = self.finalization_lock.lock().await;
-        let _output_guard = self.output_lock.lock().await;
+        let output_lock = self.output_lock(id);
+        let _output_guard = output_lock.lock().await;
         let Some(file) = self.repo.find_file_by_id(id).await? else {
             return Ok(());
         };
@@ -406,7 +414,8 @@ impl FileSubscriberStore {
     }
 
     pub async fn discard_output(&self, id: &str) -> Result<()> {
-        let _guard = self.output_lock.lock().await;
+        let output_lock = self.output_lock(id);
+        let _guard = output_lock.lock().await;
         let Some(file) = self.repo.find_file_by_id(id).await? else {
             return Ok(());
         };
@@ -427,6 +436,11 @@ impl FileSubscriberStore {
             Ok(()) => Ok(()),
             Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidFilename) => {
                 // 長すぎる名前は存在し得ないため、一時出力がない場合と同じに扱う。
+                if matches!(file.status, SubscribedFileStatus::Canceled | SubscribedFileStatus::Failed) {
+                    // The row is already terminal and the temporary output is gone.
+                    // A vanished destination directory must not keep the sweep retrying or block remove.
+                    return Ok(());
+                }
                 // 出力先の disk が外れている場合は、削除済みと判定しない。
                 if !tokio::fs::metadata(&file.output_directory).await?.is_dir() {
                     return Err(Error::new(ErrorKind::IoError).with_message("output parent is not a directory"));
@@ -484,7 +498,8 @@ impl FileSubscriberStore {
         let mut failure = None;
         for file in files {
             if matches!(file.status, SubscribedFileStatus::Canceled | SubscribedFileStatus::Failed) {
-                let _guard = self.output_lock.lock().await;
+                let output_lock = self.output_lock(&file.id);
+                let _guard = output_lock.lock().await;
                 if let Err(error) = self.delete_temporary_output(file).await {
                     failure = Some(error);
                 }
@@ -622,6 +637,39 @@ mod tests {
         assert!(!output.exists());
         store.finalize(&id).await?;
         assert_eq!(tokio::fs::read(&output).await?, b"content");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn canceled_row_survives_a_vanished_output_directory_test() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let output_dir = dir.path().join("out");
+        std::fs::create_dir(&output_dir)?;
+        let output = output_dir.join("file");
+        let id = rank_zero_subscription(&store, &output, b"content").await?;
+        store.cancel(&id).await?;
+        std::fs::remove_dir_all(&output_dir)?;
+
+        store.sweep().await?;
+        assert!(store.find_file(&id).await?.is_some());
+        store.remove(&id).await?;
+        assert!(store.find_file(&id).await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn one_subscription_write_does_not_block_another_discard_test() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let first = rank_zero_subscription(&store, &dir.path().join("first"), b"first").await?;
+        let second = rank_zero_subscription(&store, &dir.path().join("second"), b"second").await?;
+
+        let file = store.find_file(&first).await?.unwrap();
+        let _writer = store.create_output(&file).await?.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), store.discard_output(&second)).await??;
         Ok(())
     }
 
@@ -1143,37 +1191,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn startup_sweep_failure_is_retried_after_parent_returns() -> TestResult {
+    async fn startup_sweep_treats_a_vanished_parent_as_deleted_test() -> TestResult {
         let dir = tempfile::tempdir()?;
         let (ids, clock) = dependencies();
         let state = dir.path().join("state");
         let parent = dir.path().join("parent");
-        let unavailable = dir.path().join("unavailable");
         tokio::fs::create_dir(&parent).await?;
         let store = FileSubscriberStore::open(&state, ids.clone(), clock.clone()).await?;
         let id = rank_zero_subscription(&store, &parent.join("output"), b"content").await?;
         write_temporary(&store, &id, b"content").await?;
-        let file = store.find_file(&id).await?.unwrap();
         store.cancel(&id).await?;
-        tokio::fs::rename(&parent, &unavailable).await?;
+        tokio::fs::remove_dir_all(&parent).await?;
         drop(store);
-        let store = FileSubscriberStore::open(&state, ids, clock.clone()).await?;
-        assert!(store.needs_sweep());
-        let sleeper = Arc::new(RecordingSleeper::new());
-        let task = TaskDecoder::new(store.clone(), clock, sleeper.clone()).await?;
-        sleeper.wait_count(1).await?;
-        tokio::fs::rename(&unavailable, &parent).await?;
-        sleeper.permits.add_permits(1);
-        tokio::time::timeout(TEST_WATCHDOG, async {
-            while store.needs_sweep() || file.temporary_output_path().exists() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await?;
-        task.shutdown().await;
-        assert!(store.find_file(&id).await?.unwrap().status == SubscribedFileStatus::Canceled);
-        assert!(!file.temporary_output_path().exists());
-        assert!(!file.output_path().exists());
+
+        let store = FileSubscriberStore::open(&state, ids, clock).await?;
+        assert!(!store.needs_sweep());
+        assert!(store.find_file(&id).await?.is_some());
+        store.remove(&id).await?;
+        assert!(store.find_file(&id).await?.is_none());
         Ok(())
     }
 

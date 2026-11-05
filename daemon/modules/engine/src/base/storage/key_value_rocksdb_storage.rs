@@ -427,7 +427,7 @@ impl KeyValueRocksdbStorage {
             for name in &names_owned {
                 let id = match db.get_cf(&cf_names, name)? {
                     Some(id) => id,
-                    None => return Ok(()),
+                    None => continue,
                 };
 
                 batch.delete_cf(&cf_names, name);
@@ -847,6 +847,10 @@ mod tests {
         assert_eq!(storage.get_value("bulk1").await?, None);
         assert_eq!(storage.get_value("bulk2").await?, None);
         assert_eq!(storage.get_value("bulk3").await?, Some(b"b3".to_vec()));
+
+        // A missing key must not stop the existing keys in the same batch from being deleted.
+        storage.delete_bulk(&["bulk3", "non_existent3"]).await?;
+        assert_eq!(storage.get_value("bulk3").await?, None);
 
         Ok(())
     }

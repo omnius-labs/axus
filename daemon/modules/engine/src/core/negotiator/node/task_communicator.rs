@@ -124,16 +124,18 @@ impl TaskCommunicator {
                     status = async { this.session_receiver.lock().await.recv().await } => status,
                     _ = this.cancellation_token.cancelled() => break,
                 };
-                if let Some(status) = status {
-                    let communicator = this.clone();
-                    let join_handle = tokio::spawn(async move {
-                        let res = communicator.communicate(status).await;
-                        if let Err(e) = res {
-                            warn!(error_message = e.to_string(), "communicate failed");
-                        }
-                    });
-                    this.communicate_join_handles.lock().await.push(join_handle);
-                }
+                let Some(status) = status else {
+                    // The accept channel is closed for good; a missing reception is not recoverable.
+                    break;
+                };
+                let communicator = this.clone();
+                let join_handle = tokio::spawn(async move {
+                    let res = communicator.communicate(status).await;
+                    if let Err(e) = res {
+                        warn!(error_message = e.to_string(), "communicate failed");
+                    }
+                });
+                this.communicate_join_handles.lock().await.push(join_handle);
             }
         }));
 
@@ -582,6 +584,18 @@ mod tests {
         let status: NodeMessage = tokio::time::timeout(Duration::from_secs(1), peer.receiver.lock().await.recv_message_with::<NodeMessageCodec>()).await??;
         assert_eq!(status, NodeMessage::Status);
 
+        task.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn closed_session_channel_stops_the_communicator() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (task, session_sender) = create_task_communicator(dir.path().to_str().unwrap(), NodeFinderIntervals::default()).await?;
+        drop(session_sender);
+
+        let handle = task.join_handle.lock().await.take().expect("the start task is running");
+        tokio::time::timeout(TEST_WATCHDOG, handle).await??;
         task.shutdown().await;
         Ok(())
     }

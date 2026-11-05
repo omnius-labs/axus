@@ -29,6 +29,7 @@ The semantics of the P2P transport, lookup, and the file protocol belong to thei
 
 [Executor](../../daemon/entrypoints/daemon/src/executor.rs) decides the configuration directory, reads the configuration, creates `core.state_dir`, and acquires `axus.lock` in it.
 This lock prevents multiple daemons using the same persistent state.
+A lock file left by a dead process is removed at startup and acquisition is retried.
 Then it initializes logging, constructs [DaemonState](../../daemon/entrypoints/daemon/src/state.rs), and starts [ApiServer](../../daemon/entrypoints/daemon/src/interface/server.rs).
 SIGINT and SIGTERM are converted to a common cancellation token, and the HTTP server and engine shutdowns are managed at the same process boundary.
 

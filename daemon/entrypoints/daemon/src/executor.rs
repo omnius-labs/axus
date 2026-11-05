@@ -110,9 +110,18 @@ impl Executor {
             .map_err(|error| Error::from_error(error, ErrorKind::IoError).with_message(format!("failed to create state directory {}", state_dir.display())))?;
 
         let lock_path = state_dir.join("axus.lock");
-        FileLock::acquire(&lock_path)
-            .await
-            .map_err(|error| Error::from_error(error, ErrorKind::IoError).with_message(format!("failed to acquire daemon lock at {}", lock_path.display())))
+        match FileLock::acquire(&lock_path).await {
+            Ok(lock) => Ok(lock),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && lock_owner_is_dead(&lock_path).await => {
+                tokio::fs::remove_file(&lock_path)
+                    .await
+                    .map_err(|error| Error::from_error(error, ErrorKind::IoError).with_message(format!("failed to remove a stale daemon lock at {}", lock_path.display())))?;
+                FileLock::acquire(&lock_path)
+                    .await
+                    .map_err(|error| Error::from_error(error, ErrorKind::IoError).with_message(format!("failed to acquire daemon lock at {}", lock_path.display())))
+            }
+            Err(error) => Err(Error::from_error(error, ErrorKind::IoError).with_message(format!("failed to acquire daemon lock at {}", lock_path.display()))),
+        }
     }
 
     fn spawn_signal_handler(token: &CancellationToken) -> Result<JoinHandle<()>> {
@@ -156,6 +165,29 @@ impl Executor {
                 }
             }))
         }
+    }
+}
+
+// omnius-lint:allow(free-fn) checks process liveness through the OS as a platform boundary
+async fn lock_owner_is_dead(path: &Path) -> bool {
+    let Ok(contents) = tokio::fs::read_to_string(path).await else {
+        return false;
+    };
+    let Ok(pid) = contents.trim().parse::<u32>() else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        let result = unsafe { libc::kill(pid as i32, 0) };
+        if result == 0 {
+            return false;
+        }
+        std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
     }
 }
 
@@ -207,6 +239,24 @@ mod tests {
         let source = error.source().unwrap().downcast_ref::<std::io::Error>().unwrap();
         assert_eq!(source.kind(), std::io::ErrorKind::AlreadyExists);
 
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn state_lock_recovers_a_lock_left_by_a_dead_process() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let state_dir = dir.path().join("state");
+        tokio::fs::create_dir_all(&state_dir).await?;
+
+        let mut child = std::process::Command::new("sh").arg("-c").arg("exit 0").spawn()?;
+        let pid = child.id();
+        child.wait()?;
+        tokio::fs::write(state_dir.join("axus.lock"), pid.to_string()).await?;
+
+        let lock = Executor::acquire_state_lock(&state_dir).await?;
+        assert!(state_dir.join("axus.lock").is_file());
+        drop(lock);
         Ok(())
     }
 

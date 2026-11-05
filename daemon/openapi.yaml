@@ -1,9 +1,24 @@
 openapi: 3.0.3
 info:
     title: Axus
-    version: 0.2.0
+    version: 0.3.0
     description: |
-        Axus daemon API.
+        Axus daemon API for publishing and subscribing to files from a browser
+        client.
+
+        The API has no authentication and limits only cross-origin requests:
+        a request with an `Origin` header whose authority differs from `Host`
+        returns `403`. Reach is limited outside the daemon.
+
+        Starting a publish or a subscription returns `202` and a resource that
+        the client polls. The resource lives until it is deleted, and it
+        survives a daemon restart.
+
+        A file of 32 MiB or less is uploaded with one `POST /publications`, and
+        a larger one goes through an upload session.
+
+        A file name is one path component: it is not empty, not `.` or `..`,
+        holds no `/`, `\`, `:`, or NUL, and is at most 255 bytes.
     license:
         name: MIT
 
@@ -14,6 +29,12 @@ servers:
 tags:
     - name: Health
       description: Daemon liveness checks.
+    - name: Publications
+      description: Files this node publishes.
+    - name: Uploads
+      description: Upload sessions for files over 32 MiB.
+    - name: Subscriptions
+      description: Files this node fetches from the network.
 
 paths:
     /health:
@@ -35,8 +56,425 @@ paths:
                 "500":
                     $ref: "#/components/responses/InternalServerError"
 
+    /publications:
+        get:
+            tags:
+                - Publications
+            summary: List publications
+            description: |
+                One entry per file. A file imported several times under the
+                same name appears once, under its oldest ID.
+            operationId: listPublications
+            responses:
+                "200":
+                    description: Known publications.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/PublicationList"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+        post:
+            tags:
+                - Publications
+            summary: Upload and publish a file of 32 MiB or less
+            operationId: createPublication
+            parameters:
+                - $ref: "#/components/parameters/FileNameQuery"
+            requestBody:
+                required: true
+                content:
+                    application/octet-stream:
+                        schema:
+                            type: string
+                            format: binary
+            responses:
+                "202":
+                    description: The file was received and encoding is queued.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Publication"
+                "400":
+                    $ref: "#/components/responses/BadRequest"
+                "413":
+                    $ref: "#/components/responses/PayloadTooLarge"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+                "507":
+                    $ref: "#/components/responses/InsufficientStorage"
+
+    /publications/{publicationId}:
+        get:
+            tags:
+                - Publications
+            summary: Get a publication
+            operationId: getPublication
+            parameters:
+                - $ref: "#/components/parameters/PublicationIdPath"
+            responses:
+                "200":
+                    description: Publication state.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Publication"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+        delete:
+            tags:
+                - Publications
+            summary: Cancel or stop a publication
+            description: |
+                Cancels a publication that is not committed. Stops a committed
+                one, which also ends every other ID of the same file; the root
+                hash is still provided when another name has the same content.
+            operationId: deletePublication
+            parameters:
+                - $ref: "#/components/parameters/PublicationIdPath"
+            responses:
+                "204":
+                    description: The publication is gone.
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /uploads:
+        post:
+            tags:
+                - Uploads
+            summary: Start an upload session
+            description: |
+                A session lives in memory, expires 24 hours after creation, and
+                does not survive a daemon restart.
+            operationId: createUpload
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/CreateUploadRequest"
+            responses:
+                "201":
+                    description: Session created.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/UploadSession"
+                "400":
+                    $ref: "#/components/responses/BadRequest"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+                "507":
+                    $ref: "#/components/responses/InsufficientStorage"
+
+    /uploads/{uploadId}:
+        get:
+            tags:
+                - Uploads
+            summary: Get an upload session
+            description: The `committedSize` is the offset of the next chunk.
+            operationId: getUpload
+            parameters:
+                - $ref: "#/components/parameters/UploadIdPath"
+            responses:
+                "200":
+                    description: Session state.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/UploadSession"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+        delete:
+            tags:
+                - Uploads
+            summary: Abort an upload session
+            operationId: deleteUpload
+            parameters:
+                - $ref: "#/components/parameters/UploadIdPath"
+            responses:
+                "204":
+                    description: The session and its bytes are gone.
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /uploads/{uploadId}/content:
+        put:
+            tags:
+                - Uploads
+            summary: Append a chunk of 32 MiB or less
+            operationId: writeUploadContent
+            parameters:
+                - $ref: "#/components/parameters/UploadIdPath"
+                - name: offset
+                  in: query
+                  required: true
+                  description: Must equal the session's `committedSize`.
+                  schema:
+                      type: integer
+                      format: int64
+            requestBody:
+                required: true
+                content:
+                    application/octet-stream:
+                        schema:
+                            type: string
+                            format: binary
+            responses:
+                "204":
+                    description: Chunk accepted.
+                "400":
+                    $ref: "#/components/responses/BadRequest"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+                "507":
+                    $ref: "#/components/responses/InsufficientStorage"
+
+    /uploads/{uploadId}/commit:
+        post:
+            tags:
+                - Uploads
+            summary: Finish an upload session and publish the file
+            operationId: commitUpload
+            parameters:
+                - $ref: "#/components/parameters/UploadIdPath"
+            responses:
+                "202":
+                    description: All bytes arrived and encoding is queued.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Publication"
+                "400":
+                    $ref: "#/components/responses/BadRequest"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+                "507":
+                    $ref: "#/components/responses/InsufficientStorage"
+
+    /subscriptions:
+        get:
+            tags:
+                - Subscriptions
+            summary: List subscriptions
+            operationId: listSubscriptions
+            responses:
+                "200":
+                    description: Known subscriptions.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/SubscriptionList"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+        post:
+            tags:
+                - Subscriptions
+            summary: Start fetching a file
+            description: The output is placed in the download directory under `fileName`.
+            operationId: createSubscription
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/CreateSubscriptionRequest"
+            responses:
+                "202":
+                    description: The fetch is queued.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Subscription"
+                "400":
+                    $ref: "#/components/responses/BadRequest"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /subscriptions/{subscriptionId}:
+        get:
+            tags:
+                - Subscriptions
+            summary: Get a subscription
+            operationId: getSubscription
+            parameters:
+                - $ref: "#/components/parameters/SubscriptionIdPath"
+            responses:
+                "200":
+                    description: Subscription state.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Subscription"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+        delete:
+            tags:
+                - Subscriptions
+            summary: Delete a subscription
+            description: Rejected with `409` while the output is being finalized.
+            operationId: deleteSubscription
+            parameters:
+                - $ref: "#/components/parameters/SubscriptionIdPath"
+                - name: deleteOutput
+                  in: query
+                  required: false
+                  description: |
+                      Also deletes a completed output, unless another
+                      subscription points at the same destination.
+                  schema:
+                      type: boolean
+                      default: false
+            responses:
+                "204":
+                    description: The subscription is gone.
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /subscriptions/{subscriptionId}/cancel:
+        post:
+            tags:
+                - Subscriptions
+            summary: Cancel a subscription
+            description: |
+                Keeps the row and the fetched blocks. Canceling a subscription
+                that already ended changes nothing and returns its state, and
+                `409` is returned while the output is being finalized.
+            operationId: cancelSubscription
+            parameters:
+                - $ref: "#/components/parameters/SubscriptionIdPath"
+            responses:
+                "200":
+                    description: Subscription state.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Subscription"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /subscriptions/{subscriptionId}/content:
+        get:
+            tags:
+                - Subscriptions
+            summary: Download a completed output
+            description: |
+                Always an attachment of type `application/octet-stream`, and
+                `Range` requests are supported. `409` until the subscription is
+                Completed, and `404` when the output is gone.
+            operationId: getSubscriptionContent
+            parameters:
+                - $ref: "#/components/parameters/SubscriptionIdPath"
+            responses:
+                "200":
+                    description: The whole output.
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+                "206":
+                    description: The requested range of the output.
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "416":
+                    description: The range cannot be satisfied.
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
 components:
+    parameters:
+        FileNameQuery:
+            name: fileName
+            in: query
+            required: true
+            schema:
+                type: string
+        PublicationIdPath:
+            name: publicationId
+            in: path
+            required: true
+            schema:
+                type: string
+        UploadIdPath:
+            name: uploadId
+            in: path
+            required: true
+            schema:
+                type: string
+        SubscriptionIdPath:
+            name: subscriptionId
+            in: path
+            required: true
+            schema:
+                type: string
+
     responses:
+        BadRequest:
+            description: The request is invalid.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+        NotFound:
+            description: The resource does not exist.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+        Conflict:
+            description: The resource's state or an existing entry conflicts with the request.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+        PayloadTooLarge:
+            description: The body is over 32 MiB, and an upload session must be used.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+        InsufficientStorage:
+            description: The volume has no space left.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
         InternalServerError:
             description: Internal server error.
             content:
@@ -56,6 +494,161 @@ components:
                 result:
                     type: boolean
 
+        PublicationList:
+            type: object
+            required:
+                - publications
+            properties:
+                publications:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/Publication"
+
+        Publication:
+            type: object
+            required:
+                - id
+                - fileName
+                - status
+                - createdAt
+                - updatedAt
+            properties:
+                id:
+                    type: string
+                fileName:
+                    type: string
+                status:
+                    $ref: "#/components/schemas/PublicationStatus"
+                rootHash:
+                    type: string
+                    description: Present when Committed.
+                failedReason:
+                    type: string
+                    description: Present when Failed.
+                createdAt:
+                    type: string
+                    format: date-time
+                updatedAt:
+                    type: string
+                    format: date-time
+
+        PublicationStatus:
+            type: string
+            enum:
+                - Pending
+                - Processing
+                - Failed
+                - Committed
+
+        CreateUploadRequest:
+            type: object
+            required:
+                - fileName
+                - size
+            properties:
+                fileName:
+                    type: string
+                size:
+                    type: integer
+                    format: int64
+                    description: The final size in bytes, which is not negative.
+
+        UploadSession:
+            type: object
+            required:
+                - id
+                - fileName
+                - size
+                - committedSize
+                - expiresAt
+            properties:
+                id:
+                    type: string
+                fileName:
+                    type: string
+                size:
+                    type: integer
+                    format: int64
+                committedSize:
+                    type: integer
+                    format: int64
+                expiresAt:
+                    type: string
+                    format: date-time
+
+        CreateSubscriptionRequest:
+            type: object
+            required:
+                - rootHash
+                - fileName
+            properties:
+                rootHash:
+                    type: string
+                fileName:
+                    type: string
+
+        SubscriptionList:
+            type: object
+            required:
+                - subscriptions
+            properties:
+                subscriptions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/Subscription"
+
+        Subscription:
+            type: object
+            required:
+                - id
+                - rootHash
+                - fileName
+                - status
+                - blockCountDownloaded
+                - blockCountTotal
+                - createdAt
+                - updatedAt
+            properties:
+                id:
+                    type: string
+                rootHash:
+                    type: string
+                fileName:
+                    type: string
+                status:
+                    $ref: "#/components/schemas/SubscriptionStatus"
+                rank:
+                    type: integer
+                    format: int64
+                    description: Absent until the root block is decoded.
+                blockCountDownloaded:
+                    type: integer
+                    format: int64
+                    description: Downloaded blocks of the current rank.
+                blockCountTotal:
+                    type: integer
+                    format: int64
+                    description: Total blocks of the current rank.
+                failedReason:
+                    type: string
+                    description: Present when Failed.
+                createdAt:
+                    type: string
+                    format: date-time
+                updatedAt:
+                    type: string
+                    format: date-time
+
+        SubscriptionStatus:
+            type: string
+            enum:
+                - Downloading
+                - Decoding
+                - Finalizing
+                - Completed
+                - Failed
+                - Canceled
+
         ErrorResponse:
             type: object
             required:
@@ -74,5 +667,9 @@ components:
             enum:
                 - InternalServerError
                 - InvalidRequest
+                - LimitExceeded
                 - NotFound
                 - Forbidden
+                - Conflict
+                - PayloadTooLarge
+                - InsufficientStorage

@@ -2,6 +2,7 @@
 state_dir = "./state"
 
 [api]
+# The API has no authentication, so any other address exposes it to whatever reaches that address.
 listen_addr = "127.0.0.1:5050"
 
 [p2p]
@@ -13,3 +14,9 @@ bootstrap_nodes = []
 [logging]
 level = "info"
 json = false
+
+# [storage]
+# download_dir = "./downloads" # Defaults to <state_dir>/downloads
+
+# [web]
+# dir = "./web" # The build output of the browser client, served on the API's port

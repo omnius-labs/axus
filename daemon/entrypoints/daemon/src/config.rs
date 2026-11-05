@@ -12,6 +12,10 @@ struct DaemonConfigToml {
     pub api: ApiConfigToml,
     pub p2p: P2pConfigToml,
     pub logging: LoggingConfigToml,
+    #[serde(default)]
+    pub storage: StorageConfigToml,
+    #[serde(default)]
+    pub web: WebConfigToml,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -41,12 +45,24 @@ struct LoggingConfigToml {
     pub json: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+struct StorageConfigToml {
+    pub download_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+struct WebConfigToml {
+    pub dir: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonConfig {
     pub core: CoreConfig,
     pub api: ApiConfig,
     pub p2p: P2pConfig,
     pub logging: LoggingConfig,
+    pub storage: StorageConfig,
+    pub web: WebConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,11 +70,32 @@ pub struct CoreConfig {
     pub state_dir: PathBuf,
 }
 
-/// Listen address of the local REST API. Separate from [`P2pConfig`] so that the
+/// Listen address of the REST API. Separate from [`P2pConfig`] so that the
 /// HTTP surface and the P2P transport never share a port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiConfig {
     pub listen_addr: String,
+}
+
+impl ApiConfig {
+    /// The API has no authentication, so listening elsewhere exposes it to whatever reaches the address.
+    pub fn listens_only_on_loopback(&self) -> bool {
+        let host = self.listen_addr.rsplit_once(':').map_or(self.listen_addr.as_str(), |(host, _)| host);
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageConfig {
+    /// Where the outputs of subscriptions are placed.
+    pub download_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebConfig {
+    /// The build output of the browser client, served on the API's port when set.
+    pub dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,11 +121,16 @@ impl DaemonConfig {
         tokio::fs::create_dir_all(dir).await?;
 
         let toml = Self::load_toml(dir).await?;
+        let state_dir = dir.join(toml.core.state_dir);
 
         Ok(DaemonConfig {
-            core: CoreConfig {
-                state_dir: dir.join(toml.core.state_dir),
+            storage: StorageConfig {
+                download_dir: toml.storage.download_dir.map_or_else(|| state_dir.join("downloads"), |path| dir.join(path)),
             },
+            web: WebConfig {
+                dir: toml.web.dir.map(|path| dir.join(path)),
+            },
+            core: CoreConfig { state_dir },
             api: ApiConfig {
                 listen_addr: toml.api.listen_addr,
             },
@@ -150,6 +192,86 @@ mod tests {
         assert!(!conf.logging.json);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn load_config_defaults_storage_and_web_test() -> TestResult {
+        let toml = r#"
+            [core]
+            state_dir = "./state"
+
+            [api]
+            listen_addr = "127.0.0.1:6051"
+
+            [p2p]
+            listen_addr = "127.0.0.1:6052"
+
+            [logging]
+            level = "info"
+            json = false
+        "#;
+
+        let tempdir = tempfile::tempdir()?;
+        std::fs::write(tempdir.path().join("axus.toml"), toml)?;
+
+        let conf = DaemonConfig::load(tempdir.path()).await?;
+
+        assert_eq!(conf.storage.download_dir, tempdir.path().join("./state").join("downloads"));
+        assert_eq!(conf.web.dir, None);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn load_config_reads_storage_and_web_test() -> TestResult {
+        let toml = r#"
+            [core]
+            state_dir = "./state"
+
+            [api]
+            listen_addr = "127.0.0.1:6051"
+
+            [p2p]
+            listen_addr = "127.0.0.1:6052"
+
+            [logging]
+            level = "info"
+            json = false
+
+            [storage]
+            download_dir = "/downloads"
+
+            [web]
+            dir = "./web"
+        "#;
+
+        let tempdir = tempfile::tempdir()?;
+        std::fs::write(tempdir.path().join("axus.toml"), toml)?;
+
+        let conf = DaemonConfig::load(tempdir.path()).await?;
+
+        assert_eq!(conf.storage.download_dir, Path::new("/downloads"));
+        assert_eq!(conf.web.dir, Some(tempdir.path().join("./web")));
+
+        Ok(())
+    }
+
+    #[test]
+    fn listens_only_on_loopback_test() {
+        for (listen_addr, expected) in [
+            ("127.0.0.1:5050", true),
+            ("[::1]:5050", true),
+            ("localhost:5050", true),
+            ("0.0.0.0:5050", false),
+            ("[::]:5050", false),
+            ("192.168.0.2:5050", false),
+            ("example.com:5050", false),
+        ] {
+            let conf = ApiConfig {
+                listen_addr: listen_addr.to_string(),
+            };
+            assert_eq!(conf.listens_only_on_loopback(), expected, "{listen_addr}");
+        }
     }
 
     #[tokio::test]

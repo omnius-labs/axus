@@ -1,6 +1,21 @@
 # Rust API for omnius-axus-interface
 
-Axus daemon API.
+Axus daemon API for publishing and subscribing to files from a browser
+client.
+
+The API has no authentication and limits only cross-origin requests:
+a request with an `Origin` header whose authority differs from `Host`
+returns `403`. Reach is limited outside the daemon.
+
+Starting a publish or a subscription returns `202` and a resource that
+the client polls. The resource lives until it is deleted, and it
+survives a daemon restart.
+
+A file of 32 MiB or less is uploaded with one `POST /publications`, and
+a larger one goes through an upload session.
+
+A file name is one path component: it is not empty, not `.` or `..`,
+holds no `/`, `\\`, `:`, or NUL, and is at most 255 bytes.
 
 
 ## Overview
@@ -12,8 +27,7 @@ server, you can easily generate a server stub.
 
 To see how to make this your own, look here: [README](https://openapi-generator.tech)
 
-- API version: 0.2.0
-- Build date: 2026-06-27T23:34:34.543385+09:00[Asia/Tokyo]
+- API version: 0.3.0
 - Generator version: 7.23.0
 
 

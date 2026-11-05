@@ -2,7 +2,7 @@
 name = "omnius-axus-interface"
 version = "0.1.0"
 authors = ["OpenAPI Generator team and contributors"]
-description = "Axus daemon API. "
+description = "Axus daemon API for publishing and subscribing to files from a browser client.  The API has no authentication and limits only cross-origin requests: a request with an `Origin` header whose authority differs from `Host` returns `403`. Reach is limited outside the daemon.  Starting a publish or a subscription returns `202` and a resource that the client polls. The resource lives until it is deleted, and it survives a daemon restart.  A file of 32 MiB or less is uploaded with one `POST /publications`, and a larger one goes through an upload session.  A file name is one path component: it is not empty, not `.` or `..`, holds no `/`, `\\`, `:`, or NUL, and is at most 255 bytes. "
 license = "MIT"
 edition = "2024"
 

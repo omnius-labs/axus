@@ -56,6 +56,18 @@ The `[p2p]` section accepts the following keys.
 At startup the daemon logs its own URI as `node_profile` in the `node profile` message.
 Add that URI to `bootstrap_nodes` of another daemon to connect the two.
 
+The other sections accept the following keys.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `api.listen_addr` | required | `host:port` of the REST API |
+| `storage.download_dir` | `<state_dir>/downloads` | Directory in which the outputs of subscriptions are placed |
+| `web.dir` | none | Build output of the browser client, served on the API's port |
+
+The REST API, defined in [openapi.yaml](./daemon/openapi.yaml), has no authentication.
+Any host that reaches `api.listen_addr` can publish files, delete publications and subscriptions, and download outputs, and a web page opened in a browser can reach it through DNS rebinding.
+Keep it on `127.0.0.1` unless you limit its reach outside the daemon, such as by binding a Docker port to a chosen interface.
+
 ### Linting
 
 ```sh

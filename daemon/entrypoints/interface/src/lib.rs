@@ -11,7 +11,7 @@
 #![allow(clippy::derive_partial_eq_without_eq, clippy::disallowed_names, clippy::too_many_arguments)]
 
 pub const BASE_PATH: &str = "/api/v1";
-pub const API_VERSION: &str = "0.2.0";
+pub const API_VERSION: &str = "0.3.0";
 
 #[cfg(feature = "server")]
 pub mod server;

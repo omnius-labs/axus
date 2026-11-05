@@ -116,6 +116,12 @@ headers = "0.4"
 http = "1"
 url = "2.5.4"
 same-file = "1.0.6"
+serde_json = "1"
+tower = "0.5.3"
+tower-http = { version = "0.6.11", features = ["fs"] }
+mime = "0.3.17"
+percent-encoding = "2.3.2"
+uuid = { version = "1.23.4", features = ["v4"] }
 
 [workspace.lints.clippy]
 uninlined_format_args = "allow"

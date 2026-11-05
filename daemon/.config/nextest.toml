@@ -4,5 +4,11 @@
 heavy-integration = { max-threads = 2 }
 
 [[profile.default.overrides]]
-filter = 'test(/file_exchanger::tests|service::tests|file_subscriber::store::tests/)'
+filter = 'test(/file_exchanger::tests|service::tests|file_subscriber::store::tests/) | package(omnius-axus-daemon) & test(/server::/)'
 test-group = 'heavy-integration'
+
+# These tests assert wall-clock margins of about 100 ms, so nothing runs next to them. The test encoding 32 MiB runs
+# alone for the same reason: it would use up such a margin in any test beside it.
+[[profile.default.overrides]]
+filter = 'test(/receive_deadline|core::session::tests::.*deadline|publications_accepts_32_mib/)'
+threads-required = 'num-test-threads'

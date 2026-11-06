@@ -504,7 +504,7 @@ impl ContentRange {
 
 impl ApiServer {
     fn router(state: Arc<DaemonState>) -> axum::Router {
-        let generated = omnius_axus_interface::server::new(Arc::new(Self { state: state.clone() }));
+        let generated = omnius_axus_interface::server::new(Arc::new(Self { state: state.clone() })).fallback(Self::no_route);
         let api = axum::Router::new()
             .route(
                 &format!("{CONTENT_PATH}/publications/{{publicationId}}/content"),
@@ -528,6 +528,10 @@ impl ApiServer {
         info!(addr = state.conf.api.listen_addr, "listen start");
         axum::serve(listener, app).with_graceful_shutdown(token.cancelled_owned()).await?;
         Ok(())
+    }
+
+    async fn no_route() -> ApiError {
+        ApiError::not_found("no such API path")
     }
 
     async fn put_publication_content(State(state): State<Arc<DaemonState>>, Path(id): Path<String>, headers: HeaderMap, request: Request) -> Response {
@@ -706,5 +710,264 @@ impl ApiServer {
             "map" => "application/json",
             _ => "application/octet-stream",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{path::Path, time::Duration};
+
+    use axum::body::{Body, to_bytes};
+    use http::{Request, StatusCode, header::CONTENT_TYPE};
+    use omnius_axus_engine::{
+        model::NodeProfile,
+        service::{AxusServiceOption, NodeFinderIntervals},
+    };
+    use serde_json::{Value, json};
+    use tempfile::TempDir;
+    use testresult::TestResult;
+
+    use crate::config::{ApiConfig, CoreConfig, DaemonConfig, LoggingConfig, P2pConfig, StorageConfig, WebConfig};
+
+    use super::*;
+
+    const WATCHDOG: Duration = Duration::from_secs(120);
+
+    struct TestDaemon {
+        _dir: TempDir,
+        state: Arc<DaemonState>,
+        router: axum::Router,
+    }
+
+    impl TestDaemon {
+        async fn start() -> TestResult<Self> {
+            Self::start_with(vec![], None).await
+        }
+
+        async fn start_with(bootstrap_nodes: Vec<NodeProfile>, web_dir: Option<&Path>) -> TestResult<Self> {
+            let dir = tempfile::tempdir()?;
+            let port = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
+            let conf = DaemonConfig {
+                core: CoreConfig {
+                    state_dir: dir.path().join("state"),
+                },
+                api: ApiConfig {
+                    listen_addr: "127.0.0.1:0".to_string(),
+                    max_upload_size: 0,
+                },
+                p2p: P2pConfig {
+                    listen_addr: format!("127.0.0.1:{port}"),
+                    advertise_addrs: vec![],
+                    use_upnp: false,
+                    bootstrap_nodes: bootstrap_nodes.iter().map(|profile| profile.to_uri()).collect::<std::result::Result<_, _>>()?,
+                },
+                logging: LoggingConfig {
+                    level: "info".to_string(),
+                    json: false,
+                },
+                storage: StorageConfig {
+                    download_dir: dir.path().join("downloads"),
+                },
+                web: WebConfig {
+                    dir: web_dir.map(Path::to_path_buf),
+                },
+            };
+            let option = AxusServiceOption {
+                node_finder_intervals: NodeFinderIntervals {
+                    connect: Duration::from_millis(100),
+                    compute: Duration::from_millis(100),
+                    communicate: Duration::from_millis(500),
+                    lookup: Duration::from_millis(100),
+                },
+                bootstrap_node_profiles: bootstrap_nodes,
+                ..Default::default()
+            };
+            let state = Arc::new(DaemonState::for_test(conf, option).await?);
+            let router = ApiServer::router(state.clone());
+            Ok(Self { _dir: dir, state, router })
+        }
+
+        async fn stop(self) {
+            self.state.shutdown().await;
+        }
+
+        async fn send(&self, request: Request<Body>) -> TestResult<axum::response::Response> {
+            Ok(self.router.clone().oneshot(request).await?)
+        }
+
+        async fn request(&self, method: &str, uri: &str, body: Body) -> TestResult<(StatusCode, Bytes)> {
+            let request = Request::builder().method(method).uri(uri).header("host", "localhost").body(body)?;
+            let response = self.send(request).await?;
+            let status = response.status();
+            Ok((status, to_bytes(response.into_body(), usize::MAX).await?))
+        }
+
+        async fn request_json(&self, method: &str, uri: &str, body: &Value) -> TestResult<(StatusCode, Value)> {
+            let request = Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("host", "localhost")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(body)?))?;
+            let response = self.send(request).await?;
+            let status = response.status();
+            let bytes = to_bytes(response.into_body(), usize::MAX).await?;
+            Ok((status, serde_json::from_slice(&bytes).unwrap_or(Value::Null)))
+        }
+
+        async fn get_json(&self, uri: &str) -> TestResult<(StatusCode, Value)> {
+            let (status, bytes) = self.request("GET", uri, Body::empty()).await?;
+            Ok((status, serde_json::from_slice(&bytes).unwrap_or(Value::Null)))
+        }
+
+        async fn create_publication(&self, name: &str, size: usize) -> TestResult<Value> {
+            let (status, value) = self.request_json("POST", "/api/v1/publications", &json!({"fileName": name, "size": size})).await?;
+            assert_eq!(status, StatusCode::ACCEPTED, "{value}");
+            Ok(value)
+        }
+
+        async fn put_chunk(&self, id: &str, offset: usize, bytes: &[u8], total: usize) -> TestResult<axum::response::Response> {
+            let end = offset + bytes.len() - 1;
+            let request = Request::builder()
+                .method("PUT")
+                .uri(format!("/api/v1/publications/{id}/content"))
+                .header("host", "localhost")
+                .header("content-range", format!("bytes {offset}-{end}/{total}"))
+                .body(Body::from(bytes.to_vec()))?;
+            self.send(request).await
+        }
+
+        async fn wait_status(&self, uri: &str, status: &str) -> TestResult<Value> {
+            tokio::time::timeout(WATCHDOG, async {
+                loop {
+                    let (_, value) = self.get_json(uri).await?;
+                    if value["status"] == status {
+                        return TestResult::Ok(value);
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await?
+        }
+    }
+
+    #[tokio::test]
+    async fn health_and_an_unknown_api_path_answer() -> TestResult {
+        let daemon = TestDaemon::start().await?;
+        let (status, value) = daemon.get_json("/api/v1/health").await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["result"], true);
+        let (status, value) = daemon.get_json("/api/v1/unknown").await?;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(value["kind"], "NotFound");
+        daemon.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_offset_mismatch_reports_the_received_bytes() -> TestResult {
+        let daemon = TestDaemon::start().await?;
+        let publication = daemon.create_publication("a.bin", 4).await?;
+        let id = publication["id"].as_str().unwrap();
+        assert_eq!(publication["status"], "Receiving");
+        assert_eq!(publication["receivedBytes"], 0);
+
+        let accepted = daemon.put_chunk(id, 0, b"ab", 4).await?;
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let value: Value = serde_json::from_slice(&to_bytes(accepted.into_body(), usize::MAX).await?)?;
+        assert_eq!(value["receivedBytes"], 2);
+        assert_eq!(value["status"], "Receiving");
+
+        let rejected = daemon.put_chunk(id, 3, b"d", 4).await?;
+        assert_eq!(rejected.status(), StatusCode::CONFLICT);
+        let value: Value = serde_json::from_slice(&to_bytes(rejected.into_body(), usize::MAX).await?)?;
+        assert_eq!(value["receivedBytes"], 2);
+
+        daemon.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_canceled_publication_stays_until_it_is_deleted() -> TestResult {
+        let daemon = TestDaemon::start().await?;
+        let publication = daemon.create_publication("b.bin", 4).await?;
+        let id = publication["id"].as_str().unwrap();
+        let (status, value) = daemon.request_json("POST", &format!("/api/v1/publications/{id}/cancel"), &json!({})).await?;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        assert_eq!(value["status"], "Canceled");
+
+        let (status, value) = daemon.get_json(&format!("/api/v1/publications/{id}")).await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["status"], "Canceled");
+
+        let (status, _) = daemon.request("DELETE", &format!("/api/v1/publications/{id}"), Body::empty()).await?;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, _) = daemon.get_json(&format!("/api/v1/publications/{id}")).await?;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        daemon.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn two_daemons_transfer_a_file_through_the_api() -> TestResult {
+        let publisher = TestDaemon::start().await?;
+        let subscriber = TestDaemon::start_with(vec![publisher.state.service().my_node_profile().clone()], None).await?;
+        let content: Vec<u8> = (0..3 * 1024 * 1024 + 17).map(|i: u32| (i % 251) as u8).collect();
+
+        let publication = publisher.create_publication("movie.bin", content.len()).await?;
+        let id = publication["id"].as_str().unwrap();
+        let chunk = 1024 * 1024;
+        for offset in (0..content.len()).step_by(chunk) {
+            let end = (offset + chunk).min(content.len());
+            let response = publisher.put_chunk(id, offset, &content[offset..end], content.len()).await?;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let uri = format!("/api/v1/publications/{id}");
+        let committed = publisher.wait_status(&uri, "Committed").await?;
+        let root_hash = committed["rootHash"].as_str().unwrap();
+
+        let (status, subscription) = subscriber
+            .request_json("POST", "/api/v1/subscriptions", &json!({"rootHash": root_hash, "fileName": "movie.bin"}))
+            .await?;
+        assert_eq!(status, StatusCode::ACCEPTED, "{subscription}");
+        let id = subscription["id"].as_str().unwrap();
+        let uri = format!("/api/v1/subscriptions/{id}");
+        subscriber.wait_status(&uri, "Completed").await?;
+
+        let (status, downloaded) = subscriber.request("GET", &format!("{uri}/content"), Body::empty()).await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(downloaded.as_ref(), content.as_slice());
+
+        let request = Request::builder()
+            .uri(format!("{uri}/content"))
+            .header("host", "localhost")
+            .header("range", "bytes=10-19")
+            .body(Body::empty())?;
+        let response = subscriber.send(request).await?;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(response.headers()["content-type"], "application/octet-stream");
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert!(response.headers()["content-disposition"].to_str()?.starts_with("attachment"));
+        let range = to_bytes(response.into_body(), usize::MAX).await?;
+        assert_eq!(range.as_ref(), &content[10..20]);
+
+        subscriber.stop().await;
+        publisher.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn static_serving_falls_back_to_index() -> TestResult {
+        let web = tempfile::tempdir()?;
+        std::fs::write(web.path().join("index.html"), b"<html>axus</html>")?;
+        let daemon = TestDaemon::start_with(vec![], Some(web.path())).await?;
+        let (status, body) = daemon.request("GET", "/publications/1", Body::empty()).await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.as_ref(), b"<html>axus</html>");
+        let (status, value) = daemon.get_json("/api/v1/unknown").await?;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(value["kind"], "NotFound");
+        daemon.stop().await;
+        Ok(())
     }
 }

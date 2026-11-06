@@ -162,6 +162,19 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn only_loopback_addresses_are_accepted() {
+        let config = |addr: &str| ApiConfig {
+            listen_addr: addr.to_string(),
+            max_upload_size: 0,
+        };
+        assert!(config("127.0.0.1:5050").listens_only_on_loopback());
+        assert!(config("[::1]:5050").listens_only_on_loopback());
+        assert!(!config("0.0.0.0:5050").listens_only_on_loopback());
+        assert!(!config("192.168.1.10:5050").listens_only_on_loopback());
+        assert!(!config("localhost:5050").listens_only_on_loopback());
+    }
+
     #[tokio::test]
     async fn load_config_test() -> TestResult {
         let toml = r#"

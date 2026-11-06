@@ -324,5 +324,5 @@ On macOS, `HAVE_FULLFSYNC` is given to RocksDB with per-target `CXXFLAGS`, and i
 The non-replacing placement module passes type checks on aarch64-apple-darwin, x86_64-unknown-linux-gnu, and x86_64-pc-windows-msvc.
 On macOS, the engine tests confirm existing-entry protection and successful file and parent-directory sync calls.
 The x86_64-apple-darwin build, the full Linux and Windows engine builds and sync execution, and power-loss hardware tests are not confirmed.
-The staged upload area under `state_dir/uploads`, the download directory, and the publication mapping are not implemented.
+The staged upload area under `state_dir/uploads`, the download directory, and the publication mapping are implemented.
 For confirmed bugs, see [issues.md](../issues.md).

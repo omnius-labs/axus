@@ -663,10 +663,10 @@ impl ApiServer {
             .get("__Host-axus_session")
             .or_else(|| cookies.get("axus_session"))
             .map(|cookie| cookie.value().to_string());
-        if let Some(token) = bearer.or(cookie) {
-            if let Err(error) = state.owner().logout(&token).await {
-                return ApiError::internal(&error).into_response();
-            }
+        if let Some(token) = bearer.or(cookie)
+            && let Err(error) = state.owner().logout(&token).await
+        {
+            return ApiError::internal(&error).into_response();
         }
         let cookie = if state.conf.web.insecure_cookie {
             "axus_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
@@ -948,6 +948,22 @@ mod tests {
 
         async fn stop(self) {
             self.state.shutdown().await;
+        }
+
+        async fn stop_for_restart(self) -> (TempDir, DaemonConfig, Option<String>) {
+            self.state.shutdown().await;
+            let Self { _dir, state, router, cookie } = self;
+            let conf = state.conf.clone();
+            // Dropping the router and the state releases the P2P port and the stores, as a process exit does.
+            drop(router);
+            drop(state);
+            (_dir, conf, cookie)
+        }
+
+        async fn restart(dir: TempDir, conf: DaemonConfig, cookie: Option<String>) -> TestResult<Self> {
+            let state = Arc::new(DaemonState::for_test(conf, AxusServiceOption::default()).await?);
+            let router = ApiServer::router(state.clone());
+            Ok(Self { _dir: dir, state, router, cookie })
         }
 
         async fn start_bare() -> TestResult<Self> {
@@ -1309,6 +1325,31 @@ mod tests {
             .header(http::header::AUTHORIZATION, format!("Bearer {token}"))
             .body(Body::empty())?;
         assert_eq!(daemon.send_raw(request).await?.status(), StatusCode::OK);
+        daemon.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_upload_and_the_session_resume_after_a_restart() -> TestResult {
+        let daemon = TestDaemon::start().await?;
+        let content: Vec<u8> = (0..2 * 1024 * 1024 + 3).map(|i: u32| (i % 251) as u8).collect();
+        let publication = daemon.create_publication("resume.bin", content.len()).await?;
+        let id = publication["id"].as_str().unwrap().to_string();
+        let split = content.len() / 2;
+        assert_eq!(daemon.put_chunk(&id, 0, &content[..split], content.len()).await?.status(), StatusCode::OK);
+
+        let (dir, conf, cookie) = daemon.stop_for_restart().await;
+        let daemon = TestDaemon::restart(dir, conf, cookie).await?;
+
+        let (status, value) = daemon.get_json(&format!("/api/v1/publications/{id}")).await?;
+        assert_eq!(status, StatusCode::OK, "the session must survive the restart: {value}");
+        assert_eq!(value["receivedBytes"], split);
+        assert_eq!(value["status"], "Receiving");
+
+        assert_eq!(daemon.put_chunk(&id, split, &content[split..], content.len()).await?.status(), StatusCode::OK);
+        let committed = daemon.wait_status(&format!("/api/v1/publications/{id}"), "Committed").await?;
+        assert!(committed["rootHash"].is_string());
+
         daemon.stop().await;
         Ok(())
     }

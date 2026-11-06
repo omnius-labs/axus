@@ -325,4 +325,5 @@ The non-replacing placement module passes type checks on aarch64-apple-darwin, x
 On macOS, the engine tests confirm existing-entry protection and successful file and parent-directory sync calls.
 The x86_64-apple-darwin build, the full Linux and Windows engine builds and sync execution, and power-loss hardware tests are not confirmed.
 The staged upload area under `state_dir/uploads`, the download directory, and the publication mapping are implemented.
+At startup the received offset is reconciled with the staged file, so an interrupted upload resumes from the stored bytes.
 For confirmed bugs, see [issues.md](../issues.md).

@@ -850,6 +850,7 @@ The Task cancels in-progress processing with a child CancellationToken, and shut
 
 The entry points have cancel and remove.
 The publisher side creates a Receiving row before its content, advances the received offset, commits at the declared size, and keeps a Canceled row until it is removed.
+A restart reconciles the received offset with the staged file, and the upload resumes.
 Importing to the same path and file name of a Failed file deletes the old row and creates a Pending row of a new temporary ID in one SQLite transaction.
 Even if the reclamation of the old attempt's blocks is delayed, the new attempt's blocks are not deleted.
 The subscriber side allows subscriptions to the same root hash and reflects shared-block progress into all Downloading subscriptions.

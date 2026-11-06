@@ -16,6 +16,5 @@ Add a row when starting work, advance its state, and delete the row and child do
 
 | Plan | Purpose | State | Prerequisite |
 | --- | --- | --- | --- |
-| [rest-api-core](./plans/rest-api-core.md) | A client publishes by uploading and subscribes by downloading through the REST API | in progress | - |
 | [file-exchanger-block-exchange](./plans/file-exchanger-block-exchange.md) | Two daemons exchange blocks and a mismatched block is never stored | in progress | - |
 | [file-exchanger-transfer-efficiency](./plans/file-exchanger-transfer-efficiency.md) | The fetch ignores the peers holding nothing and the slow peers at the tail | in progress | - |

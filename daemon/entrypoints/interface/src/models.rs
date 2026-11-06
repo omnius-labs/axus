@@ -62,6 +62,320 @@ pub fn check_xss_map<T>(v: &std::collections::HashMap<String, T>) -> std::result
     }
 }
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct CancelPublicationPathParams {
+    pub publication_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct DeletePublicationPathParams {
+    pub publication_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct GetPublicationPathParams {
+    pub publication_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct WritePublicationContentHeaderParams {
+    pub content_range: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct WritePublicationContentPathParams {
+    pub publication_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct CancelSubscriptionPathParams {
+    pub subscription_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct DeleteSubscriptionPathParams {
+    pub subscription_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct DeleteSubscriptionQueryParams {
+    #[serde(rename = "deleteOutput")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delete_output: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct GetSubscriptionPathParams {
+    pub subscription_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct GetSubscriptionContentHeaderParams {
+    pub range: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct GetSubscriptionContentPathParams {
+    pub subscription_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct CreatePublicationRequest {
+    #[serde(rename = "fileName")]
+    #[validate(custom(function = "check_xss_string"))]
+    pub file_name: String,
+
+    /// The final size in bytes, which is not negative.
+    #[serde(rename = "size")]
+    pub size: i64,
+}
+
+impl CreatePublicationRequest {
+    #[allow(clippy::new_without_default, clippy::too_many_arguments)]
+    pub fn new(file_name: String, size: i64) -> CreatePublicationRequest {
+        CreatePublicationRequest { file_name, size }
+    }
+}
+
+/// Converts the CreatePublicationRequest value to the Query Parameters representation (style=form, explode=false)
+/// specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde serializer
+impl std::fmt::Display for CreatePublicationRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params: Vec<Option<String>> = vec![
+            Some("fileName".to_string()),
+            Some(self.file_name.to_string()),
+            Some("size".to_string()),
+            Some(self.size.to_string()),
+        ];
+
+        write!(f, "{}", params.into_iter().flatten().collect::<Vec<_>>().join(","))
+    }
+}
+
+/// Converts Query Parameters representation (style=form, explode=false) to a CreatePublicationRequest value
+/// as specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde deserializer
+impl std::str::FromStr for CreatePublicationRequest {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        /// An intermediate representation of the struct to use for parsing.
+        #[derive(Default)]
+        #[allow(dead_code)]
+        struct IntermediateRep {
+            pub file_name: Vec<String>,
+            pub size: Vec<i64>,
+        }
+
+        let mut intermediate_rep = IntermediateRep::default();
+
+        // Parse into intermediate representation
+        let mut string_iter = s.split(',');
+        let mut key_result = string_iter.next();
+
+        while key_result.is_some() {
+            let val = match string_iter.next() {
+                Some(x) => x,
+                None => return std::result::Result::Err("Missing value while parsing CreatePublicationRequest".to_string()),
+            };
+
+            if let Some(key) = key_result {
+                #[allow(clippy::match_single_binding)]
+                match key {
+                    #[allow(clippy::redundant_clone)]
+                    "fileName" => intermediate_rep.file_name.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "size" => intermediate_rep.size.push(<i64 as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    _ => return std::result::Result::Err("Unexpected key while parsing CreatePublicationRequest".to_string()),
+                }
+            }
+
+            // Get the next key
+            key_result = string_iter.next();
+        }
+
+        // Use the intermediate representation to return the struct
+        std::result::Result::Ok(CreatePublicationRequest {
+            file_name: intermediate_rep
+                .file_name
+                .into_iter()
+                .next()
+                .ok_or_else(|| "fileName missing in CreatePublicationRequest".to_string())?,
+            size: intermediate_rep
+                .size
+                .into_iter()
+                .next()
+                .ok_or_else(|| "size missing in CreatePublicationRequest".to_string())?,
+        })
+    }
+}
+
+// Methods for converting between header::IntoHeaderValue<CreatePublicationRequest> and HeaderValue
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<header::IntoHeaderValue<CreatePublicationRequest>> for HeaderValue {
+    type Error = String;
+
+    fn try_from(hdr_value: header::IntoHeaderValue<CreatePublicationRequest>) -> std::result::Result<Self, Self::Error> {
+        let hdr_value = hdr_value.to_string();
+        match HeaderValue::from_str(&hdr_value) {
+            std::result::Result::Ok(value) => std::result::Result::Ok(value),
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Invalid header value for CreatePublicationRequest - value: {hdr_value} is invalid {e}"#)),
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<CreatePublicationRequest> {
+    type Error = String;
+
+    fn try_from(hdr_value: HeaderValue) -> std::result::Result<Self, Self::Error> {
+        match hdr_value.to_str() {
+            std::result::Result::Ok(value) => match <CreatePublicationRequest as std::str::FromStr>::from_str(value) {
+                std::result::Result::Ok(value) => std::result::Result::Ok(header::IntoHeaderValue(value)),
+                std::result::Result::Err(err) => std::result::Result::Err(format!(r#"Unable to convert header value '{value}' into CreatePublicationRequest - {err}"#)),
+            },
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Unable to convert header: {hdr_value:?} to string: {e}"#)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct CreateSubscriptionRequest {
+    #[serde(rename = "rootHash")]
+    #[validate(custom(function = "check_xss_string"))]
+    pub root_hash: String,
+
+    #[serde(rename = "fileName")]
+    #[validate(custom(function = "check_xss_string"))]
+    pub file_name: String,
+}
+
+impl CreateSubscriptionRequest {
+    #[allow(clippy::new_without_default, clippy::too_many_arguments)]
+    pub fn new(root_hash: String, file_name: String) -> CreateSubscriptionRequest {
+        CreateSubscriptionRequest { root_hash, file_name }
+    }
+}
+
+/// Converts the CreateSubscriptionRequest value to the Query Parameters representation (style=form, explode=false)
+/// specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde serializer
+impl std::fmt::Display for CreateSubscriptionRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params: Vec<Option<String>> = vec![
+            Some("rootHash".to_string()),
+            Some(self.root_hash.to_string()),
+            Some("fileName".to_string()),
+            Some(self.file_name.to_string()),
+        ];
+
+        write!(f, "{}", params.into_iter().flatten().collect::<Vec<_>>().join(","))
+    }
+}
+
+/// Converts Query Parameters representation (style=form, explode=false) to a CreateSubscriptionRequest value
+/// as specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde deserializer
+impl std::str::FromStr for CreateSubscriptionRequest {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        /// An intermediate representation of the struct to use for parsing.
+        #[derive(Default)]
+        #[allow(dead_code)]
+        struct IntermediateRep {
+            pub root_hash: Vec<String>,
+            pub file_name: Vec<String>,
+        }
+
+        let mut intermediate_rep = IntermediateRep::default();
+
+        // Parse into intermediate representation
+        let mut string_iter = s.split(',');
+        let mut key_result = string_iter.next();
+
+        while key_result.is_some() {
+            let val = match string_iter.next() {
+                Some(x) => x,
+                None => return std::result::Result::Err("Missing value while parsing CreateSubscriptionRequest".to_string()),
+            };
+
+            if let Some(key) = key_result {
+                #[allow(clippy::match_single_binding)]
+                match key {
+                    #[allow(clippy::redundant_clone)]
+                    "rootHash" => intermediate_rep.root_hash.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "fileName" => intermediate_rep.file_name.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    _ => return std::result::Result::Err("Unexpected key while parsing CreateSubscriptionRequest".to_string()),
+                }
+            }
+
+            // Get the next key
+            key_result = string_iter.next();
+        }
+
+        // Use the intermediate representation to return the struct
+        std::result::Result::Ok(CreateSubscriptionRequest {
+            root_hash: intermediate_rep
+                .root_hash
+                .into_iter()
+                .next()
+                .ok_or_else(|| "rootHash missing in CreateSubscriptionRequest".to_string())?,
+            file_name: intermediate_rep
+                .file_name
+                .into_iter()
+                .next()
+                .ok_or_else(|| "fileName missing in CreateSubscriptionRequest".to_string())?,
+        })
+    }
+}
+
+// Methods for converting between header::IntoHeaderValue<CreateSubscriptionRequest> and HeaderValue
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<header::IntoHeaderValue<CreateSubscriptionRequest>> for HeaderValue {
+    type Error = String;
+
+    fn try_from(hdr_value: header::IntoHeaderValue<CreateSubscriptionRequest>) -> std::result::Result<Self, Self::Error> {
+        let hdr_value = hdr_value.to_string();
+        match HeaderValue::from_str(&hdr_value) {
+            std::result::Result::Ok(value) => std::result::Result::Ok(value),
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Invalid header value for CreateSubscriptionRequest - value: {hdr_value} is invalid {e}"#)),
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<CreateSubscriptionRequest> {
+    type Error = String;
+
+    fn try_from(hdr_value: HeaderValue) -> std::result::Result<Self, Self::Error> {
+        match hdr_value.to_str() {
+            std::result::Result::Ok(value) => match <CreateSubscriptionRequest as std::str::FromStr>::from_str(value) {
+                std::result::Result::Ok(value) => std::result::Result::Ok(header::IntoHeaderValue(value)),
+                std::result::Result::Err(err) => std::result::Result::Err(format!(r#"Unable to convert header value '{value}' into CreateSubscriptionRequest - {err}"#)),
+            },
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Unable to convert header: {hdr_value:?} to string: {e}"#)),
+        }
+    }
+}
+
 /// Enumeration of values.
 /// Since this enum's variants do not hold data, we can easily define them as `#[repr(C)]`
 /// which helps with FFI.
@@ -74,10 +388,18 @@ pub enum ErrorKind {
     InternalServerError,
     #[serde(rename = "InvalidRequest")]
     InvalidRequest,
+    #[serde(rename = "LimitExceeded")]
+    LimitExceeded,
     #[serde(rename = "NotFound")]
     NotFound,
     #[serde(rename = "Forbidden")]
     Forbidden,
+    #[serde(rename = "Conflict")]
+    Conflict,
+    #[serde(rename = "PayloadTooLarge")]
+    PayloadTooLarge,
+    #[serde(rename = "InsufficientStorage")]
+    InsufficientStorage,
 }
 
 impl validator::Validate for ErrorKind {
@@ -91,8 +413,12 @@ impl std::fmt::Display for ErrorKind {
         match *self {
             ErrorKind::InternalServerError => write!(f, "InternalServerError"),
             ErrorKind::InvalidRequest => write!(f, "InvalidRequest"),
+            ErrorKind::LimitExceeded => write!(f, "LimitExceeded"),
             ErrorKind::NotFound => write!(f, "NotFound"),
             ErrorKind::Forbidden => write!(f, "Forbidden"),
+            ErrorKind::Conflict => write!(f, "Conflict"),
+            ErrorKind::PayloadTooLarge => write!(f, "PayloadTooLarge"),
+            ErrorKind::InsufficientStorage => write!(f, "InsufficientStorage"),
         }
     }
 }
@@ -104,8 +430,12 @@ impl std::str::FromStr for ErrorKind {
         match s {
             "InternalServerError" => std::result::Result::Ok(ErrorKind::InternalServerError),
             "InvalidRequest" => std::result::Result::Ok(ErrorKind::InvalidRequest),
+            "LimitExceeded" => std::result::Result::Ok(ErrorKind::LimitExceeded),
             "NotFound" => std::result::Result::Ok(ErrorKind::NotFound),
             "Forbidden" => std::result::Result::Ok(ErrorKind::Forbidden),
+            "Conflict" => std::result::Result::Ok(ErrorKind::Conflict),
+            "PayloadTooLarge" => std::result::Result::Ok(ErrorKind::PayloadTooLarge),
+            "InsufficientStorage" => std::result::Result::Ok(ErrorKind::InsufficientStorage),
             _ => std::result::Result::Err(format!(r#"Value not valid: {s}"#)),
         }
     }
@@ -128,6 +458,11 @@ pub struct ErrorResponse {
     #[validate(custom(function = "check_xss_string"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+
+    /// Present when the request conflicts with the received offset.
+    #[serde(rename = "receivedBytes")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub received_bytes: Option<i64>,
 }
 
 impl ErrorResponse {
@@ -137,6 +472,7 @@ impl ErrorResponse {
             kind,
             message: None,
             request_id: None,
+            received_bytes: None,
         }
     }
 }
@@ -150,6 +486,9 @@ impl std::fmt::Display for ErrorResponse {
             // Skipping kind in query parameter serialization
             self.message.as_ref().map(|message| ["message".to_string(), message.to_string()].join(",")),
             self.request_id.as_ref().map(|request_id| ["requestId".to_string(), request_id.to_string()].join(",")),
+            self.received_bytes
+                .as_ref()
+                .map(|received_bytes| ["receivedBytes".to_string(), received_bytes.to_string()].join(",")),
         ];
 
         write!(f, "{}", params.into_iter().flatten().collect::<Vec<_>>().join(","))
@@ -170,6 +509,7 @@ impl std::str::FromStr for ErrorResponse {
             pub kind: Vec<models::ErrorKind>,
             pub message: Vec<String>,
             pub request_id: Vec<String>,
+            pub received_bytes: Vec<i64>,
         }
 
         let mut intermediate_rep = IntermediateRep::default();
@@ -195,6 +535,8 @@ impl std::str::FromStr for ErrorResponse {
                     "message" => intermediate_rep.message.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
                     #[allow(clippy::redundant_clone)]
                     "requestId" => intermediate_rep.request_id.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "receivedBytes" => intermediate_rep.received_bytes.push(<i64 as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
                     _ => return std::result::Result::Err("Unexpected key while parsing ErrorResponse".to_string()),
                 }
             }
@@ -208,6 +550,7 @@ impl std::str::FromStr for ErrorResponse {
             kind: intermediate_rep.kind.into_iter().next().ok_or_else(|| "kind missing in ErrorResponse".to_string())?,
             message: intermediate_rep.message.into_iter().next(),
             request_id: intermediate_rep.request_id.into_iter().next(),
+            received_bytes: intermediate_rep.received_bytes.into_iter().next(),
         })
     }
 }
@@ -339,6 +682,805 @@ impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<HealthRespon
                 std::result::Result::Err(err) => std::result::Result::Err(format!(r#"Unable to convert header value '{value}' into HealthResponse - {err}"#)),
             },
             std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Unable to convert header: {hdr_value:?} to string: {e}"#)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct Publication {
+    #[serde(rename = "id")]
+    #[validate(custom(function = "check_xss_string"))]
+    pub id: String,
+
+    #[serde(rename = "fileName")]
+    #[validate(custom(function = "check_xss_string"))]
+    pub file_name: String,
+
+    #[serde(rename = "size")]
+    pub size: i64,
+
+    #[serde(rename = "receivedBytes")]
+    pub received_bytes: i64,
+
+    #[serde(rename = "status")]
+    #[validate(nested)]
+    pub status: models::PublicationStatus,
+
+    /// Present when Committed.
+    #[serde(rename = "rootHash")]
+    #[validate(custom(function = "check_xss_string"))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_hash: Option<String>,
+
+    /// Present when Failed.
+    #[serde(rename = "failedReason")]
+    #[validate(custom(function = "check_xss_string"))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_reason: Option<String>,
+
+    #[serde(rename = "createdAt")]
+    pub created_at: chrono::DateTime<chrono::Utc>,
+
+    #[serde(rename = "updatedAt")]
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl Publication {
+    #[allow(clippy::new_without_default, clippy::too_many_arguments)]
+    pub fn new(
+        id: String,
+        file_name: String,
+        size: i64,
+        received_bytes: i64,
+        status: models::PublicationStatus,
+        created_at: chrono::DateTime<chrono::Utc>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> Publication {
+        Publication {
+            id,
+            file_name,
+            size,
+            received_bytes,
+            status,
+            root_hash: None,
+            failed_reason: None,
+            created_at,
+            updated_at,
+        }
+    }
+}
+
+/// Converts the Publication value to the Query Parameters representation (style=form, explode=false)
+/// specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde serializer
+impl std::fmt::Display for Publication {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params: Vec<Option<String>> = vec![
+            Some("id".to_string()),
+            Some(self.id.to_string()),
+            Some("fileName".to_string()),
+            Some(self.file_name.to_string()),
+            Some("size".to_string()),
+            Some(self.size.to_string()),
+            Some("receivedBytes".to_string()),
+            Some(self.received_bytes.to_string()),
+            // Skipping status in query parameter serialization
+            self.root_hash.as_ref().map(|root_hash| ["rootHash".to_string(), root_hash.to_string()].join(",")),
+            self.failed_reason
+                .as_ref()
+                .map(|failed_reason| ["failedReason".to_string(), failed_reason.to_string()].join(",")),
+            // Skipping createdAt in query parameter serialization
+
+            // Skipping updatedAt in query parameter serialization
+        ];
+
+        write!(f, "{}", params.into_iter().flatten().collect::<Vec<_>>().join(","))
+    }
+}
+
+/// Converts Query Parameters representation (style=form, explode=false) to a Publication value
+/// as specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde deserializer
+impl std::str::FromStr for Publication {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        /// An intermediate representation of the struct to use for parsing.
+        #[derive(Default)]
+        #[allow(dead_code)]
+        struct IntermediateRep {
+            pub id: Vec<String>,
+            pub file_name: Vec<String>,
+            pub size: Vec<i64>,
+            pub received_bytes: Vec<i64>,
+            pub status: Vec<models::PublicationStatus>,
+            pub root_hash: Vec<String>,
+            pub failed_reason: Vec<String>,
+            pub created_at: Vec<chrono::DateTime<chrono::Utc>>,
+            pub updated_at: Vec<chrono::DateTime<chrono::Utc>>,
+        }
+
+        let mut intermediate_rep = IntermediateRep::default();
+
+        // Parse into intermediate representation
+        let mut string_iter = s.split(',');
+        let mut key_result = string_iter.next();
+
+        while key_result.is_some() {
+            let val = match string_iter.next() {
+                Some(x) => x,
+                None => return std::result::Result::Err("Missing value while parsing Publication".to_string()),
+            };
+
+            if let Some(key) = key_result {
+                #[allow(clippy::match_single_binding)]
+                match key {
+                    #[allow(clippy::redundant_clone)]
+                    "id" => intermediate_rep.id.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "fileName" => intermediate_rep.file_name.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "size" => intermediate_rep.size.push(<i64 as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "receivedBytes" => intermediate_rep.received_bytes.push(<i64 as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "status" => intermediate_rep
+                        .status
+                        .push(<models::PublicationStatus as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "rootHash" => intermediate_rep.root_hash.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "failedReason" => intermediate_rep
+                        .failed_reason
+                        .push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "createdAt" => intermediate_rep
+                        .created_at
+                        .push(<chrono::DateTime<chrono::Utc> as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "updatedAt" => intermediate_rep
+                        .updated_at
+                        .push(<chrono::DateTime<chrono::Utc> as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    _ => return std::result::Result::Err("Unexpected key while parsing Publication".to_string()),
+                }
+            }
+
+            // Get the next key
+            key_result = string_iter.next();
+        }
+
+        // Use the intermediate representation to return the struct
+        std::result::Result::Ok(Publication {
+            id: intermediate_rep.id.into_iter().next().ok_or_else(|| "id missing in Publication".to_string())?,
+            file_name: intermediate_rep.file_name.into_iter().next().ok_or_else(|| "fileName missing in Publication".to_string())?,
+            size: intermediate_rep.size.into_iter().next().ok_or_else(|| "size missing in Publication".to_string())?,
+            received_bytes: intermediate_rep
+                .received_bytes
+                .into_iter()
+                .next()
+                .ok_or_else(|| "receivedBytes missing in Publication".to_string())?,
+            status: intermediate_rep.status.into_iter().next().ok_or_else(|| "status missing in Publication".to_string())?,
+            root_hash: intermediate_rep.root_hash.into_iter().next(),
+            failed_reason: intermediate_rep.failed_reason.into_iter().next(),
+            created_at: intermediate_rep
+                .created_at
+                .into_iter()
+                .next()
+                .ok_or_else(|| "createdAt missing in Publication".to_string())?,
+            updated_at: intermediate_rep
+                .updated_at
+                .into_iter()
+                .next()
+                .ok_or_else(|| "updatedAt missing in Publication".to_string())?,
+        })
+    }
+}
+
+// Methods for converting between header::IntoHeaderValue<Publication> and HeaderValue
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<header::IntoHeaderValue<Publication>> for HeaderValue {
+    type Error = String;
+
+    fn try_from(hdr_value: header::IntoHeaderValue<Publication>) -> std::result::Result<Self, Self::Error> {
+        let hdr_value = hdr_value.to_string();
+        match HeaderValue::from_str(&hdr_value) {
+            std::result::Result::Ok(value) => std::result::Result::Ok(value),
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Invalid header value for Publication - value: {hdr_value} is invalid {e}"#)),
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<Publication> {
+    type Error = String;
+
+    fn try_from(hdr_value: HeaderValue) -> std::result::Result<Self, Self::Error> {
+        match hdr_value.to_str() {
+            std::result::Result::Ok(value) => match <Publication as std::str::FromStr>::from_str(value) {
+                std::result::Result::Ok(value) => std::result::Result::Ok(header::IntoHeaderValue(value)),
+                std::result::Result::Err(err) => std::result::Result::Err(format!(r#"Unable to convert header value '{value}' into Publication - {err}"#)),
+            },
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Unable to convert header: {hdr_value:?} to string: {e}"#)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct PublicationList {
+    #[serde(rename = "publications")]
+    #[validate(nested)]
+    pub publications: Vec<models::Publication>,
+}
+
+impl PublicationList {
+    #[allow(clippy::new_without_default, clippy::too_many_arguments)]
+    pub fn new(publications: Vec<models::Publication>) -> PublicationList {
+        PublicationList { publications }
+    }
+}
+
+/// Converts the PublicationList value to the Query Parameters representation (style=form, explode=false)
+/// specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde serializer
+impl std::fmt::Display for PublicationList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params: Vec<Option<String>> = vec![
+            // Skipping publications in query parameter serialization
+
+        ];
+
+        write!(f, "{}", params.into_iter().flatten().collect::<Vec<_>>().join(","))
+    }
+}
+
+/// Converts Query Parameters representation (style=form, explode=false) to a PublicationList value
+/// as specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde deserializer
+impl std::str::FromStr for PublicationList {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        /// An intermediate representation of the struct to use for parsing.
+        #[derive(Default)]
+        #[allow(dead_code)]
+        struct IntermediateRep {
+            pub publications: Vec<Vec<models::Publication>>,
+        }
+
+        let mut intermediate_rep = IntermediateRep::default();
+
+        // Parse into intermediate representation
+        let mut string_iter = s.split(',');
+        let mut key_result = string_iter.next();
+
+        while key_result.is_some() {
+            let val = match string_iter.next() {
+                Some(x) => x,
+                None => return std::result::Result::Err("Missing value while parsing PublicationList".to_string()),
+            };
+
+            if let Some(key) = key_result {
+                #[allow(clippy::match_single_binding)]
+                match key {
+                    "publications" => return std::result::Result::Err("Parsing a container in this style is not supported in PublicationList".to_string()),
+                    _ => return std::result::Result::Err("Unexpected key while parsing PublicationList".to_string()),
+                }
+            }
+
+            // Get the next key
+            key_result = string_iter.next();
+        }
+
+        // Use the intermediate representation to return the struct
+        std::result::Result::Ok(PublicationList {
+            publications: intermediate_rep
+                .publications
+                .into_iter()
+                .next()
+                .ok_or_else(|| "publications missing in PublicationList".to_string())?,
+        })
+    }
+}
+
+// Methods for converting between header::IntoHeaderValue<PublicationList> and HeaderValue
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<header::IntoHeaderValue<PublicationList>> for HeaderValue {
+    type Error = String;
+
+    fn try_from(hdr_value: header::IntoHeaderValue<PublicationList>) -> std::result::Result<Self, Self::Error> {
+        let hdr_value = hdr_value.to_string();
+        match HeaderValue::from_str(&hdr_value) {
+            std::result::Result::Ok(value) => std::result::Result::Ok(value),
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Invalid header value for PublicationList - value: {hdr_value} is invalid {e}"#)),
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<PublicationList> {
+    type Error = String;
+
+    fn try_from(hdr_value: HeaderValue) -> std::result::Result<Self, Self::Error> {
+        match hdr_value.to_str() {
+            std::result::Result::Ok(value) => match <PublicationList as std::str::FromStr>::from_str(value) {
+                std::result::Result::Ok(value) => std::result::Result::Ok(header::IntoHeaderValue(value)),
+                std::result::Result::Err(err) => std::result::Result::Err(format!(r#"Unable to convert header value '{value}' into PublicationList - {err}"#)),
+            },
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Unable to convert header: {hdr_value:?} to string: {e}"#)),
+        }
+    }
+}
+
+/// Enumeration of values.
+/// Since this enum's variants do not hold data, we can easily define them as `#[repr(C)]`
+/// which helps with FFI.
+#[allow(non_camel_case_types, clippy::large_enum_variant)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "conversion", derive(frunk_enum_derive::LabelledGenericEnum))]
+pub enum PublicationStatus {
+    #[serde(rename = "Receiving")]
+    Receiving,
+    #[serde(rename = "Pending")]
+    Pending,
+    #[serde(rename = "Processing")]
+    Processing,
+    #[serde(rename = "Committed")]
+    Committed,
+    #[serde(rename = "Failed")]
+    Failed,
+    #[serde(rename = "Canceled")]
+    Canceled,
+}
+
+impl validator::Validate for PublicationStatus {
+    fn validate(&self) -> std::result::Result<(), validator::ValidationErrors> {
+        std::result::Result::Ok(())
+    }
+}
+
+impl std::fmt::Display for PublicationStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            PublicationStatus::Receiving => write!(f, "Receiving"),
+            PublicationStatus::Pending => write!(f, "Pending"),
+            PublicationStatus::Processing => write!(f, "Processing"),
+            PublicationStatus::Committed => write!(f, "Committed"),
+            PublicationStatus::Failed => write!(f, "Failed"),
+            PublicationStatus::Canceled => write!(f, "Canceled"),
+        }
+    }
+}
+
+impl std::str::FromStr for PublicationStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "Receiving" => std::result::Result::Ok(PublicationStatus::Receiving),
+            "Pending" => std::result::Result::Ok(PublicationStatus::Pending),
+            "Processing" => std::result::Result::Ok(PublicationStatus::Processing),
+            "Committed" => std::result::Result::Ok(PublicationStatus::Committed),
+            "Failed" => std::result::Result::Ok(PublicationStatus::Failed),
+            "Canceled" => std::result::Result::Ok(PublicationStatus::Canceled),
+            _ => std::result::Result::Err(format!(r#"Value not valid: {s}"#)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct Subscription {
+    #[serde(rename = "id")]
+    #[validate(custom(function = "check_xss_string"))]
+    pub id: String,
+
+    #[serde(rename = "rootHash")]
+    #[validate(custom(function = "check_xss_string"))]
+    pub root_hash: String,
+
+    #[serde(rename = "fileName")]
+    #[validate(custom(function = "check_xss_string"))]
+    pub file_name: String,
+
+    #[serde(rename = "status")]
+    #[validate(nested)]
+    pub status: models::SubscriptionStatus,
+
+    /// Absent until the root block is decoded.
+    #[serde(rename = "rank")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank: Option<i64>,
+
+    #[serde(rename = "blockCountDownloaded")]
+    pub block_count_downloaded: i64,
+
+    #[serde(rename = "blockCountTotal")]
+    pub block_count_total: i64,
+
+    /// Present when Failed.
+    #[serde(rename = "failedReason")]
+    #[validate(custom(function = "check_xss_string"))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_reason: Option<String>,
+
+    #[serde(rename = "createdAt")]
+    pub created_at: chrono::DateTime<chrono::Utc>,
+
+    #[serde(rename = "updatedAt")]
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl Subscription {
+    #[allow(clippy::new_without_default, clippy::too_many_arguments)]
+    pub fn new(
+        id: String,
+        root_hash: String,
+        file_name: String,
+        status: models::SubscriptionStatus,
+        block_count_downloaded: i64,
+        block_count_total: i64,
+        created_at: chrono::DateTime<chrono::Utc>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> Subscription {
+        Subscription {
+            id,
+            root_hash,
+            file_name,
+            status,
+            rank: None,
+            block_count_downloaded,
+            block_count_total,
+            failed_reason: None,
+            created_at,
+            updated_at,
+        }
+    }
+}
+
+/// Converts the Subscription value to the Query Parameters representation (style=form, explode=false)
+/// specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde serializer
+impl std::fmt::Display for Subscription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params: Vec<Option<String>> = vec![
+            Some("id".to_string()),
+            Some(self.id.to_string()),
+            Some("rootHash".to_string()),
+            Some(self.root_hash.to_string()),
+            Some("fileName".to_string()),
+            Some(self.file_name.to_string()),
+            // Skipping status in query parameter serialization
+            self.rank.as_ref().map(|rank| ["rank".to_string(), rank.to_string()].join(",")),
+            Some("blockCountDownloaded".to_string()),
+            Some(self.block_count_downloaded.to_string()),
+            Some("blockCountTotal".to_string()),
+            Some(self.block_count_total.to_string()),
+            self.failed_reason
+                .as_ref()
+                .map(|failed_reason| ["failedReason".to_string(), failed_reason.to_string()].join(",")),
+            // Skipping createdAt in query parameter serialization
+
+            // Skipping updatedAt in query parameter serialization
+        ];
+
+        write!(f, "{}", params.into_iter().flatten().collect::<Vec<_>>().join(","))
+    }
+}
+
+/// Converts Query Parameters representation (style=form, explode=false) to a Subscription value
+/// as specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde deserializer
+impl std::str::FromStr for Subscription {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        /// An intermediate representation of the struct to use for parsing.
+        #[derive(Default)]
+        #[allow(dead_code)]
+        struct IntermediateRep {
+            pub id: Vec<String>,
+            pub root_hash: Vec<String>,
+            pub file_name: Vec<String>,
+            pub status: Vec<models::SubscriptionStatus>,
+            pub rank: Vec<i64>,
+            pub block_count_downloaded: Vec<i64>,
+            pub block_count_total: Vec<i64>,
+            pub failed_reason: Vec<String>,
+            pub created_at: Vec<chrono::DateTime<chrono::Utc>>,
+            pub updated_at: Vec<chrono::DateTime<chrono::Utc>>,
+        }
+
+        let mut intermediate_rep = IntermediateRep::default();
+
+        // Parse into intermediate representation
+        let mut string_iter = s.split(',');
+        let mut key_result = string_iter.next();
+
+        while key_result.is_some() {
+            let val = match string_iter.next() {
+                Some(x) => x,
+                None => return std::result::Result::Err("Missing value while parsing Subscription".to_string()),
+            };
+
+            if let Some(key) = key_result {
+                #[allow(clippy::match_single_binding)]
+                match key {
+                    #[allow(clippy::redundant_clone)]
+                    "id" => intermediate_rep.id.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "rootHash" => intermediate_rep.root_hash.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "fileName" => intermediate_rep.file_name.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "status" => intermediate_rep
+                        .status
+                        .push(<models::SubscriptionStatus as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "rank" => intermediate_rep.rank.push(<i64 as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "blockCountDownloaded" => intermediate_rep
+                        .block_count_downloaded
+                        .push(<i64 as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "blockCountTotal" => intermediate_rep
+                        .block_count_total
+                        .push(<i64 as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "failedReason" => intermediate_rep
+                        .failed_reason
+                        .push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "createdAt" => intermediate_rep
+                        .created_at
+                        .push(<chrono::DateTime<chrono::Utc> as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "updatedAt" => intermediate_rep
+                        .updated_at
+                        .push(<chrono::DateTime<chrono::Utc> as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    _ => return std::result::Result::Err("Unexpected key while parsing Subscription".to_string()),
+                }
+            }
+
+            // Get the next key
+            key_result = string_iter.next();
+        }
+
+        // Use the intermediate representation to return the struct
+        std::result::Result::Ok(Subscription {
+            id: intermediate_rep.id.into_iter().next().ok_or_else(|| "id missing in Subscription".to_string())?,
+            root_hash: intermediate_rep
+                .root_hash
+                .into_iter()
+                .next()
+                .ok_or_else(|| "rootHash missing in Subscription".to_string())?,
+            file_name: intermediate_rep
+                .file_name
+                .into_iter()
+                .next()
+                .ok_or_else(|| "fileName missing in Subscription".to_string())?,
+            status: intermediate_rep.status.into_iter().next().ok_or_else(|| "status missing in Subscription".to_string())?,
+            rank: intermediate_rep.rank.into_iter().next(),
+            block_count_downloaded: intermediate_rep
+                .block_count_downloaded
+                .into_iter()
+                .next()
+                .ok_or_else(|| "blockCountDownloaded missing in Subscription".to_string())?,
+            block_count_total: intermediate_rep
+                .block_count_total
+                .into_iter()
+                .next()
+                .ok_or_else(|| "blockCountTotal missing in Subscription".to_string())?,
+            failed_reason: intermediate_rep.failed_reason.into_iter().next(),
+            created_at: intermediate_rep
+                .created_at
+                .into_iter()
+                .next()
+                .ok_or_else(|| "createdAt missing in Subscription".to_string())?,
+            updated_at: intermediate_rep
+                .updated_at
+                .into_iter()
+                .next()
+                .ok_or_else(|| "updatedAt missing in Subscription".to_string())?,
+        })
+    }
+}
+
+// Methods for converting between header::IntoHeaderValue<Subscription> and HeaderValue
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<header::IntoHeaderValue<Subscription>> for HeaderValue {
+    type Error = String;
+
+    fn try_from(hdr_value: header::IntoHeaderValue<Subscription>) -> std::result::Result<Self, Self::Error> {
+        let hdr_value = hdr_value.to_string();
+        match HeaderValue::from_str(&hdr_value) {
+            std::result::Result::Ok(value) => std::result::Result::Ok(value),
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Invalid header value for Subscription - value: {hdr_value} is invalid {e}"#)),
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<Subscription> {
+    type Error = String;
+
+    fn try_from(hdr_value: HeaderValue) -> std::result::Result<Self, Self::Error> {
+        match hdr_value.to_str() {
+            std::result::Result::Ok(value) => match <Subscription as std::str::FromStr>::from_str(value) {
+                std::result::Result::Ok(value) => std::result::Result::Ok(header::IntoHeaderValue(value)),
+                std::result::Result::Err(err) => std::result::Result::Err(format!(r#"Unable to convert header value '{value}' into Subscription - {err}"#)),
+            },
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Unable to convert header: {hdr_value:?} to string: {e}"#)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct SubscriptionList {
+    #[serde(rename = "subscriptions")]
+    #[validate(nested)]
+    pub subscriptions: Vec<models::Subscription>,
+}
+
+impl SubscriptionList {
+    #[allow(clippy::new_without_default, clippy::too_many_arguments)]
+    pub fn new(subscriptions: Vec<models::Subscription>) -> SubscriptionList {
+        SubscriptionList { subscriptions }
+    }
+}
+
+/// Converts the SubscriptionList value to the Query Parameters representation (style=form, explode=false)
+/// specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde serializer
+impl std::fmt::Display for SubscriptionList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params: Vec<Option<String>> = vec![
+            // Skipping subscriptions in query parameter serialization
+
+        ];
+
+        write!(f, "{}", params.into_iter().flatten().collect::<Vec<_>>().join(","))
+    }
+}
+
+/// Converts Query Parameters representation (style=form, explode=false) to a SubscriptionList value
+/// as specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde deserializer
+impl std::str::FromStr for SubscriptionList {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        /// An intermediate representation of the struct to use for parsing.
+        #[derive(Default)]
+        #[allow(dead_code)]
+        struct IntermediateRep {
+            pub subscriptions: Vec<Vec<models::Subscription>>,
+        }
+
+        let mut intermediate_rep = IntermediateRep::default();
+
+        // Parse into intermediate representation
+        let mut string_iter = s.split(',');
+        let mut key_result = string_iter.next();
+
+        while key_result.is_some() {
+            let val = match string_iter.next() {
+                Some(x) => x,
+                None => return std::result::Result::Err("Missing value while parsing SubscriptionList".to_string()),
+            };
+
+            if let Some(key) = key_result {
+                #[allow(clippy::match_single_binding)]
+                match key {
+                    "subscriptions" => return std::result::Result::Err("Parsing a container in this style is not supported in SubscriptionList".to_string()),
+                    _ => return std::result::Result::Err("Unexpected key while parsing SubscriptionList".to_string()),
+                }
+            }
+
+            // Get the next key
+            key_result = string_iter.next();
+        }
+
+        // Use the intermediate representation to return the struct
+        std::result::Result::Ok(SubscriptionList {
+            subscriptions: intermediate_rep
+                .subscriptions
+                .into_iter()
+                .next()
+                .ok_or_else(|| "subscriptions missing in SubscriptionList".to_string())?,
+        })
+    }
+}
+
+// Methods for converting between header::IntoHeaderValue<SubscriptionList> and HeaderValue
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<header::IntoHeaderValue<SubscriptionList>> for HeaderValue {
+    type Error = String;
+
+    fn try_from(hdr_value: header::IntoHeaderValue<SubscriptionList>) -> std::result::Result<Self, Self::Error> {
+        let hdr_value = hdr_value.to_string();
+        match HeaderValue::from_str(&hdr_value) {
+            std::result::Result::Ok(value) => std::result::Result::Ok(value),
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Invalid header value for SubscriptionList - value: {hdr_value} is invalid {e}"#)),
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<SubscriptionList> {
+    type Error = String;
+
+    fn try_from(hdr_value: HeaderValue) -> std::result::Result<Self, Self::Error> {
+        match hdr_value.to_str() {
+            std::result::Result::Ok(value) => match <SubscriptionList as std::str::FromStr>::from_str(value) {
+                std::result::Result::Ok(value) => std::result::Result::Ok(header::IntoHeaderValue(value)),
+                std::result::Result::Err(err) => std::result::Result::Err(format!(r#"Unable to convert header value '{value}' into SubscriptionList - {err}"#)),
+            },
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Unable to convert header: {hdr_value:?} to string: {e}"#)),
+        }
+    }
+}
+
+/// Enumeration of values.
+/// Since this enum's variants do not hold data, we can easily define them as `#[repr(C)]`
+/// which helps with FFI.
+#[allow(non_camel_case_types, clippy::large_enum_variant)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "conversion", derive(frunk_enum_derive::LabelledGenericEnum))]
+pub enum SubscriptionStatus {
+    #[serde(rename = "Downloading")]
+    Downloading,
+    #[serde(rename = "Decoding")]
+    Decoding,
+    #[serde(rename = "Finalizing")]
+    Finalizing,
+    #[serde(rename = "Completed")]
+    Completed,
+    #[serde(rename = "Failed")]
+    Failed,
+    #[serde(rename = "Canceled")]
+    Canceled,
+}
+
+impl validator::Validate for SubscriptionStatus {
+    fn validate(&self) -> std::result::Result<(), validator::ValidationErrors> {
+        std::result::Result::Ok(())
+    }
+}
+
+impl std::fmt::Display for SubscriptionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            SubscriptionStatus::Downloading => write!(f, "Downloading"),
+            SubscriptionStatus::Decoding => write!(f, "Decoding"),
+            SubscriptionStatus::Finalizing => write!(f, "Finalizing"),
+            SubscriptionStatus::Completed => write!(f, "Completed"),
+            SubscriptionStatus::Failed => write!(f, "Failed"),
+            SubscriptionStatus::Canceled => write!(f, "Canceled"),
+        }
+    }
+}
+
+impl std::str::FromStr for SubscriptionStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "Downloading" => std::result::Result::Ok(SubscriptionStatus::Downloading),
+            "Decoding" => std::result::Result::Ok(SubscriptionStatus::Decoding),
+            "Finalizing" => std::result::Result::Ok(SubscriptionStatus::Finalizing),
+            "Completed" => std::result::Result::Ok(SubscriptionStatus::Completed),
+            "Failed" => std::result::Result::Ok(SubscriptionStatus::Failed),
+            "Canceled" => std::result::Result::Ok(SubscriptionStatus::Canceled),
+            _ => std::result::Result::Err(format!(r#"Value not valid: {s}"#)),
         }
     }
 }

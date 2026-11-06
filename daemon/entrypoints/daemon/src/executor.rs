@@ -85,6 +85,9 @@ impl Executor {
         let conf = DaemonConfig::load(&config_dir).await.inspect_err(|error| {
             eprintln!("failed to load daemon config from {}: {error:?}", config_dir.display());
         })?;
+        if !conf.api.listens_only_on_loopback() {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("the REST API has no authentication yet; api.listen_addr must be a loopback address"));
+        }
 
         let _lock = Self::acquire_state_lock(&conf.core.state_dir).await?;
 

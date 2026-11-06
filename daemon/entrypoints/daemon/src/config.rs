@@ -12,6 +12,10 @@ struct DaemonConfigToml {
     pub api: ApiConfigToml,
     pub p2p: P2pConfigToml,
     pub logging: LoggingConfigToml,
+    #[serde(default)]
+    pub storage: StorageConfigToml,
+    #[serde(default)]
+    pub web: WebConfigToml,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -22,6 +26,18 @@ struct CoreConfigToml {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct ApiConfigToml {
     pub listen_addr: String,
+    #[serde(default)]
+    pub max_upload_size: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+struct StorageConfigToml {
+    pub download_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+struct WebConfigToml {
+    pub dir: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -47,6 +63,8 @@ pub struct DaemonConfig {
     pub api: ApiConfig,
     pub p2p: P2pConfig,
     pub logging: LoggingConfig,
+    pub storage: StorageConfig,
+    pub web: WebConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +77,24 @@ pub struct CoreConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiConfig {
     pub listen_addr: String,
+    /// Largest declared publication size in bytes. Zero means no limit.
+    pub max_upload_size: i64,
+}
+
+impl ApiConfig {
+    pub fn listens_only_on_loopback(&self) -> bool {
+        self.listen_addr.parse::<std::net::SocketAddr>().is_ok_and(|addr| addr.ip().is_loopback())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageConfig {
+    pub download_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebConfig {
+    pub dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,13 +120,17 @@ impl DaemonConfig {
         tokio::fs::create_dir_all(dir).await?;
 
         let toml = Self::load_toml(dir).await?;
+        if toml.api.max_upload_size < 0 {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("api.max_upload_size must not be negative"));
+        }
+        let state_dir = dir.join(toml.core.state_dir);
+        let download_dir = toml.storage.download_dir.map(|path| dir.join(path)).unwrap_or_else(|| state_dir.join("downloads"));
 
         Ok(DaemonConfig {
-            core: CoreConfig {
-                state_dir: dir.join(toml.core.state_dir),
-            },
+            core: CoreConfig { state_dir },
             api: ApiConfig {
                 listen_addr: toml.api.listen_addr,
+                max_upload_size: toml.api.max_upload_size,
             },
             p2p: P2pConfig {
                 listen_addr: toml.p2p.listen_addr,
@@ -101,6 +141,10 @@ impl DaemonConfig {
             logging: LoggingConfig {
                 level: toml.logging.level,
                 json: toml.logging.json,
+            },
+            storage: StorageConfig { download_dir },
+            web: WebConfig {
+                dir: toml.web.dir.map(|path| dir.join(path)),
             },
         })
     }

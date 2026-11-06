@@ -67,6 +67,14 @@ impl Shutdown for FileExchanger {
 impl FileExchanger {
     const CONNECTOR_COUNT: usize = 3;
 
+    pub fn file_publisher(&self) -> &Arc<FilePublisher> {
+        &self.ctx.file_publisher
+    }
+
+    pub fn file_subscriber(&self) -> &Arc<FileSubscriber> {
+        &self.ctx.file_subscriber
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         session_connector: Arc<SessionConnector>,

@@ -7,8 +7,11 @@ pub struct PublishedUncommittedFile {
     pub id: String,
     pub file_path: String,
     pub file_name: String,
+    pub size: Option<i64>,
+    pub received_bytes: i64,
     pub block_size: u32,
     pub attrs: Option<String>,
+    pub source_owned: bool,
     pub priority: i64,
     pub status: PublishedUncommittedFileStatus,
     pub failed_reason: Option<String>,
@@ -16,12 +19,14 @@ pub struct PublishedUncommittedFile {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublishedUncommittedFileStatus {
     Unknown,
+    Receiving,
     Pending,
     Processing,
     Failed,
+    Canceled,
 }
 
 impl sqlx::Type<sqlx::Sqlite> for PublishedUncommittedFileStatus {
@@ -34,9 +39,11 @@ impl sqlx::Encode<'_, sqlx::Sqlite> for PublishedUncommittedFileStatus {
     fn encode_by_ref(&self, buf: &mut <sqlx::Sqlite as sqlx::Database>::ArgumentBuffer) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
         let s = match self {
             PublishedUncommittedFileStatus::Unknown => "Unknown",
+            PublishedUncommittedFileStatus::Receiving => "Receiving",
             PublishedUncommittedFileStatus::Pending => "Pending",
             PublishedUncommittedFileStatus::Processing => "Processing",
             PublishedUncommittedFileStatus::Failed => "Failed",
+            PublishedUncommittedFileStatus::Canceled => "Canceled",
         };
         <&str as sqlx::Encode<sqlx::Sqlite>>::encode_by_ref(&s, buf)
     }
@@ -44,11 +51,13 @@ impl sqlx::Encode<'_, sqlx::Sqlite> for PublishedUncommittedFileStatus {
 
 impl sqlx::Decode<'_, sqlx::Sqlite> for PublishedUncommittedFileStatus {
     fn decode(value: <sqlx::Sqlite as sqlx::Database>::ValueRef<'_>) -> Result<Self, sqlx::error::BoxDynError> {
-        let s = <String as sqlx::Decode<sqlx::Sqlite>>::decode(value)?;
+        let s = <String as sqlx::Decode<'_, sqlx::Sqlite>>::decode(value)?;
         match s.as_str() {
+            "Receiving" => Ok(PublishedUncommittedFileStatus::Receiving),
             "Pending" => Ok(PublishedUncommittedFileStatus::Pending),
             "Processing" => Ok(PublishedUncommittedFileStatus::Processing),
             "Failed" => Ok(PublishedUncommittedFileStatus::Failed),
+            "Canceled" => Ok(PublishedUncommittedFileStatus::Canceled),
             _ => Ok(PublishedUncommittedFileStatus::Unknown),
         }
     }

@@ -3,7 +3,8 @@
 ## 1. About this document
 
 This document covers the design of converting a file into blocks and Merkle layers and publishing it, exchanging blocks between nodes, and verifying and decoding on the subscribing side.
-Term definitions are the source of [terms.md](../terms.md#2-terminology).
+The main readers are developers who change the file-transfer layer and AI agents that carry the decisions forward.
+This document assumes the vocabulary of [terms.md](../terms.md#2-terminology) and does not define terms.
 
 ### 1.1 Division of responsibilities among documents
 
@@ -24,9 +25,8 @@ To check what works currently, read §7 first.
 
 ## 2. Responsibilities and boundaries
 
-[FilePublisher](../../daemon/modules/engine/src/core/negotiator/file/file_publisher.rs) converts a local file into blocks and Merkle layers and finalizes a publishable root hash.
-[FileSubscriber](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber.rs) manages the blocks needed from a root hash and decodes the layers that have come together from the top down.
-[FileExchanger](../../daemon/modules/engine/src/core/negotiator/file/file_exchanger.rs) establishes a Session with a peer using NodeFinder's lookup results and carries the publisher's and subscriber's blocks.
+[FilePublisher](../../daemon/modules/engine/src/core/negotiator/file/file_publisher.rs) and [FileSubscriber](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber.rs) own the local side of a transfer, and [FileExchanger](../../daemon/modules/engine/src/core/negotiator/file/file_exchanger.rs) owns the network side.
+Only the exchanger knows a Session; only the publisher and subscriber touch the stores.
 
 Separating encoding, transfer, and decoding makes the processing of local storage independent of the network Session lifetime.
 The publisher and subscriber do not share state between publish and subscription.
@@ -80,7 +80,7 @@ The subscribing side does not check the root layer's rank and uses the next rank
 
 ## 4. State transitions
 
-The external API does not expose the internal state names directly and converts them into a stable contract following the long-running operation representation of [daemon-api.md](./daemon-api.md#5-design-decisions).
+The state names in this section are the names the API exposes; the exhaustive enum is in [openapi.yaml](../../daemon/openapi.yaml).
 
 ### 4.1 Publisher side
 
@@ -88,29 +88,37 @@ The publisher side splits the period before and after the root hash finalization
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Pending: import
+    [*] --> Receiving: declare an upload
+    [*] --> Pending: import a library file
+    Receiving --> Pending: the received size reaches the declared size
+    Receiving --> Canceled: cancel or idle expiry
     Pending --> Processing: start encoding
     Processing --> Pending: restart
     Processing --> Failed
     Processing --> Committed: finalize the root hash
-    Pending --> [*]: cancel
-    Processing --> [*]: cancel
-    Failed --> [*]: cancel, re-import
+    Pending --> Canceled: cancel
+    Processing --> Canceled: cancel
+    Canceled --> [*]: remove
+    Failed --> [*]: remove
     Committed --> [*]: remove
 ```
 
-Pending, Processing, and Failed are the states of an uncommitted file, and only Committed can be advertised to the network.
+Receiving, Pending, Processing, Canceled, and Failed are the states of an uncommitted file, and only Committed can be advertised to the network.
+Receiving means the row exists with a declared size and the content is still arriving; the encoder does not start until the received offset reaches the size.
+A declared size of 0 satisfies that condition at creation, so an empty upload moves to Pending without a content request.
+A publication that reads a library file starts at Pending, because its content is already present.
 Until the root hash is finalized, a temporary ID is used; after finalization the file is committed to the content identifier, so a process that failed midway is distinguished from a file that can be advertised.
 
-An uncommitted file's row disappears on commit and cancel, and only Failed remains to show the reason for the failure.
-When a committed file with the same root hash and file name already exists, a new committed file is not created and the uncommitted file row disappears.
-Only one uncommitted file per path and file name can exist.
-Importing a pair with a Pending or Processing file is rejected with `AlreadyExists`.
-Importing a pair with a Failed file deletes that row and creates a Pending row with a new temporary ID.
+An uncommitted file's row disappears on commit, and the publication ID keeps resolving through a mapping to the committed file ([storage.md §4.3](./storage.md#43-publishing-commit-and-reclamation)).
+On cancel the row stays as Canceled until it is removed, so the state and the reason remain readable.
+When a committed file with the same root hash and file name already exists, a new committed file is not created; the uncommitted row disappears and the publication ID maps to the existing committed file.
+Only one active uncommitted file per path and file name can exist, where active means Receiving, Pending, or Processing.
+Importing a pair with an active file is rejected with `AlreadyExists`.
+A Failed or Canceled row does not take part in that uniqueness, so a re-import creates a new ID and the old row stays readable until it is removed.
 
 A Task that finished encoding without committing ends with cancel, shutdown, failure, or a conditional update mismatch (§4.3); in all cases it makes the Store delete that temporary ID's blocks.
-Blocks whose deletion failed are reclaimed by the sweep as blocks of a temporary ID with no Pending or Processing row (see [storage.md §4.3](./storage.md#43-publishing-commit-and-reclamation)).
-Because the temporary ID is renewed per attempt, a late-running reclamation never deletes a new attempt's blocks, and a file can be re-imported without waiting for reclamation.
+Blocks whose deletion failed are reclaimed by the sweep as blocks of a temporary ID with no Receiving, Pending, or Processing row (see [storage.md §4.3](./storage.md#43-publishing-commit-and-reclamation)).
+Because each attempt has its own ID, a late-running reclamation never deletes a new attempt's blocks, and a file can be re-imported without waiting for reclamation.
 
 remove targets a committed file and stops the publication.
 If the same root hash is published under another file name, the block rows and bodies remain until the last committed file disappears.
@@ -468,20 +476,34 @@ Limiting the block-deletion paths to the single remove lets the release conditio
 Having cancel delete the rows leaves no record of the cancellation.
 Releasing blocks as soon as no in-progress subscription remains requires writing the release into each of the cancel, completion, and failure paths.
 
-#### Delete uncommitted files of the publisher side on commit and cancel
+#### Receive content into the publication row before encoding
 
 **Decision**
-The rows of committed and cancelled uncommitted files are deleted, and only the Failed row remains.
-The publisher-side remove targets committed files and refers only to the operation of stopping the publication.
+A publication that reads an upload is created with a declared size, stores its received offset on the row, and stays in Receiving until the received size reaches the declared size.
+The encoder starts at Pending and reads the staged file.
 
 **Rationale**
-Because the committed file carries the publication record, there is nothing left on an uncommitted file after the commit.
-An uncommitted file is unique per path and file name, so keeping the row would block re-importing the same file.
-Failed rows remain to show the reason for the failure and are replaced by a new-temporary-ID row on re-import.
+One identity covers the whole life of an import, so the API resource survives a restart and a client resumes from the stored offset.
+The import takes a complete file, so a state between receiving and encoding separates the two phases without a second resource.
 
 **Rejected**
-Keeping a committed file as Completed requires a separate row deletion before re-import.
-Having a separate remove for uncommitted files creates two kinds of deletion operations on the publisher side and is hard to distinguish from stopping a publication.
+A separate upload session outside the publisher row, which the rejected browser API chose, has no counterpart on the subscription side, disappears on restart, and needs its own expiry and sweep.
+Streaming the request body into the encoder removes the staged copy, but the encoder's state would then have to be persisted and resumed, and a body that stops mid-file leaves the encoder in a state the import cannot express.
+
+#### Keep a canceled uncommitted file as a row until it is removed
+
+**Decision**
+The row of a committed uncommitted file is deleted, and the publication ID keeps resolving through the mapping to the committed file.
+A canceled uncommitted file stays as Canceled until remove deletes it.
+The publisher-side remove targets committed files and also removes Canceled and Failed rows.
+
+**Rationale**
+Cancel and delete are separate operations on both API resources ([daemon-api.md §5.5](./daemon-api.md#55-cancellation-and-deletion)), so cancel must leave a state a client can read.
+A terminal row also keeps the reason visible and lets the operator retry from the list.
+
+**Rejected**
+Deleting the row on cancel, which was the earlier design, makes `GET /publications/{id}` return `404` right after a cancel and breaks the mirror with subscriptions.
+Keeping a committed file as Completed requires a second row deletion before re-import.
 
 #### Allow duplicate subscriptions to the same root hash
 
@@ -525,15 +547,16 @@ Making remove wait during finalization makes the response time depend on the fil
 #### Use a new temporary ID for re-import
 
 **Decision**
-Re-importing a Failed file replaces the Failed row with a row of a new temporary ID.
+A re-import of a Failed or Canceled file creates a row of a new temporary ID, and the terminal row stays until it is removed.
 The blocks of the failed attempt are left to the sweep without waiting for reclamation.
 
 **Rationale**
-Because the temporary ID of a reclamation target never overlaps a new attempt's, a late-running reclamation never deletes a new encoding's blocks.
-No reclamation record or re-import rejection is needed.
+Because each attempt has its own ID, a late-running reclamation never deletes a new encoding's blocks, and the operator keeps the record of the failed attempt.
+Excluding terminal rows from the per-path uniqueness is what lets both exist.
 
 **Rejected**
 Reusing the Failed row and temporary ID by returning it to Pending makes the reclamation of the old attempt's blocks race the new attempt, requiring a mechanism to reject re-import until reclamation finishes.
+Replacing the Failed row, which was the earlier design, loses the reason as soon as the next import starts and leaves the API with no terminal row.
 
 #### Subscriptions in the middle of fetching also provide blocks
 
@@ -811,7 +834,7 @@ The candidates are the following two.
 2. Limiting nothing and adjusting only the number of unchoked nodes adds no mechanism, but the ratio to the line speed cannot be specified.
 
 **Why not decided yet**
-Because there is no REST API that receives transfer settings, and the actual send volume on a real line is not measured.
+Because the API takes no transfer setting from a client ([daemon-api.md §9.1](./daemon-api.md#hide-the-block-size-attributes-and-priority-from-the-api)), and the actual send volume on a real line is not measured.
 
 **Decision condition**
 Decide when adding transfer settings to the publish and subscribe REST API, or when a multi-node integration test confirms the sends occupy the line.
@@ -826,7 +849,7 @@ Task state transitions and failure records are updated with a condition on the e
 The Task cancels in-progress processing with a child CancellationToken, and shutdown waits for the workers.
 
 The entry points have cancel and remove.
-The publisher side deletes uncommitted files on commit and cancel.
+The publisher side deletes uncommitted files on commit and cancel; the Receiving and Canceled states of §4.1 and the received offset are not implemented.
 Importing to the same path and file name of a Failed file deletes the old row and creates a Pending row of a new temporary ID in one SQLite transaction.
 Even if the reclamation of the old attempt's blocks is delayed, the new attempt's blocks are not deleted.
 The subscriber side allows subscriptions to the same root hash and reflects shared-block progress into all Downloading subscriptions.

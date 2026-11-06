@@ -3,7 +3,8 @@
 ## 1. About this document
 
 This document covers the design of node and file metadata, block bodies, subscribed output files, the state directory, and schema migration.
-Term definitions are the source of [terms.md](../terms.md#2-terminology).
+The main readers are developers who change the persistence layer and AI agents that carry the decisions forward.
+This document assumes the vocabulary of [terms.md](../terms.md#2-terminology) and does not define terms.
 
 ### 1.1 Division of responsibilities among documents
 
@@ -25,7 +26,8 @@ To check what works currently, read §6 first.
 ## 2. Responsibilities and boundaries
 
 The persistence layer handles metadata, which needs state transitions and conditional queries, and block bodies, which are read and written by hash key, with separate storage models.
-Subscription outputs are placed on the filesystem, and the temporary output and destination are derived from the subscription row to tie the DB state to the placement.
+Subscription outputs are placed on the filesystem under `storage.download_dir`, and the temporary output and destination are derived from the subscription row to tie the DB state to the placement.
+Uploaded content is staged under `state_dir/uploads` until the encoder reads it, so the staged file has the same lifetime as the publication row.
 It does not own the file protocol, lookup rules, or the REST API contract.
 
 ## 3. Separation of metadata and blocks
@@ -34,7 +36,7 @@ It does not own the file protocol, lookup rules, or the REST API contract.
 | --- | --- | --- |
 | metadata | SQLite and `omnius-core-migration` | Known nodes, file state and destination, block index |
 | block | `KeyValueRocksdbStorage` | Byte strings of file bodies and MerkleLayers |
-| Subscription output | Filesystem chosen by the user | Temporary output and finalized output files |
+| Subscription output | Filesystem under `storage.download_dir` | Temporary output and finalized output files |
 
 Metadata is placed in SQLite because it needs conditional queries and state transitions.
 Blocks are placed in RocksDB because reads and writes by hash key are central and the large byte strings are separated from metadata queries.
@@ -47,6 +49,7 @@ Persistent state is split into a directory per component.
 <state_dir>/
 ├── identity/
 ├── repo/
+├── uploads/
 ├── file_publisher/
 │   ├── repo/
 │   └── blocks/
@@ -56,7 +59,9 @@ Persistent state is split into a directory per component.
 ```
 
 Separating the publisher and subscriber storage areas prevents rebuilding or deleting one from directly breaking the other's state.
-Because a temporary output is placed at the destination by rename, it is created in the destination's parent directory and not in `state_dir`.
+`uploads/` holds the staged content of a publication that is still receiving bytes.
+A staged file is named by the publication ID, is deleted when the publication commits, is canceled, or fails, and is deleted at startup when no `Receiving` row names it.
+Because a temporary output is placed at the destination by rename, it is created in the destination's parent directory, which is under `storage.download_dir`, and not in `state_dir`.
 `identity/` holds the node's signing key; deleting it makes the next startup create a different key and node ID, so unlike other directories it cannot be undone by recreation.
 Adding or migrating a directory name requires declaring a unit of migration and rollback.
 
@@ -99,7 +104,11 @@ The Store performs the following inside the publisher mutex. Encoding happens ou
 
 1. Check for a Processing row and whether a committed file with the same root hash exists.
 2. If no committed file exists, delete the committed keys remaining under that root hash and move the logical keys of the blocks, minus duplicate hashes, from uncommitted to committed. The deletion and all renames are combined into one RocksDB transaction and synced. If a committed file exists, share its bodies and do not change them.
-3. Register the committed file and the block index in one SQLite transaction and delete the uncommitted file row. After this transaction is persisted, commit success is returned.
+3. Register the committed file and the block index in one SQLite transaction, add the mapping from the publication ID to the committed file, and delete the uncommitted file row. After this transaction is persisted, commit success is returned.
+
+The mapping keeps the publication ID readable after the commit, so `GET /publications/{id}` answers for the whole life of the resource.
+A repeated import of the same root hash and file name adds another mapping to the same committed file.
+Removing any publication of that pair deletes the committed file and every mapping to it, so the remaining IDs of the pair also disappear.
 
 A failure between 2 and 3 can leave committed keys unreferenced by any committed file. The next commit with the same root hash deletes these keys in step 2 before moving, so there is no collision.
 These keys and the uncommitted keys of temporary IDs that have no row are reclaimed by the sweep.
@@ -109,7 +118,7 @@ The sweep runs inside the mutex, reconciles RocksDB keys against SQLite rows, an
 
 | Key | Condition for deletion |
 | --- | --- |
-| uncommitted | No Pending or Processing row for that temporary ID |
+| uncommitted | No Receiving, Pending, or Processing row for that temporary ID |
 | committed | No committed file for that root hash |
 
 When the result of an SQLite commit is unknown, the sweep re-reads SQLite at deletion time, so it does not delete the blocks of a committed file that was finalized.
@@ -195,7 +204,7 @@ An unjudgeable condition caused by the destination directory is deferred per sub
 
 | Store | Startup recovery |
 | --- | --- |
-| FilePublisherStore | Delete all uncommitted keys and return Processing to Pending, then run the sweep. Because encoding is not running inside open, the keys of Pending rows may also be deleted |
+| FilePublisherStore | Delete all uncommitted keys, return Processing to Pending, keep Receiving rows with their staged file, reconcile each received offset with the staged file's length, then run the sweep. Because encoding is not running inside open, the keys of Pending rows may also be deleted |
 | FileSubscriberStore | Recover Finalizing per the §4.5 rules. Resume Downloading and Decoding from the stored blocks, and for rank 0 decoding recreate the temporary output in §4.5 step 1. Then run the sweep |
 
 Every operation can be re-executed any number of times from persisted information.
@@ -221,6 +230,19 @@ Metadata requiring search and state transitions is placed in SQLite, and block b
 
 **Rationale**
 To avoid forcing relational queries and large byte-string reads and writes into the same storage model, and to match each access pattern.
+
+#### Derive the output destination from the configured download directory
+
+**Decision**
+The API places a subscription output at `storage.download_dir` joined with the client's file name, and the API never accepts a directory.
+The staged content of a publication lives under `state_dir/uploads` and is deleted when the publication ends.
+
+**Rationale**
+The client is a browser and cannot name a host path, and an API that could write anywhere would need the same validation without a configured boundary.
+
+**Rejected**
+A client-supplied absolute path gives the API a write surface over the whole host.
+Writing outputs into `state_dir` would mix the operator's files with the daemon's state, so a backup or a cleanup of one would touch the other.
 
 #### Include OS crashes and power loss in the save guarantee
 
@@ -302,4 +324,5 @@ On macOS, `HAVE_FULLFSYNC` is given to RocksDB with per-target `CXXFLAGS`, and i
 The non-replacing placement module passes type checks on aarch64-apple-darwin, x86_64-unknown-linux-gnu, and x86_64-pc-windows-msvc.
 On macOS, the engine tests confirm existing-entry protection and successful file and parent-directory sync calls.
 The x86_64-apple-darwin build, the full Linux and Windows engine builds and sync execution, and power-loss hardware tests are not confirmed.
+The staged upload area under `state_dir/uploads`, the download directory, and the publication mapping are not implemented.
 For confirmed bugs, see [issues.md](../issues.md).

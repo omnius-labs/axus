@@ -19,30 +19,39 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 
 | Term | Scope | Identifier | External form | Refers to | Deprecated aliases |
 | --- | --- | --- | --- | --- | --- |
+| Library root | daemon-api | `LibraryRoot` | `storage.library_roots` | Directory configured as readable by a publication, identified in the API by an ID | - |
+| Owner | daemon-api | `Owner` | - | The single person account that operates the daemon | `admin`, `user` |
+| Owner session | daemon-api | `OwnerSession` | `__Host-axus_session`, `axus_session`, `Authorization: Bearer` | Server-side row that proves the owner is logged in | `login state` |
+| Publication | daemon-api | `Publication` | `/publications/{id}` | The API's view of one import, from the declaration of its size and source to the committed file its ID resolves to | - |
+| Received offset | daemon-api | `Publication.received_bytes` | `receivedBytes` | Number of content bytes accepted for a publication; the staged file's length is reconciled at startup | - |
+| Source | daemon-api | `PublicationSource` | `source` | Where a publication reads its content: a staged upload or a library file | - |
+| Staged file | daemon-api | - | - | Copy of uploaded content under `state_dir/uploads` that the encoder reads and the daemon deletes | - |
+| Download directory | daemon-api | `storage.download_dir` | `storage.download_dir` | Directory in which the daemon places subscription outputs | - |
+| Subscription | daemon-api | `Subscription` | `/subscriptions/{id}` | The API's view of the work that fetches a root hash and places its output under the download directory | - |
+| cancel message | file-transfer | `Cancel` | - | FileExchanger message that retracts requested hashes whose blocks are no longer needed | - |
+| choke | file-transfer | - | - | State of not responding to a peer's block requests; judged per node, and lifting it is called unchoke | - |
+| fetch throughput | file-transfer | - | - | Received bytes per period of the blocks whose content hash matched, recorded per node ID and used to order the dialing candidates and to set the requests awaiting responses | - |
 | FileExchanger | file-transfer | `FileExchanger` | - | Component that uses NodeFinder's lookup results to establish a Session with a peer and carries blocks | - |
 | FilePublisher | file-transfer | `FilePublisher` | - | Component that converts a local file into blocks and Merkle layers and publishes it | - |
-| publish commit | file-transfer | `FilePublisherStore::commit` | - | Operation that finalizes the root hash of an uncommitted file and its stored blocks as a committed file | - |
 | Store | file-transfer | `FilePublisherStore`, `FileSubscriberStore` | - | Component that mutates metadata and block bodies and manages the consistency of creating, finalizing, and deleting output files and their persistence | - |
+| publish commit | file-transfer | `FilePublisherStore::commit` | - | Operation that finalizes the root hash of an uncommitted file and its stored blocks as a committed file | - |
 | FileSubscriber | file-transfer | `FileSubscriber` | - | Component that gathers blocks from a root hash and decodes the file | - |
 | output finalization | file-transfer | `Finalizing` → `Completed` | - | Operation that places and persists the decoded temporary output at the user's destination with a non-replacing rename and records Completed | - |
+| presence bitmap | file-transfer | `HaveMap` | - | FileExchanger message that starts the answer to a request and tells, one bit per requested hash, which blocks are held | - |
 | MerkleLayer | file-transfer | `MerkleLayer` | - | Block content that stores the hash list of child blocks and the rank of those blocks | - |
 | rank | file-transfer | `MerkleLayer.rank` | - | Level of a block in the Merkle structure; the file body blocks are rank 0 | - |
 | root hash | file-transfer | `OmniHash` | - | Content identifier that is the hash of the topmost block | - |
 | output reservation | file-transfer | - | - | Unique constraint on the subscription row that prevents other in-progress subscriptions from using the same output destination | - |
-| choke | file-transfer | - | - | State of not responding to a peer's block requests; judged per node, and lifting it is called unchoke | - |
-| status message | file-transfer | - | - | FileExchanger message that tells whether the remote's blocks are wanted and whether the remote is choked | - |
-| presence bitmap | file-transfer | `HaveMap` | - | FileExchanger message that starts the answer to a request and tells, one bit per requested hash, which blocks are held | - |
-| cancel message | file-transfer | `Cancel` | - | FileExchanger message that retracts requested hashes whose blocks are no longer needed | - |
-| tail duplication | file-transfer | - | - | Assignment of the same block to two Sessions when few blocks remain, where the first block stored completes it | endgame |
-| fetch throughput | file-transfer | - | - | Received bytes per period of the blocks whose content hash matched, recorded per node ID and used to order the dialing candidates and to set the requests awaiting responses | - |
 | committed file | file-transfer | `PublishedCommittedFile` | - | Publisher-side file whose root hash is finalized and which can be advertised to the network; identified by the pair of root hash and file name | - |
 | uncommitted file | file-transfer | `PublishedUncommittedFile` | - | Publisher-side file from import until its root hash is finalized; identified by a temporary ID | - |
-| temporary output | file-transfer | - | `.<entry name>.axus-<subscription ID>.part` | File created in the same directory as the output destination with a conventional name per subscription, into which the decoded result is written | - |
+| status message | file-transfer | - | - | FileExchanger message that tells whether the remote's blocks are wanted and whether the remote is choked | - |
 | Finalizing | file-transfer | `SubscribedFileStatus::Finalizing` | - | Subscription state from persisting the temporary output to begin finalization until reaching Completed or Failed | - |
+| tail duplication | file-transfer | - | - | Assignment of the same block to two Sessions when few blocks remain, where the first block stored completes it | endgame |
 | Task | file-transfer | `TaskDecoder`, `TaskEncoder` | - | Component that controls encoding/decoding, cancellation before finalization, and retries of sweep and output placement; distinct from the FileExchanger connection task | - |
+| temporary output | file-transfer | - | `.<entry name>.axus-<subscription ID>.part` | File created in the same directory as the output destination with a conventional name per subscription, into which the decoded result is written | - |
+| location info | node-finder | `AnnounceLocations` | - | Mapping of an AssetKey to the NodeProfiles of the nodes that advertise it | - |
 | AssetKey | node-finder | `AssetKey` | - | Identifier whose location NodeFinder looks up | file reference |
 | bootstrap node | node-finder | `bootstrap_node_profiles` | `p2p.bootstrap_nodes` | NodeProfile given by configuration and added to the known nodes at startup | - |
-| location info | node-finder | `AnnounceLocations` | - | Mapping of an AssetKey to the NodeProfiles of the nodes that advertise it | - |
 | NodeFinder | node-finder | `NodeFinder` | - | Component that exchanges known nodes and looks up the location info of AssetKeys | - |
 | known node | node-finder | `NodeFinderRepo` | - | Set of NodeProfiles saved as connection candidates | - |
 | NodeProfile | node-finder | `NodeProfile` | `axus:node/` URI | Value binding a node's public key, reachable addresses, and update time with the node's own signature | - |
@@ -57,6 +66,26 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 | sweep | storage | - | - | Reclamation that reconciles RocksDB keys and temporary outputs against SQLite rows and deletes unreferenced ones | - |
 
 ## 3. Boundaries between adjacent terms
+
+<a id="t-publication-vs-committed-file"></a>
+#### Publication and committed file
+
+**Boundary**
+A publication is the API's identity of one import; it exists before any byte is received, and its ID resolves to the committed file after the commit.
+A committed file is the network's unit, identified by the pair of root hash and file name, and it is what a subscription names.
+
+**What goes wrong if misread**
+Using a publication ID as share text gives the recipient an identifier that their node cannot look up, because the network addresses content by root hash and name.
+
+<a id="t-session-vs-owner-session"></a>
+#### Session and owner session
+
+**Boundary**
+A Session is the P2P communication channel between two nodes, established by the transport and handed to a use.
+An owner session is a row in the daemon's database that proves the operator logged in; it never travels between nodes.
+
+**What goes wrong if misread**
+Using the word session for both makes a client's login token look like something the P2P layer can establish or verify, and a code path that expects one can accept the other's identifier.
 
 <a id="t-publisher-commit-vs-output-finalization"></a>
 #### Publish commit and output finalization

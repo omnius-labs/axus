@@ -849,7 +849,7 @@ Task state transitions and failure records are updated with a condition on the e
 The Task cancels in-progress processing with a child CancellationToken, and shutdown waits for the workers.
 
 The entry points have cancel and remove.
-The publisher side deletes uncommitted files on commit and cancel; the Receiving and Canceled states of §4.1 and the received offset are not implemented.
+The publisher side creates a Receiving row before its content, advances the received offset, commits at the declared size, and keeps a Canceled row until it is removed.
 Importing to the same path and file name of a Failed file deletes the old row and creates a Pending row of a new temporary ID in one SQLite transaction.
 Even if the reclamation of the old attempt's blocks is delayed, the new attempt's blocks are not deleted.
 The subscriber side allows subscriptions to the same root hash and reflects shared-block progress into all Downloading subscriptions.
@@ -886,6 +886,6 @@ The answering side builds the bitmap from an existence check on both Stores and 
 The requesting side releases the absent hashes, stops asking the node for those ranks for the period, assigns a block to two Sessions in the tail, and retracts its copy with a cancel once the other Session saved the block; a block that arrives after the retraction is not blamed and is stored when it is still needed.
 The fetch throughput of §5.6 is implemented: the received bytes of the blocks whose content hash matched are recorded per node ID over the period, the dialing candidates are ordered by it with a node without a record at a random position, and a slow node keeps fewer requests awaiting responses.
 The per-request retraction of §5.5 is implemented: a request whose last answer is older than the soft deadline is retracted with a cancel and its blocks go back to the assignment, while the Session stays open and is closed only at the request deadline.
-There is no REST API to start publishing and subscribing.
+The REST API starts publishing and subscribing.
 
 For confirmed bugs, see [issues.md](../issues.md).

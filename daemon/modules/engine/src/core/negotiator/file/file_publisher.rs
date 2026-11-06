@@ -61,7 +61,11 @@ impl FilePublisher {
     }
 
     pub async fn append_content(&self, id: &str, offset: i64, bytes: Bytes) -> Result<AppendContentResult> {
-        self.store.append_content(id, offset, bytes).await
+        let result = self.store.append_content(id, offset, bytes).await?;
+        if matches!(result, AppendContentResult::Accepted { .. }) {
+            self.task_encoder.wake();
+        }
+        Ok(result)
     }
 
     pub async fn get_publication(&self, id: &str) -> Result<Option<PublicationView>> {

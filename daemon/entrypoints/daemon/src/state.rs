@@ -19,13 +19,6 @@ pub struct DaemonState {
 
 impl DaemonState {
     pub async fn new(conf: DaemonConfig) -> Result<Self> {
-        let state_dir = conf.core.state_dir.clone();
-        tokio::fs::create_dir_all(&state_dir).await?;
-        tokio::fs::create_dir_all(state_dir.join("uploads")).await?;
-        tokio::fs::create_dir_all(&conf.storage.download_dir).await?;
-
-        let temp_dir = TempDir::new()?;
-
         let advertise_addrs = conf
             .p2p
             .advertise_addrs
@@ -44,7 +37,21 @@ impl DaemonState {
             use_upnp: conf.p2p.use_upnp,
             ..Default::default()
         };
+        Self::build(conf, option).await
+    }
 
+    #[cfg(test)]
+    pub async fn for_test(conf: DaemonConfig, option: AxusServiceOption) -> Result<Self> {
+        Self::build(conf, option).await
+    }
+
+    async fn build(conf: DaemonConfig, option: AxusServiceOption) -> Result<Self> {
+        let state_dir = conf.core.state_dir.clone();
+        tokio::fs::create_dir_all(&state_dir).await?;
+        tokio::fs::create_dir_all(state_dir.join("uploads")).await?;
+        tokio::fs::create_dir_all(&conf.storage.download_dir).await?;
+
+        let temp_dir = TempDir::new()?;
         let axus_service = AxusService::new(&state_dir, &conf.p2p.listen_addr, temp_dir.path(), option).await?;
 
         Ok(Self { conf, axus_service, temp_dir })

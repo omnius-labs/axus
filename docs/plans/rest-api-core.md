@@ -91,7 +91,7 @@ The encoder skips `Receiving`, and the commit writes the publication mapping in 
 | 5 | Declare the contract in `openapi.yaml` and regenerate the interface | - | Complete |
 | 6 | Implement the publication handlers | 2, 5 | In progress |
 | 7 | Implement the subscription handlers and static serving | 3, 5 | In progress |
-| 8 | Add integration tests through the router | 6, 7 | Not started |
+| 8 | Add integration tests through the router | 6, 7 | Complete |
 | 9 | Update the README, the sample configuration, and the design status | 6, 7 | In progress |
 
 <a id="s-1"></a>

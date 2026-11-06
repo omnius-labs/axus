@@ -26,8 +26,8 @@ use crate::{
     core::{
         identity::NodeIdentity,
         negotiator::{
-            AppendContentResult, FileExchanger, FileExchangerIntervals, FileExchangerOption, NodeFinder, NodeFinderIntervals, NodeFinderLocationFinder, NodeFinderOption,
-            NodeFinderRepo, NodeProfileFetcherImpl, Publication, PublicationRemoveResult, PublicationView, SubscribedFile,
+            AppendContentResult, FileExchanger, FileExchangerIntervals, FileExchangerOption, NodeFinder, NodeFinderLocationFinder, NodeFinderOption, NodeFinderRepo,
+            NodeProfileFetcherImpl, Publication, PublicationRemoveResult, PublicationView, SubscribedFile,
         },
         session::{
             SessionAccepter, SessionConnector,
@@ -244,7 +244,13 @@ impl AxusService {
         self.file_exchanger.shutdown().await;
         self.node_finder.shutdown().await;
     }
+
+    pub fn my_node_profile(&self) -> NodeProfile {
+        self.node_finder.my_node_profile()
+    }
 }
+
+pub use crate::core::negotiator::NodeFinderIntervals;
 
 #[cfg(test)]
 mod tests {

@@ -8,12 +8,13 @@ use omnius_axus_engine::{
 };
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
-use crate::{config::DaemonConfig, owner::OwnerStore, prelude::*};
+use crate::{config::DaemonConfig, library::LibraryRoots, owner::OwnerStore, prelude::*};
 
 pub struct DaemonState {
     pub conf: DaemonConfig,
     axus_service: AxusService,
     owner: OwnerStore,
+    library: LibraryRoots,
     #[allow(unused)]
     temp_dir: TempDir,
 }
@@ -54,12 +55,14 @@ impl DaemonState {
 
         let temp_dir = TempDir::new()?;
         let owner = OwnerStore::open(&state_dir.join("owner")).await?;
+        let library = LibraryRoots::open(&conf.storage.library_roots).await?;
         let axus_service = AxusService::new(&state_dir, &conf.p2p.listen_addr, temp_dir.path(), option).await?;
 
         Ok(Self {
             conf,
             axus_service,
             owner,
+            library,
             temp_dir,
         })
     }
@@ -74,6 +77,10 @@ impl DaemonState {
 
     pub fn owner(&self) -> &OwnerStore {
         &self.owner
+    }
+
+    pub fn library(&self) -> &LibraryRoots {
+        &self.library
     }
 
     pub fn uploads_dir(&self) -> std::path::PathBuf {
@@ -113,6 +120,7 @@ mod tests {
             },
             storage: StorageConfig {
                 download_dir: state_dir.path().join("downloads"),
+                library_roots: vec![],
             },
             web: WebConfig { dir: None, insecure_cookie: true },
         };
@@ -147,6 +155,7 @@ mod tests {
             },
             storage: StorageConfig {
                 download_dir: state_dir.path().join("downloads"),
+                library_roots: vec![],
             },
             web: WebConfig { dir: None, insecure_cookie: true },
         };
@@ -180,6 +189,7 @@ mod tests {
             },
             storage: StorageConfig {
                 download_dir: state_dir.path().join("downloads"),
+                library_roots: vec![],
             },
             web: WebConfig { dir: None, insecure_cookie: true },
         };

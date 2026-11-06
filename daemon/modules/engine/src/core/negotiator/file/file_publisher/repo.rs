@@ -105,6 +105,7 @@ CREATE INDEX IF NOT EXISTS index_file_id_rank_index_for_uncommitted_blocks ON un
 ALTER TABLE uncommitted_files ADD COLUMN size INTEGER;
 ALTER TABLE uncommitted_files ADD COLUMN received_bytes INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE uncommitted_files ADD COLUMN source_owned INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE uncommitted_files ADD COLUMN source_modified_at INTEGER;
 CREATE TABLE IF NOT EXISTS publication_records (
     publication_id TEXT NOT NULL PRIMARY KEY,
     root_hash TEXT NOT NULL,
@@ -138,8 +139,8 @@ CREATE INDEX IF NOT EXISTS index_root_hash_file_name_for_publication_records ON 
         let row = PublishedUncommittedFileRow::from(file)?;
         sqlx::query(
             r#"
-INSERT INTO uncommitted_files (id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, priority, status, failed_reason, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO uncommitted_files (id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, source_modified_at, priority, status, failed_reason, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#,
         )
         .bind(row.id)
@@ -150,6 +151,7 @@ INSERT INTO uncommitted_files (id, file_path, file_name, size, received_bytes, b
         .bind(row.block_size)
         .bind(row.attrs)
         .bind(row.source_owned)
+        .bind(row.source_modified_at)
         .bind(row.priority)
         .bind(row.status)
         .bind(row.failed_reason)
@@ -563,7 +565,7 @@ SELECT COUNT(1)
     pub async fn get_uncommitted_files(&self) -> Result<Vec<PublishedUncommittedFile>> {
         let res: Vec<PublishedUncommittedFileRow> = sqlx::query_as(
             r#"
-SELECT id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, priority, status, failed_reason, created_at, updated_at
+SELECT id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, source_modified_at, priority, status, failed_reason, created_at, updated_at
     FROM uncommitted_files
 "#,
         )
@@ -577,7 +579,7 @@ SELECT id, file_path, file_name, size, received_bytes, block_size, attrs, source
     pub async fn find_uncommitted_file_by_encoding_next(&self) -> Result<Option<PublishedUncommittedFile>> {
         let res: Option<PublishedUncommittedFileRow> = sqlx::query_as(
             r#"
-SELECT id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, priority, status, failed_reason, created_at, updated_at
+SELECT id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, source_modified_at, priority, status, failed_reason, created_at, updated_at
     FROM uncommitted_files
     WHERE status = 'Pending'
     ORDER BY priority ASC, created_at ASC
@@ -593,7 +595,7 @@ SELECT id, file_path, file_name, size, received_bytes, block_size, attrs, source
     pub async fn find_uncommitted_file_by_id(&self, id: &str) -> Result<Option<PublishedUncommittedFile>> {
         let res: Option<PublishedUncommittedFileRow> = sqlx::query_as(
             r#"
-SELECT id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, priority, status, failed_reason, created_at, updated_at
+SELECT id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, source_modified_at, priority, status, failed_reason, created_at, updated_at
     FROM uncommitted_files
     WHERE id = ?
 "#,
@@ -609,8 +611,8 @@ SELECT id, file_path, file_name, size, received_bytes, block_size, attrs, source
         let row = PublishedUncommittedFileRow::from(item)?;
         sqlx::query(
             r#"
-INSERT INTO uncommitted_files (id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, priority, status, failed_reason, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO uncommitted_files (id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, source_modified_at, priority, status, failed_reason, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#,
         )
         .bind(row.id)
@@ -621,6 +623,7 @@ INSERT INTO uncommitted_files (id, file_path, file_name, size, received_bytes, b
         .bind(row.block_size)
         .bind(row.attrs)
         .bind(row.source_owned)
+        .bind(row.source_modified_at)
         .bind(row.priority)
         .bind(row.status)
         .bind(row.failed_reason)
@@ -996,6 +999,7 @@ struct PublishedUncommittedFileRow {
     pub block_size: u32,
     pub attrs: Option<String>,
     pub source_owned: bool,
+    pub source_modified_at: Option<i64>,
     pub priority: i64,
     pub status: PublishedUncommittedFileStatus,
     pub failed_reason: Option<String>,
@@ -1014,6 +1018,7 @@ impl PublishedUncommittedFileRow {
             block_size: self.block_size,
             attrs: self.attrs,
             source_owned: self.source_owned,
+            source_modified_at: self.source_modified_at,
             priority: self.priority,
             status: self.status,
             failed_reason: self.failed_reason,
@@ -1033,6 +1038,7 @@ impl PublishedUncommittedFileRow {
             block_size: item.block_size,
             attrs: item.attrs.as_ref().map(|n| n.to_string()),
             source_owned: item.source_owned,
+            source_modified_at: item.source_modified_at,
             priority: item.priority,
             status: item.status.clone(),
             failed_reason: item.failed_reason.as_ref().map(|n| n.to_string()),
@@ -1242,6 +1248,7 @@ mod tests {
             block_size: 1024,
             attrs: Some("attrs".to_string()),
             source_owned: false,
+            source_modified_at: None,
             priority: 0,
             status: PublishedUncommittedFileStatus::Pending,
             failed_reason: None,

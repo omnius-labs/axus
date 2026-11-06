@@ -506,6 +506,7 @@ Executor assembles the config, file lock, signal handling, and HTTP server, and 
 The API and P2P have separate listen addresses.
 The publication and subscription resources, the staged upload, the download directory, the static serving, the owner and session, and the configuration settings described in this document are implemented.
 A transfer from an upload on one daemon to a download on another, the setup, login, cookie, bearer, and origin checks, and the resume of an upload and its session across a restart are confirmed through the router tests.
-The library source and the browser client are not implemented.
+A publication can also read a configured library root, and the daemon lists the roots and their entries.
+The browser client is not implemented.
 
 For confirmed bugs, see [issues.md](../issues.md).

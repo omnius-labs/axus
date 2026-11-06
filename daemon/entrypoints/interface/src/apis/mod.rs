@@ -1,5 +1,6 @@
 pub mod authentication;
 pub mod health;
+pub mod library;
 pub mod publications;
 pub mod subscriptions;
 

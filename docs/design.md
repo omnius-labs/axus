@@ -163,8 +163,7 @@ The following order is tentative; only the dependencies in the table must be pre
 
 | # | Item | Prerequisite dependency |
 | --- | --- | --- |
-| 1 | Let a publication read a configured library root | [daemon-api.md §5.3](./design/daemon-api.md#53-sources-of-a-publication) |
-| 2 | Add the browser client | 1 |
-| 3 | Define Web of Trust, Profile, and memo in order | [trust-security.md §4](./design/trust-security.md#4-design-decisions) |
+| 1 | Add the browser client | [web-client.md](./design/web-client.md#1-about-this-document) |
+| 2 | Define Web of Trust, Profile, and memo in order | [trust-security.md §4](./design/trust-security.md#4-design-decisions) |
 
 For confirmed bugs and fix directions, see [issues.md](./issues.md).

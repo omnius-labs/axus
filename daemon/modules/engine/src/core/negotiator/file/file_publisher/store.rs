@@ -118,6 +118,7 @@ impl FilePublisherStore {
             block_size,
             attrs: attrs.map(str::to_string),
             source_owned: false,
+            source_modified_at: None,
             priority,
             status: PublishedUncommittedFileStatus::Pending,
             failed_reason: None,
@@ -176,12 +177,55 @@ impl FilePublisherStore {
             block_size,
             attrs: attrs.map(str::to_string),
             source_owned: true,
+            source_modified_at: None,
             priority,
             status: if size == 0 {
                 PublishedUncommittedFileStatus::Pending
             } else {
                 PublishedUncommittedFileStatus::Receiving
             },
+            failed_reason: None,
+            created_at: now,
+            updated_at: now,
+        };
+        self.repo.insert_uncommitted_file(&file).await?;
+        Ok(file)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn import_library(&self, file_path: &str, file_name: &str, size: i64, modified_at: i64, block_size: u32) -> Result<PublishedUncommittedFile> {
+        if size < 0 {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("file size must not be negative"));
+        }
+        if block_size == 0 || block_size > MAX_BLOCK_LENGTH {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message(format!("block size must be between 1 and {MAX_BLOCK_LENGTH} bytes")));
+        }
+        let _guard = self.lock.lock().await;
+        let active = self.repo.get_uncommitted_files().await?.into_iter().any(|file| {
+            file.file_path == file_path
+                && file.file_name == file_name
+                && matches!(
+                    file.status,
+                    PublishedUncommittedFileStatus::Receiving | PublishedUncommittedFileStatus::Pending | PublishedUncommittedFileStatus::Processing
+                )
+        });
+        if active {
+            return Err(Error::new(ErrorKind::AlreadyExists).with_message("the library file is already being published"));
+        }
+        let id = self.tsid_provider.lock().create().to_string();
+        let now = self.clock.now();
+        let file = PublishedUncommittedFile {
+            id,
+            file_path: file_path.to_string(),
+            file_name: file_name.to_string(),
+            size: Some(size),
+            received_bytes: size,
+            block_size,
+            attrs: None,
+            source_owned: false,
+            source_modified_at: Some(modified_at),
+            priority: 0,
+            status: PublishedUncommittedFileStatus::Pending,
             failed_reason: None,
             created_at: now,
             updated_at: now,
@@ -474,6 +518,13 @@ impl FilePublisherStore {
     }
 
     async fn commit_locked(&self, file: &PublishedUncommittedFile, root_hash: &OmniHash, blocks: &[PublishedUncommittedBlock]) -> Result<bool> {
+        if !file.source_owned {
+            let metadata = tokio::fs::metadata(&file.file_path).await?;
+            let modified_at = Self::modified_at(&metadata);
+            if metadata.len() != u64::try_from(file.size.unwrap_or(-1)).unwrap_or(u64::MAX) || Some(modified_at) != file.source_modified_at {
+                return Err(Error::new(ErrorKind::InvalidFormat).with_message("the library file changed during the import"));
+            }
+        }
         if !self
             .repo
             .find_uncommitted_file_by_id(&file.id)
@@ -524,6 +575,15 @@ impl FilePublisherStore {
             self.repo.commit_file_with_blocks(&committed, &committed_blocks, &file.id, file.size.unwrap_or(0)).await?;
         }
         Ok(true)
+    }
+
+    fn modified_at(metadata: &std::fs::Metadata) -> i64 {
+        metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs() as i64 * 1_000_000_000 + i64::from(duration.subsec_nanos()))
+            .unwrap_or(0)
     }
 
     pub async fn remove(&self, root_hash: &OmniHash, file_name: &str) -> Result<()> {

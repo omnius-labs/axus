@@ -25,7 +25,7 @@ use omnius_axus_interface::{
     apis::{
         authentication as authentication_api,
         health::{GetHealthResponse, Health},
-        publications as publications_api, subscriptions as subscriptions_api,
+        library as library_api, publications as publications_api, subscriptions as subscriptions_api,
     },
     models,
 };
@@ -115,6 +115,16 @@ impl From<std::io::Error> for ApiError {
     }
 }
 
+impl From<crate::error::Error> for ApiError {
+    fn from(error: crate::error::Error) -> Self {
+        let message = omnius_core_base::error::OmniError::message(&error).unwrap_or("rejected").to_string();
+        match omnius_core_base::error::OmniError::kind(&error) {
+            crate::error::ErrorKind::NotFound => Self::not_found(message),
+            _ => Self::invalid_request(message),
+        }
+    }
+}
+
 impl From<omnius_axus_engine::Error> for ApiError {
     fn from(error: omnius_axus_engine::Error) -> Self {
         let message = error.message().unwrap_or("rejected").to_string();
@@ -158,6 +168,11 @@ impl_from_api_error!(publications_api::CancelPublicationResponse {
 impl_from_api_error!(publications_api::DeletePublicationResponse {
     StatusCode::NOT_FOUND => Status404_TheResourceDoesNotExist,
     StatusCode::CONFLICT => Status409_TheRequestConflictsWithTheCurrentState,
+});
+impl_from_api_error!(library_api::ListLibraryRootsResponse {});
+impl_from_api_error!(library_api::ListLibraryEntriesResponse {
+    StatusCode::BAD_REQUEST => Status400_TheRequestIsMalformed,
+    StatusCode::NOT_FOUND => Status404_TheResourceDoesNotExist,
 });
 impl_from_api_error!(subscriptions_api::CreateSubscriptionResponse {
     StatusCode::BAD_REQUEST => Status400_TheRequestIsMalformed,
@@ -244,15 +259,35 @@ impl publications_api::Publications for ApiServer {
         cookies: &CookieJar,
         body: &models::CreatePublicationRequest,
     ) -> std::result::Result<publications_api::CreatePublicationResponse, ()> {
-        let result = async {
-            FileName::validate(&body.file_name)?;
-            if body.size < 0 {
+        let result: std::result::Result<models::Publication, ApiError> = async {
+            let source = body.source.as_ref();
+            if source.is_some_and(|source| source.kind == "library") {
+                let root_id = source
+                    .and_then(|source| source.root_id.as_deref())
+                    .ok_or_else(|| ApiError::invalid_request("rootId is required for a library source"))?;
+                let relative = source.and_then(|source| source.path.as_deref()).unwrap_or_default();
+                let (path, size, modified_at) = self.state.library().resolve_file(root_id, relative)?;
+                let file_name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| ApiError::invalid_request("the library file name is not UTF-8"))?;
+                let publication = self
+                    .state
+                    .service()
+                    .create_library_publication(&path.to_string_lossy(), file_name, size, modified_at)
+                    .await?;
+                return Ok(PublicationModel::from_engine(publication));
+            }
+            let file_name = body.file_name.as_deref().ok_or_else(|| ApiError::invalid_request("fileName is required"))?;
+            let size = body.size.ok_or_else(|| ApiError::invalid_request("size is required"))?;
+            FileName::validate(file_name)?;
+            if size < 0 {
                 return Err(ApiError::invalid_request("the declared size must not be negative"));
             }
-            if self.state.conf.api.max_upload_size > 0 && body.size > self.state.conf.api.max_upload_size {
+            if self.state.conf.api.max_upload_size > 0 && size > self.state.conf.api.max_upload_size {
                 return Err(ApiError::payload_too_large("the declared size is over api.max_upload_size"));
             }
-            let publication = self.state.service().create_publication(&self.state.uploads_dir(), &body.file_name, body.size).await?;
+            let publication = self.state.service().create_publication(&self.state.uploads_dir(), file_name, size).await?;
             Ok(PublicationModel::from_engine(publication))
         }
         .await;
@@ -375,6 +410,51 @@ impl authentication_api::Authentication for ApiServer {
     /// [`ApiServer::setup_status`] answers this operation in front of the generated router.
     async fn get_setup_status(&self, method: &Method, host: &Host, cookies: &CookieJar) -> std::result::Result<authentication_api::GetSetupStatusResponse, ()> {
         Err(())
+    }
+}
+
+#[allow(unused_variables)]
+#[async_trait]
+impl library_api::Library for ApiServer {
+    async fn list_library_roots(&self, method: &Method, host: &Host, cookies: &CookieJar) -> std::result::Result<library_api::ListLibraryRootsResponse, ()> {
+        let roots = self
+            .state
+            .library()
+            .list()
+            .iter()
+            .map(|root| models::LibraryRoot::new(root.id.clone(), root.name.clone()))
+            .collect();
+        Ok(library_api::ListLibraryRootsResponse::Status200_LibraryRoots(models::LibraryRootList::new(roots)))
+    }
+
+    async fn list_library_entries(
+        &self,
+        method: &Method,
+        host: &Host,
+        cookies: &CookieJar,
+        path_params: &models::ListLibraryEntriesPathParams,
+        query_params: &models::ListLibraryEntriesQueryParams,
+    ) -> std::result::Result<library_api::ListLibraryEntriesResponse, ()> {
+        match self.state.library().entries(&path_params.root_id, query_params.path.as_deref().unwrap_or_default()).await {
+            Ok(entries) => {
+                let entries = entries
+                    .into_iter()
+                    .map(|entry| {
+                        let kind = match entry.kind {
+                            crate::library::EntryKind::File => "file",
+                            crate::library::EntryKind::Directory => "directory",
+                        };
+                        let mut model = models::LibraryEntry::new(entry.name, kind.to_string());
+                        model.size = Some(entry.size);
+                        model
+                    })
+                    .collect();
+                Ok(library_api::ListLibraryEntriesResponse::Status200_EntriesOfTheDirectory(models::LibraryEntryList::new(
+                    entries,
+                )))
+            }
+            Err(error) => Ok(ApiError::from(error).into()),
+        }
     }
 }
 
@@ -892,10 +972,10 @@ mod tests {
 
     impl TestDaemon {
         async fn start() -> TestResult<Self> {
-            Self::start_with(vec![], None).await
+            Self::start_with(vec![], None, vec![]).await
         }
 
-        async fn start_with(bootstrap_nodes: Vec<NodeProfile>, web_dir: Option<&Path>) -> TestResult<Self> {
+        async fn start_with(bootstrap_nodes: Vec<NodeProfile>, web_dir: Option<&Path>, library_roots: Vec<std::path::PathBuf>) -> TestResult<Self> {
             let dir = tempfile::tempdir()?;
             let port = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
             let conf = DaemonConfig {
@@ -918,6 +998,7 @@ mod tests {
                 },
                 storage: StorageConfig {
                     download_dir: dir.path().join("downloads"),
+                    library_roots,
                 },
                 web: WebConfig {
                     dir: web_dir.map(Path::to_path_buf),
@@ -989,6 +1070,7 @@ mod tests {
                 },
                 storage: StorageConfig {
                     download_dir: dir.path().join("downloads"),
+                    library_roots: vec![],
                 },
                 web: WebConfig { dir: None, insecure_cookie: true },
             };
@@ -1159,7 +1241,7 @@ mod tests {
     #[tokio::test]
     async fn two_daemons_transfer_a_file_through_the_api() -> TestResult {
         let publisher = TestDaemon::start().await?;
-        let subscriber = TestDaemon::start_with(vec![publisher.state.service().my_node_profile().clone()], None).await?;
+        let subscriber = TestDaemon::start_with(vec![publisher.state.service().my_node_profile().clone()], None, vec![]).await?;
         let content: Vec<u8> = (0..3 * 1024 * 1024 + 17).map(|i: u32| (i % 251) as u8).collect();
 
         let publication = publisher.create_publication("movie.bin", content.len()).await?;
@@ -1208,7 +1290,7 @@ mod tests {
     async fn static_serving_falls_back_to_index() -> TestResult {
         let web = tempfile::tempdir()?;
         std::fs::write(web.path().join("index.html"), b"<html>axus</html>")?;
-        let daemon = TestDaemon::start_with(vec![], Some(web.path())).await?;
+        let daemon = TestDaemon::start_with(vec![], Some(web.path()), vec![]).await?;
         let (status, body) = daemon.request("GET", "/publications/1", Body::empty()).await?;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.as_ref(), b"<html>axus</html>");
@@ -1350,6 +1432,45 @@ mod tests {
         let committed = daemon.wait_status(&format!("/api/v1/publications/{id}"), "Committed").await?;
         assert!(committed["rootHash"].is_string());
 
+        daemon.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_library_file_publishes_without_an_upload() -> TestResult {
+        let library = tempfile::tempdir()?;
+        std::fs::write(library.path().join("movie.bin"), b"a library file")?;
+        let daemon = TestDaemon::start_with(vec![], None, vec![library.path().to_path_buf()]).await?;
+
+        let (status, roots) = daemon.get_json("/api/v1/library/roots").await?;
+        assert_eq!(status, StatusCode::OK);
+        let root_id = roots["roots"][0]["id"].as_str().unwrap();
+        let (status, entries) = daemon.get_json(&format!("/api/v1/library/roots/{root_id}/entries")).await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(entries["entries"][0]["name"], "movie.bin");
+        assert_eq!(entries["entries"][0]["kind"], "file");
+
+        let (status, _) = daemon
+            .request_json(
+                "POST",
+                "/api/v1/publications",
+                &json!({"source": {"kind": "library", "rootId": root_id, "path": "movie.bin"}}),
+            )
+            .await?;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let (status, _) = daemon
+            .request_json(
+                "POST",
+                "/api/v1/publications",
+                &json!({"source": {"kind": "library", "rootId": root_id, "path": "../movie.bin"}}),
+            )
+            .await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (_, list) = daemon.get_json("/api/v1/publications").await?;
+        let id = list["publications"][0]["id"].as_str().unwrap();
+        let committed = daemon.wait_status(&format!("/api/v1/publications/{id}"), "Committed").await?;
+        assert!(committed["rootHash"].is_string());
         daemon.stop().await;
         Ok(())
     }

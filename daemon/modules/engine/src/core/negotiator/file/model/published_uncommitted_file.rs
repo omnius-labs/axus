@@ -12,6 +12,7 @@ pub struct PublishedUncommittedFile {
     pub block_size: u32,
     pub attrs: Option<String>,
     pub source_owned: bool,
+    pub source_modified_at: Option<i64>,
     pub priority: i64,
     pub status: PublishedUncommittedFileStatus,
     pub failed_reason: Option<String>,

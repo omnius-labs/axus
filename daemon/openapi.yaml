@@ -20,6 +20,8 @@ tags:
       description: Files this node fetches from the network.
     - name: Authentication
       description: The owner and the sessions that prove a login.
+    - name: Library
+      description: Files on the daemon's host that a publication may read.
 
 paths:
     /health:
@@ -451,8 +453,57 @@ paths:
                 "500":
                     $ref: "#/components/responses/InternalServerError"
 
+    /library/roots:
+        get:
+            tags:
+                - Library
+            summary: List the configured library roots
+            operationId: listLibraryRoots
+            responses:
+                "200":
+                    description: Library roots.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/LibraryRootList"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /library/roots/{rootId}/entries:
+        get:
+            tags:
+                - Library
+            summary: List one directory of a library root
+            operationId: listLibraryEntries
+            parameters:
+                - $ref: "#/components/parameters/LibraryRootIdPath"
+                - name: path
+                  in: query
+                  required: false
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Entries of the directory.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/LibraryEntryList"
+                "400":
+                    $ref: "#/components/responses/BadRequest"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
 components:
     parameters:
+        LibraryRootIdPath:
+            name: rootId
+            in: path
+            required: true
+            schema:
+                type: string
         PublicationIdPath:
             name: publicationId
             in: path
@@ -579,16 +630,81 @@ components:
 
         CreatePublicationRequest:
             type: object
-            required:
-                - fileName
-                - size
             properties:
                 fileName:
                     type: string
+                    description: Required for an upload source.
                 size:
                     type: integer
                     format: int64
-                    description: The final size in bytes, which is not negative.
+                    description: The final size in bytes, required for an upload source.
+                source:
+                    $ref: "#/components/schemas/PublicationSource"
+
+        PublicationSource:
+            type: object
+            required:
+                - kind
+            properties:
+                kind:
+                    type: string
+                    enum:
+                        - upload
+                        - library
+                rootId:
+                    type: string
+                    description: The library root, required when kind is library.
+                path:
+                    type: string
+                    description: The path inside the root, required when kind is library.
+
+        LibraryRootList:
+            type: object
+            required:
+                - roots
+            properties:
+                roots:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/LibraryRoot"
+
+        LibraryRoot:
+            type: object
+            required:
+                - id
+                - name
+            properties:
+                id:
+                    type: string
+                name:
+                    type: string
+
+        LibraryEntryList:
+            type: object
+            required:
+                - entries
+            properties:
+                entries:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/LibraryEntry"
+
+        LibraryEntry:
+            type: object
+            required:
+                - name
+                - kind
+            properties:
+                name:
+                    type: string
+                kind:
+                    type: string
+                    enum:
+                        - file
+                        - directory
+                size:
+                    type: integer
+                    format: int64
 
         Publication:
             type: object

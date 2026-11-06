@@ -37,7 +37,5 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 | --- | --- |
 | No REST API to start publishing and subscribing | [file-transfer.md](./design/file-transfer.md#7-current-status-and-remaining-work) |
 | No NodeFinder active lookup | [node-finder.md](./design/node-finder.md#6-design-decisions) |
-| REST API reach and authentication undecided | [daemon-api.md](./design/daemon-api.md#reach-and-authentication-of-the-rest-api) |
 | Web of Trust not designed | [trust-security.md](./design/trust-security.md#4-design-decisions) |
 | Profile and memo not implemented | [profile-memo.md](./design/profile-memo.md#5-current-status-and-remaining-work) |
-| Long-running REST operation representation undecided | [daemon-api.md](./design/daemon-api.md#5-design-decisions) |

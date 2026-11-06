@@ -16,7 +16,8 @@ This document assumes the vocabulary of [terms.md](./terms.md#2-terminology). Te
 | [knowledge.md](./knowledge.md) | Confirmed, sourced external knowledge about depends and the OS |
 | [plans.md](./plans.md) | List of in-progress implementation plans and their dependencies |
 | [reviews.md](./reviews.md) | History of reviews and the transcription state of their findings |
-| [daemon-api.md](./design/daemon-api.md#1-about-this-document) | Lifecycle of the daemon, configuration boundaries, REST API, and OpenAPI generation |
+| [daemon-api.md](./design/daemon-api.md#1-about-this-document) | Lifecycle of the daemon, configuration boundaries, REST resources, authentication, static serving, reach |
+| [web-client.md](./design/web-client.md#1-about-this-document) | Screens, routes, polling, and the build of the browser client |
 | [rocketpack.md](./design/rocketpack.md#1-about-this-document) | Generation of RocketPack types, migration conventions of the wire format |
 | [session.md](./design/session.md#1-about-this-document) | transport, Session establishment, use separation, shutdown |
 | [node-finder.md](./design/node-finder.md#1-about-this-document) | Node lookup, information propagation, distance calculation, lookup state |
@@ -44,16 +45,18 @@ To find out what runs now, read §6 first; for concern-specific details, read th
 
 Axus is a P2P file distribution service that runs on personal servers and PCs.
 It is developed as open source, with the aims of enabling safe and cheap file sharing between individuals and removing the single point of failure in BitTorrent search.
-The daemon combines, in one process, one node's network connections, node lookup, file encoding and decoding, persistent state, and the REST API for local clients.
+The daemon combines, in one process, one node's network connections, node lookup, file encoding and decoding, persistent state, and the REST API and browser client it serves on one origin.
+One operator runs the node on an always-on host and operates it from a browser on the same LAN or through a VPN.
 
 ### 2.1 Out of scope
 
-- The GUI that operates the daemon and its screen transitions are not covered.
+- TLS termination, certificate issuance, and reverse-proxy configuration are not covered; the API is reached over plain HTTP on the LAN or through a VPN.
+- Multiple operators and roles are not covered; the daemon has one owner.
 - The operational infrastructure, including distribution, monitoring, and backup, is not covered.
 - The internal design of `core-rs` is not covered; only the contract as seen from Axus is.
 - The complete wire format of the REST API and RocketPack is left to each source of truth.
 
-Keeping these out of scope means the design documents carry no client UI, deployment topology, or copies of externally defined formats.
+Keeping these out of scope means the design documents carry no certificate lifecycle, no permission model, no deployment topology, and no copies of externally defined formats.
 
 ## 3. Overall structure
 
@@ -65,6 +68,7 @@ Keeping these out of scope means the design documents carry no client UI, deploy
 | [daemon/entrypoints/interface](../daemon/entrypoints/interface) | `omnius-axus-interface` | axum router and types generated from OpenAPI; not edited by hand |
 | [daemon/modules/engine](../daemon/modules/engine) | `omnius-axus-engine` | Session, node lookup, file transfer, persistence |
 | [daemon/refs/core-rs](../daemon/refs/core-rs) | `omnius-core-*` | Shared foundations: time, IDs, signatures, serialization, migration |
+| `ui-web/` | (none) | Vite build of the browser client; served by the daemon |
 
 `daemon/` is the root of the Cargo workspace and builds the required core-rs crates directly as workspace members.
 
@@ -74,7 +78,8 @@ Responsibilities are passed one-way from the client down to P2P communication.
 
 ```mermaid
 flowchart TD
-    Client[Local client]
+    Client[Browser client]
+    Web[ui-web build]
     Api[ApiServer]
     State[DaemonState]
     Service[AxusService]
@@ -89,6 +94,7 @@ flowchart TD
     Blocks[(RocksDB)]
 
     Client --> Api
+    Api --> Web
     Api --> State
     State --> Service
     Service --> Finder
@@ -107,6 +113,7 @@ flowchart TD
     Subscriber --> Blocks
 ```
 
+The client and the API share one origin: the daemon serves the build output and the REST routes from the same listener, which is what keeps CORS out of the design.
 The API layer knows the engine, but NodeFinder does not know FilePublisher or FileSubscriber and returns only lookup results.
 This dependency direction lets the lookup rules and the file semantics change independently.
 
@@ -115,6 +122,7 @@ This dependency direction lets the lookup rules and the file semantics change in
 | Concern | Owning design document | Boundary with other concerns |
 | --- | --- | --- |
 | daemon and REST API | [daemon-api.md](./design/daemon-api.md#1-about-this-document) | Owns the engine and external contracts; no P2P protocol |
+| browser client | [web-client.md](./design/web-client.md#1-about-this-document) | Renders the API's resources; owns no transfer logic or path |
 | RocketPack types | [rocketpack.md](./design/rocketpack.md#1-about-this-document) | Source of truth for wire types; no compiler internal design |
 | transport and Session | [session.md](./design/session.md#1-about-this-document) | Authenticates connections and hands them to a use; does not interpret lookup or file messages |
 | NodeFinder | [node-finder.md](./design/node-finder.md#1-about-this-document) | Handles the AssetKey-to-NodeProfile mapping; does not interpret file content |
@@ -147,6 +155,7 @@ Concern-local deferred decisions live in the "Design decisions" sections of each
 Each detailed design document is the source of truth for the implementation status of its concern.
 Overall, the daemon startup path owns down to FileExchanger and connects to other daemons starting from the configured bootstrap nodes, but the REST API that starts file publishing and subscription is not defined, so the end-to-end path is not complete.
 From file publishing to decoding, including P2P transfer between daemons over loopback TCP, is confirmed by engine-internal tests.
+The browser client does not exist.
 
 ### 6.2 Roadmap
 
@@ -154,7 +163,10 @@ The following order is tentative; only the dependencies in the table must be pre
 
 | # | Item | Prerequisite dependency |
 | --- | --- | --- |
-| 1 | Define the REST API for publish, subscribe, progress, and cancel | Judgment on long-running operations and reach in [daemon-api.md](./design/daemon-api.md#52-deferred) |
-| 2 | Define Web of Trust, Profile, and memo in order | [trust-security.md](./design/trust-security.md#4-design-decisions) |
+| 1 | Serve publications and subscriptions through the REST API, with staged uploads, the download directory, and loopback-only listening | [daemon-api.md §5](./design/daemon-api.md#5-rest-resources) |
+| 2 | Require an owner session on every route except health, setup, and login, and allow a non-loopback listen address | 1 |
+| 3 | Let a publication read a configured library root | 2 |
+| 4 | Add the browser client | 1, 2, 3 |
+| 5 | Define Web of Trust, Profile, and memo in order | [trust-security.md §4](./design/trust-security.md#4-design-decisions) |
 
 For confirmed bugs and fix directions, see [issues.md](./issues.md).

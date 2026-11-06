@@ -38,6 +38,8 @@ struct StorageConfigToml {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 struct WebConfigToml {
     pub dir: Option<String>,
+    #[serde(default)]
+    pub insecure_cookie: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -95,6 +97,8 @@ pub struct StorageConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebConfig {
     pub dir: Option<PathBuf>,
+    /// Drops `Secure` and the `__Host-` prefix so a browser on the LAN can log in over plain HTTP.
+    pub insecure_cookie: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +149,7 @@ impl DaemonConfig {
             storage: StorageConfig { download_dir },
             web: WebConfig {
                 dir: toml.web.dir.map(|path| dir.join(path)),
+                insecure_cookie: toml.web.insecure_cookie,
             },
         })
     }

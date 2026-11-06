@@ -1,3 +1,4 @@
+pub mod authentication;
 pub mod health;
 pub mod publications;
 pub mod subscriptions;

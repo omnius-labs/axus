@@ -12,6 +12,7 @@ use axum_extra::extract::CookieJar;
 use bytes::Bytes;
 use futures_util::StreamExt as _;
 use headers::Host;
+use serde_json::json;
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
 use tokio_util::{io::ReaderStream, sync::CancellationToken};
 use tower::ServiceExt as _;
@@ -22,6 +23,7 @@ use omnius_axus_engine::{
 };
 use omnius_axus_interface::{
     apis::{
+        authentication as authentication_api,
         health::{GetHealthResponse, Health},
         publications as publications_api, subscriptions as subscriptions_api,
     },
@@ -32,6 +34,12 @@ use omnius_core_omnikit::generated::omni_hash::OmniHash;
 use crate::{prelude::*, state::DaemonState};
 
 const CONTENT_PATH: &str = "/api/v1";
+
+#[derive(serde::Deserialize)]
+struct LoginBody {
+    name: String,
+    password: String,
+}
 const MAX_CHUNK_BYTES: usize = 64 * 1024 * 1024;
 
 pub struct ApiServer {
@@ -335,6 +343,43 @@ impl publications_api::Publications for ApiServer {
 
 #[allow(unused_variables)]
 #[async_trait]
+impl authentication_api::Authentication for ApiServer {
+    /// The setup routes are answered by [`ApiServer::setup`] and [`ApiServer::setup_status`] in front of the generated router.
+    async fn create_owner(
+        &self,
+        method: &Method,
+        host: &Host,
+        cookies: &CookieJar,
+        body: &models::Credentials,
+    ) -> std::result::Result<authentication_api::CreateOwnerResponse, ()> {
+        Err(())
+    }
+
+    /// [`ApiServer::login`] answers this operation in front of the generated router.
+    async fn create_session(
+        &self,
+        method: &Method,
+        host: &Host,
+        cookies: &CookieJar,
+        header_params: &models::CreateSessionHeaderParams,
+        body: &models::Credentials,
+    ) -> std::result::Result<authentication_api::CreateSessionResponse, ()> {
+        Err(())
+    }
+
+    /// [`ApiServer::logout`] answers this operation in front of the generated router.
+    async fn delete_session(&self, method: &Method, host: &Host, cookies: &CookieJar) -> std::result::Result<authentication_api::DeleteSessionResponse, ()> {
+        Err(())
+    }
+
+    /// [`ApiServer::setup_status`] answers this operation in front of the generated router.
+    async fn get_setup_status(&self, method: &Method, host: &Host, cookies: &CookieJar) -> std::result::Result<authentication_api::GetSetupStatusResponse, ()> {
+        Err(())
+    }
+}
+
+#[allow(unused_variables)]
+#[async_trait]
 impl subscriptions_api::Subscriptions for ApiServer {
     async fn create_subscription(
         &self,
@@ -506,6 +551,9 @@ impl ApiServer {
     fn router(state: Arc<DaemonState>) -> axum::Router {
         let generated = omnius_axus_interface::server::new(Arc::new(Self { state: state.clone() })).fallback(Self::no_route);
         let api = axum::Router::new()
+            .route("/api/v1/setup/status", axum::routing::get(Self::setup_status))
+            .route("/api/v1/setup", axum::routing::post(Self::setup))
+            .route("/api/v1/auth/session", axum::routing::post(Self::login).delete(Self::logout))
             .route(
                 &format!("{CONTENT_PATH}/publications/{{publicationId}}/content"),
                 axum::routing::put(Self::put_publication_content).fallback_service(generated.clone()),
@@ -515,7 +563,8 @@ impl ApiServer {
                 axum::routing::get(Self::get_subscription_content).fallback_service(generated.clone()),
             )
             .with_state(state.clone())
-            .fallback_service(generated);
+            .fallback_service(generated)
+            .layer(axum::middleware::from_fn_with_state(state.clone(), Self::auth_middleware));
         match &state.conf.web.dir {
             Some(dir) => Self::static_router(dir.clone(), api),
             None => api,
@@ -523,11 +572,112 @@ impl ApiServer {
     }
 
     pub async fn serve(state: Arc<DaemonState>, token: CancellationToken) -> Result<()> {
+        if !state.conf.api.listens_only_on_loopback() {
+            warn!(addr = state.conf.api.listen_addr, "the API has no TLS; limit its reach outside the daemon");
+        }
         let app = Self::router(state.clone());
         let listener = tokio::net::TcpListener::bind(state.conf.api.listen_addr.clone()).await?;
         info!(addr = state.conf.api.listen_addr, "listen start");
         axum::serve(listener, app).with_graceful_shutdown(token.cancelled_owned()).await?;
         Ok(())
+    }
+
+    async fn auth_middleware(State(state): State<Arc<DaemonState>>, cookies: CookieJar, request: Request, next: axum::middleware::Next) -> Response {
+        let path = request.uri().path();
+        let method = request.method().clone();
+        let public = path == "/api/v1/health" || path == "/api/v1/setup" || path == "/api/v1/setup/status" || (method == Method::POST && path == "/api/v1/auth/session");
+        if public {
+            return next.run(request).await;
+        }
+
+        let bearer = request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::to_string);
+        let cookie = cookies
+            .get("__Host-axus_session")
+            .or_else(|| cookies.get("axus_session"))
+            .map(|cookie| cookie.value().to_string());
+        let Some(token) = bearer.clone().or_else(|| cookie.clone()) else {
+            return Self::unauthorized();
+        };
+        match state.owner().authenticate(&token).await {
+            Ok(true) => {}
+            Ok(false) => return Self::unauthorized(),
+            Err(error) => return ApiError::internal(&error).into_response(),
+        }
+        if bearer.is_none() && !matches!(method, Method::GET | Method::HEAD) {
+            let host = request.headers().get(header::HOST).and_then(|value| value.to_str().ok()).unwrap_or_default();
+            let origin = request.headers().get(header::ORIGIN).and_then(|value| value.to_str().ok());
+            if origin != Some(format!("http://{host}").as_str()) {
+                return ApiError::new(StatusCode::FORBIDDEN, models::ErrorKind::Forbidden, "the origin of the request is not the daemon").into_response();
+            }
+        }
+        next.run(request).await
+    }
+
+    async fn setup_status(State(state): State<Arc<DaemonState>>) -> Response {
+        match state.owner().initialized().await {
+            Ok(initialized) => Json(json!({ "initialized": initialized })).into_response(),
+            Err(error) => ApiError::internal(&error).into_response(),
+        }
+    }
+
+    async fn setup(State(state): State<Arc<DaemonState>>, Json(body): Json<LoginBody>) -> Response {
+        if body.name.is_empty() || body.password.len() < 8 {
+            return ApiError::invalid_request("the owner name must not be empty and the password must have at least 8 bytes").into_response();
+        }
+        match state.owner().setup(&body.name, &body.password).await {
+            Ok(true) => StatusCode::NO_CONTENT.into_response(),
+            Ok(false) => ApiError::conflict("the owner is already registered").into_response(),
+            Err(error) => ApiError::internal(&error).into_response(),
+        }
+    }
+
+    async fn login(State(state): State<Arc<DaemonState>>, headers: HeaderMap, Json(body): Json<LoginBody>) -> Response {
+        let token = match state.owner().login(&body.name, &body.password).await {
+            Ok(Some(token)) => token,
+            Ok(None) => return ApiError::new(StatusCode::UNAUTHORIZED, models::ErrorKind::Unauthorized, "the name or password is wrong").into_response(),
+            Err(error) => return ApiError::internal(&error).into_response(),
+        };
+        if headers.get("x-axus-transport").and_then(|value| value.to_str().ok()) == Some("bearer") {
+            return Json(json!({ "token": token })).into_response();
+        }
+        let cookie = if state.conf.web.insecure_cookie {
+            format!("axus_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000")
+        } else {
+            format!("__Host-axus_session={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000")
+        };
+        (StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response()
+    }
+
+    async fn logout(State(state): State<Arc<DaemonState>>, cookies: CookieJar, headers: HeaderMap) -> Response {
+        let bearer = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::to_string);
+        let cookie = cookies
+            .get("__Host-axus_session")
+            .or_else(|| cookies.get("axus_session"))
+            .map(|cookie| cookie.value().to_string());
+        if let Some(token) = bearer.or(cookie) {
+            if let Err(error) = state.owner().logout(&token).await {
+                return ApiError::internal(&error).into_response();
+            }
+        }
+        let cookie = if state.conf.web.insecure_cookie {
+            "axus_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+        } else {
+            "__Host-axus_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0"
+        };
+        (StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response()
+    }
+
+    fn unauthorized() -> Response {
+        ApiError::new(StatusCode::UNAUTHORIZED, models::ErrorKind::Unauthorized, "a session is required").into_response()
     }
 
     async fn no_route() -> ApiError {
@@ -737,6 +887,7 @@ mod tests {
         _dir: TempDir,
         state: Arc<DaemonState>,
         router: axum::Router,
+        cookie: Option<String>,
     }
 
     impl TestDaemon {
@@ -770,6 +921,7 @@ mod tests {
                 },
                 web: WebConfig {
                     dir: web_dir.map(Path::to_path_buf),
+                    insecure_cookie: true,
                 },
             };
             let option = AxusServiceOption {
@@ -784,15 +936,95 @@ mod tests {
             };
             let state = Arc::new(DaemonState::for_test(conf, option).await?);
             let router = ApiServer::router(state.clone());
-            Ok(Self { _dir: dir, state, router })
+            let mut daemon = Self {
+                _dir: dir,
+                state,
+                router,
+                cookie: None,
+            };
+            daemon.setup_and_login().await?;
+            Ok(daemon)
         }
 
         async fn stop(self) {
             self.state.shutdown().await;
         }
 
-        async fn send(&self, request: Request<Body>) -> TestResult<axum::response::Response> {
+        async fn start_bare() -> TestResult<Self> {
+            let dir = tempfile::tempdir()?;
+            let port = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
+            let conf = DaemonConfig {
+                core: CoreConfig {
+                    state_dir: dir.path().join("state"),
+                },
+                api: ApiConfig {
+                    listen_addr: "127.0.0.1:0".to_string(),
+                    max_upload_size: 0,
+                },
+                p2p: P2pConfig {
+                    listen_addr: format!("127.0.0.1:{port}"),
+                    advertise_addrs: vec![],
+                    use_upnp: false,
+                    bootstrap_nodes: vec![],
+                },
+                logging: LoggingConfig {
+                    level: "info".to_string(),
+                    json: false,
+                },
+                storage: StorageConfig {
+                    download_dir: dir.path().join("downloads"),
+                },
+                web: WebConfig { dir: None, insecure_cookie: true },
+            };
+            let state = Arc::new(DaemonState::for_test(conf, AxusServiceOption::default()).await?);
+            let router = ApiServer::router(state.clone());
+            Ok(Self {
+                _dir: dir,
+                state,
+                router,
+                cookie: None,
+            })
+        }
+
+        async fn setup_and_login(&mut self) -> TestResult<()> {
+            let (status, _) = self.request_raw_json("POST", "/api/v1/setup", &json!({"name": "owner", "password": "password123"})).await?;
+            assert_eq!(status, StatusCode::NO_CONTENT);
+            let request = Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/session")
+                .header("host", "localhost")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({"name": "owner", "password": "password123"}))?))?;
+            let response = self.send_raw(request).await?;
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+            let set_cookie = response.headers().get(http::header::SET_COOKIE).unwrap().to_str()?.to_string();
+            self.cookie = Some(set_cookie.split(';').next().unwrap().to_string());
+            Ok(())
+        }
+
+        async fn send(&self, mut request: Request<Body>) -> TestResult<axum::response::Response> {
+            if let Some(cookie) = &self.cookie {
+                request.headers_mut().insert(http::header::COOKIE, http::HeaderValue::from_str(cookie)?);
+                request.headers_mut().insert(http::header::ORIGIN, http::HeaderValue::from_static("http://localhost"));
+            }
+            self.send_raw(request).await
+        }
+
+        async fn send_raw(&self, request: Request<Body>) -> TestResult<axum::response::Response> {
             Ok(self.router.clone().oneshot(request).await?)
+        }
+
+        async fn request_raw_json(&self, method: &str, uri: &str, body: &Value) -> TestResult<(StatusCode, Value)> {
+            let request = Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("host", "localhost")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(body)?))?;
+            let response = self.send_raw(request).await?;
+            let status = response.status();
+            let bytes = to_bytes(response.into_body(), usize::MAX).await?;
+            Ok((status, serde_json::from_slice(&bytes).unwrap_or(Value::Null)))
         }
 
         async fn request(&self, method: &str, uri: &str, body: Body) -> TestResult<(StatusCode, Bytes)> {
@@ -967,6 +1199,116 @@ mod tests {
         let (status, value) = daemon.get_json("/api/v1/unknown").await?;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(value["kind"], "NotFound");
+        daemon.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_owner_registers_once_and_login_is_required() -> TestResult {
+        let daemon = TestDaemon::start_bare().await?;
+        let (status, value) = daemon.request_raw_json("GET", "/api/v1/setup/status", &json!({})).await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["initialized"], false);
+        let (status, _) = daemon.request_raw_json("GET", "/api/v1/publications", &json!({})).await?;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _) = daemon
+            .request_raw_json("POST", "/api/v1/setup", &json!({"name": "owner", "password": "password123"}))
+            .await?;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, _) = daemon
+            .request_raw_json("POST", "/api/v1/setup", &json!({"name": "owner", "password": "password123"}))
+            .await?;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let (status, _) = daemon
+            .request_raw_json("POST", "/api/v1/auth/session", &json!({"name": "owner", "password": "wrong"}))
+            .await?;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let response = daemon
+            .send_raw(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/auth/session")
+                    .header("host", "localhost")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&json!({"name": "owner", "password": "password123"}))?))?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let cookie = response.headers().get(http::header::SET_COOKIE).unwrap().to_str()?.split(';').next().unwrap().to_string();
+        let with_cookie = |uri: &str| {
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .header("host", "localhost")
+                .header(http::header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap()
+        };
+        assert_eq!(daemon.send_raw(with_cookie("/api/v1/publications")).await?.status(), StatusCode::OK);
+        let logout = Request::builder()
+            .method("DELETE")
+            .uri("/api/v1/auth/session")
+            .header("host", "localhost")
+            .header(http::header::COOKIE, &cookie)
+            .header(http::header::ORIGIN, "http://localhost")
+            .body(Body::empty())?;
+        assert_eq!(daemon.send_raw(logout).await?.status(), StatusCode::NO_CONTENT);
+        assert_eq!(daemon.send_raw(with_cookie("/api/v1/publications")).await?.status(), StatusCode::UNAUTHORIZED);
+        daemon.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_cookie_request_from_another_origin_is_forbidden() -> TestResult {
+        let daemon = TestDaemon::start().await?;
+        let cookie = daemon.cookie.clone().unwrap();
+        let body = serde_json::to_vec(&json!({"fileName": "a.bin", "size": 1}))?;
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/publications")
+            .header("host", "localhost")
+            .header(http::header::COOKIE, &cookie)
+            .header(http::header::ORIGIN, "http://evil.example")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(body.clone()))?;
+        assert_eq!(daemon.send_raw(request).await?.status(), StatusCode::FORBIDDEN);
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/publications")
+            .header("host", "localhost")
+            .header(http::header::COOKIE, &cookie)
+            .header(http::header::ORIGIN, "http://localhost")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(body))?;
+        assert_eq!(daemon.send_raw(request).await?.status(), StatusCode::ACCEPTED);
+        daemon.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_bearer_session_needs_no_cookie() -> TestResult {
+        let daemon = TestDaemon::start().await?;
+        let response = daemon
+            .send_raw(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/auth/session")
+                    .header("host", "localhost")
+                    .header(CONTENT_TYPE, "application/json")
+                    .header("x-axus-transport", "bearer")
+                    .body(Body::from(serde_json::to_vec(&json!({"name": "owner", "password": "password123"}))?))?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value = serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+        let token = value["token"].as_str().unwrap();
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/v1/publications")
+            .header("host", "localhost")
+            .header(http::header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())?;
+        assert_eq!(daemon.send_raw(request).await?.status(), StatusCode::OK);
         daemon.stop().await;
         Ok(())
     }

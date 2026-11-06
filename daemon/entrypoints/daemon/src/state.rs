@@ -8,11 +8,12 @@ use omnius_axus_engine::{
 };
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 
-use crate::{config::DaemonConfig, prelude::*};
+use crate::{config::DaemonConfig, owner::OwnerStore, prelude::*};
 
 pub struct DaemonState {
     pub conf: DaemonConfig,
     axus_service: AxusService,
+    owner: OwnerStore,
     #[allow(unused)]
     temp_dir: TempDir,
 }
@@ -52,9 +53,15 @@ impl DaemonState {
         tokio::fs::create_dir_all(&conf.storage.download_dir).await?;
 
         let temp_dir = TempDir::new()?;
+        let owner = OwnerStore::open(&state_dir.join("owner")).await?;
         let axus_service = AxusService::new(&state_dir, &conf.p2p.listen_addr, temp_dir.path(), option).await?;
 
-        Ok(Self { conf, axus_service, temp_dir })
+        Ok(Self {
+            conf,
+            axus_service,
+            owner,
+            temp_dir,
+        })
     }
 
     pub async fn shutdown(&self) {
@@ -63,6 +70,10 @@ impl DaemonState {
 
     pub fn service(&self) -> &AxusService {
         &self.axus_service
+    }
+
+    pub fn owner(&self) -> &OwnerStore {
+        &self.owner
     }
 
     pub fn uploads_dir(&self) -> std::path::PathBuf {
@@ -103,7 +114,7 @@ mod tests {
             storage: StorageConfig {
                 download_dir: state_dir.path().join("downloads"),
             },
-            web: WebConfig { dir: None },
+            web: WebConfig { dir: None, insecure_cookie: true },
         };
 
         let state = DaemonState::new(conf).await?;
@@ -137,7 +148,7 @@ mod tests {
             storage: StorageConfig {
                 download_dir: state_dir.path().join("downloads"),
             },
-            web: WebConfig { dir: None },
+            web: WebConfig { dir: None, insecure_cookie: true },
         };
 
         assert!(DaemonState::new(conf).await.is_err());
@@ -170,7 +181,7 @@ mod tests {
             storage: StorageConfig {
                 download_dir: state_dir.path().join("downloads"),
             },
-            web: WebConfig { dir: None },
+            web: WebConfig { dir: None, insecure_cookie: true },
         };
 
         assert!(DaemonState::new(conf).await.is_err());

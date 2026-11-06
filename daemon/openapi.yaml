@@ -18,6 +18,8 @@ tags:
       description: Files this node sends into the network.
     - name: Subscriptions
       description: Files this node fetches from the network.
+    - name: Authentication
+      description: The owner and the sessions that prove a login.
 
 paths:
     /health:
@@ -357,6 +359,98 @@ paths:
                 "500":
                     $ref: "#/components/responses/InternalServerError"
 
+    /setup/status:
+        get:
+            tags:
+                - Authentication
+            summary: Report whether the owner is registered
+            operationId: getSetupStatus
+            security: []
+            responses:
+                "200":
+                    description: Setup state.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/SetupStatus"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /setup:
+        post:
+            tags:
+                - Authentication
+            summary: Register the owner
+            description: |
+                Accepted only while no owner exists. The first registration is
+                open to any host that reaches the API.
+            operationId: createOwner
+            security: []
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/Credentials"
+            responses:
+                "204":
+                    description: The owner is registered.
+                "400":
+                    $ref: "#/components/responses/BadRequest"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /auth/session:
+        post:
+            tags:
+                - Authentication
+            summary: Log in
+            description: |
+                With `X-Axus-Transport: bearer`, the token is returned in the
+                body. Otherwise the session is set as an HttpOnly cookie.
+            operationId: createSession
+            security: []
+            parameters:
+                - name: X-Axus-Transport
+                  in: header
+                  required: false
+                  schema:
+                      type: string
+                      enum: [bearer]
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/Credentials"
+            responses:
+                "204":
+                    description: The session cookie is set.
+                "200":
+                    description: The session token for a bearer client.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/LoginResponse"
+                "401":
+                    $ref: "#/components/responses/Unauthorized"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+        delete:
+            tags:
+                - Authentication
+            summary: Log out
+            operationId: deleteSession
+            responses:
+                "204":
+                    description: The session is gone.
+                "401":
+                    $ref: "#/components/responses/Unauthorized"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
 components:
     parameters:
         PublicationIdPath:
@@ -428,6 +522,15 @@ components:
                     example:
                         kind: InvalidRequest
                         message: The range is outside the output.
+        Unauthorized:
+            description: A session is required.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: Unauthorized
+                        message: A session is required.
         InternalServerError:
             description: Internal server error.
             content:
@@ -446,6 +549,33 @@ components:
             properties:
                 result:
                     type: boolean
+
+        SetupStatus:
+            type: object
+            required:
+                - initialized
+            properties:
+                initialized:
+                    type: boolean
+
+        Credentials:
+            type: object
+            required:
+                - name
+                - password
+            properties:
+                name:
+                    type: string
+                password:
+                    type: string
+
+        LoginResponse:
+            type: object
+            required:
+                - token
+            properties:
+                token:
+                    type: string
 
         CreatePublicationRequest:
             type: object
@@ -611,6 +741,7 @@ components:
                 - InvalidRequest
                 - LimitExceeded
                 - NotFound
+                - Unauthorized
                 - Forbidden
                 - Conflict
                 - PayloadTooLarge

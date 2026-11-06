@@ -2,7 +2,6 @@
 state_dir = "./state"
 
 [api]
-# The API has no authentication yet, so it must listen on a loopback address.
 listen_addr = "127.0.0.1:5050"
 # max_upload_size = 0 # bytes; 0 means no limit
 
@@ -21,3 +20,4 @@ json = false
 
 # [web]
 # dir = "./web" # The build output of the browser client
+# insecure_cookie = true # Drops Secure for a LAN browser over plain HTTP

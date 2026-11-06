@@ -14,6 +14,10 @@ servers:
 tags:
     - name: Health
       description: Daemon liveness checks.
+    - name: Publications
+      description: Files this node sends into the network.
+    - name: Subscriptions
+      description: Files this node fetches from the network.
 
 paths:
     /health:
@@ -35,8 +39,395 @@ paths:
                 "500":
                     $ref: "#/components/responses/InternalServerError"
 
+    /publications:
+        get:
+            tags:
+                - Publications
+            summary: List publications
+            description: |
+                One entry per committed file and one entry per active
+                publication. A file imported several times under the same name
+                appears once, under its oldest publication ID.
+            operationId: listPublications
+            responses:
+                "200":
+                    description: Known publications.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/PublicationList"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+        post:
+            tags:
+                - Publications
+            summary: Declare a publication and start receiving its content
+            description: |
+                The daemon answers with a publication in `Receiving` (or in
+                `Pending` when the declared size is zero), and the client sends
+                the bytes to the content route.
+            operationId: createPublication
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/CreatePublicationRequest"
+            responses:
+                "202":
+                    description: The publication is ready to receive content.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Publication"
+                "400":
+                    $ref: "#/components/responses/BadRequest"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "413":
+                    $ref: "#/components/responses/PayloadTooLarge"
+                "507":
+                    $ref: "#/components/responses/InsufficientStorage"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /publications/{publicationId}:
+        get:
+            tags:
+                - Publications
+            summary: Get a publication
+            operationId: getPublication
+            parameters:
+                - $ref: "#/components/parameters/PublicationIdPath"
+            responses:
+                "200":
+                    description: Publication state.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Publication"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+        delete:
+            tags:
+                - Publications
+            summary: Remove a publication
+            description: |
+                Removes a terminal publication. Removing a committed
+                publication also removes the committed file and every
+                publication ID of the same root hash and file name. An active
+                publication must be canceled first.
+            operationId: deletePublication
+            parameters:
+                - $ref: "#/components/parameters/PublicationIdPath"
+            responses:
+                "204":
+                    description: The publication is gone.
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /publications/{publicationId}/cancel:
+        post:
+            tags:
+                - Publications
+            summary: Cancel a publication
+            description: |
+                Stops an active publication and leaves it in `Canceled`. A
+                terminal publication is returned unchanged.
+            operationId: cancelPublication
+            parameters:
+                - $ref: "#/components/parameters/PublicationIdPath"
+            responses:
+                "200":
+                    description: The publication state after the request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Publication"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /publications/{publicationId}/content:
+        put:
+            tags:
+                - Publications
+            summary: Append content at the received offset
+            description: |
+                Carries the bytes at the offset in `Content-Range` and returns
+                the publication with the new `receivedBytes`. A gap or an
+                overlap returns `409` with the current `receivedBytes`.
+            operationId: writePublicationContent
+            parameters:
+                - $ref: "#/components/parameters/PublicationIdPath"
+                - name: Content-Range
+                  in: header
+                  required: true
+                  description: |
+                      `bytes <start>-<end>/<size>` with a start equal to the
+                      publication's `receivedBytes`.
+                  schema:
+                      type: string
+            requestBody:
+                required: true
+                content:
+                    application/octet-stream:
+                        schema:
+                            type: string
+                            format: binary
+            responses:
+                "200":
+                    description: The content was accepted.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Publication"
+                "400":
+                    $ref: "#/components/responses/BadRequest"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "413":
+                    $ref: "#/components/responses/PayloadTooLarge"
+                "507":
+                    $ref: "#/components/responses/InsufficientStorage"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /subscriptions:
+        get:
+            tags:
+                - Subscriptions
+            summary: List subscriptions
+            operationId: listSubscriptions
+            responses:
+                "200":
+                    description: Known subscriptions.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/SubscriptionList"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+        post:
+            tags:
+                - Subscriptions
+            summary: Start fetching a file
+            operationId: createSubscription
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/CreateSubscriptionRequest"
+            responses:
+                "202":
+                    description: The subscription is fetching.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Subscription"
+                "400":
+                    $ref: "#/components/responses/BadRequest"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /subscriptions/{subscriptionId}:
+        get:
+            tags:
+                - Subscriptions
+            summary: Get a subscription
+            operationId: getSubscription
+            parameters:
+                - $ref: "#/components/parameters/SubscriptionIdPath"
+            responses:
+                "200":
+                    description: Subscription state.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Subscription"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+        delete:
+            tags:
+                - Subscriptions
+            summary: Remove a subscription
+            description: |
+                Removes a terminal subscription and leaves the placed output.
+                `deleteOutput=true` also deletes the output file. An active
+                subscription must be canceled first.
+            operationId: deleteSubscription
+            parameters:
+                - $ref: "#/components/parameters/SubscriptionIdPath"
+                - name: deleteOutput
+                  in: query
+                  required: false
+                  schema:
+                      type: boolean
+                      default: false
+            responses:
+                "204":
+                    description: The subscription is gone.
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /subscriptions/{subscriptionId}/cancel:
+        post:
+            tags:
+                - Subscriptions
+            summary: Cancel a subscription
+            description: |
+                Stops an active subscription and leaves it in `Canceled`. A
+                subscription in `Finalizing` cannot be canceled.
+            operationId: cancelSubscription
+            parameters:
+                - $ref: "#/components/parameters/SubscriptionIdPath"
+            responses:
+                "200":
+                    description: The subscription state after the request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Subscription"
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
+    /subscriptions/{subscriptionId}/content:
+        get:
+            tags:
+                - Subscriptions
+            summary: Download the output
+            description: |
+                Serves the output after `Completed` with `Range` and `ETag`.
+                The response is always an attachment.
+            operationId: getSubscriptionContent
+            parameters:
+                - $ref: "#/components/parameters/SubscriptionIdPath"
+                - name: Range
+                  in: header
+                  required: false
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: The whole output.
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+                "206":
+                    description: A range of the output.
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+                "304":
+                    description: The output matches the request's `If-None-Match`.
+                "404":
+                    $ref: "#/components/responses/NotFound"
+                "409":
+                    $ref: "#/components/responses/Conflict"
+                "416":
+                    $ref: "#/components/responses/RangeNotSatisfiable"
+                "500":
+                    $ref: "#/components/responses/InternalServerError"
+
 components:
+    parameters:
+        PublicationIdPath:
+            name: publicationId
+            in: path
+            required: true
+            schema:
+                type: string
+        SubscriptionIdPath:
+            name: subscriptionId
+            in: path
+            required: true
+            schema:
+                type: string
+
     responses:
+        BadRequest:
+            description: The request is malformed.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: InvalidRequest
+                        message: The file name must be one path component.
+        Conflict:
+            description: The request conflicts with the current state.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: Conflict
+                        message: The offset does not match the received offset.
+                        receivedBytes: 1048576
+        NotFound:
+            description: The resource does not exist.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: NotFound
+                        message: No such resource.
+        PayloadTooLarge:
+            description: The content is over the declared or configured size.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: PayloadTooLarge
+                        message: The declared size is over the configured limit.
+        InsufficientStorage:
+            description: The destination has insufficient space.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: InsufficientStorage
+                        message: No space left on the volume.
+        RangeNotSatisfiable:
+            description: The requested range is outside the output.
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/ErrorResponse"
+                    example:
+                        kind: InvalidRequest
+                        message: The range is outside the output.
         InternalServerError:
             description: Internal server error.
             content:
@@ -56,6 +447,146 @@ components:
                 result:
                     type: boolean
 
+        CreatePublicationRequest:
+            type: object
+            required:
+                - fileName
+                - size
+            properties:
+                fileName:
+                    type: string
+                size:
+                    type: integer
+                    format: int64
+                    description: The final size in bytes, which is not negative.
+
+        Publication:
+            type: object
+            required:
+                - id
+                - fileName
+                - size
+                - receivedBytes
+                - status
+                - createdAt
+                - updatedAt
+            properties:
+                id:
+                    type: string
+                fileName:
+                    type: string
+                size:
+                    type: integer
+                    format: int64
+                receivedBytes:
+                    type: integer
+                    format: int64
+                status:
+                    $ref: "#/components/schemas/PublicationStatus"
+                rootHash:
+                    type: string
+                    description: Present when Committed.
+                failedReason:
+                    type: string
+                    description: Present when Failed.
+                createdAt:
+                    type: string
+                    format: date-time
+                updatedAt:
+                    type: string
+                    format: date-time
+
+        PublicationList:
+            type: object
+            required:
+                - publications
+            properties:
+                publications:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/Publication"
+
+        PublicationStatus:
+            type: string
+            enum:
+                - Receiving
+                - Pending
+                - Processing
+                - Committed
+                - Failed
+                - Canceled
+
+        CreateSubscriptionRequest:
+            type: object
+            required:
+                - rootHash
+                - fileName
+            properties:
+                rootHash:
+                    type: string
+                fileName:
+                    type: string
+
+        Subscription:
+            type: object
+            required:
+                - id
+                - rootHash
+                - fileName
+                - status
+                - blockCountDownloaded
+                - blockCountTotal
+                - createdAt
+                - updatedAt
+            properties:
+                id:
+                    type: string
+                rootHash:
+                    type: string
+                fileName:
+                    type: string
+                status:
+                    $ref: "#/components/schemas/SubscriptionStatus"
+                rank:
+                    type: integer
+                    format: int64
+                    description: Absent until the root block is decoded.
+                blockCountDownloaded:
+                    type: integer
+                    format: int64
+                blockCountTotal:
+                    type: integer
+                    format: int64
+                failedReason:
+                    type: string
+                    description: Present when Failed.
+                createdAt:
+                    type: string
+                    format: date-time
+                updatedAt:
+                    type: string
+                    format: date-time
+
+        SubscriptionList:
+            type: object
+            required:
+                - subscriptions
+            properties:
+                subscriptions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/Subscription"
+
+        SubscriptionStatus:
+            type: string
+            enum:
+                - Downloading
+                - Decoding
+                - Finalizing
+                - Completed
+                - Failed
+                - Canceled
+
         ErrorResponse:
             type: object
             required:
@@ -68,11 +599,19 @@ components:
                 requestId:
                     type: string
                     description: Optional request identifier for server logs.
+                receivedBytes:
+                    type: integer
+                    format: int64
+                    description: Present when the request conflicts with the received offset.
 
         ErrorKind:
             type: string
             enum:
                 - InternalServerError
                 - InvalidRequest
+                - LimitExceeded
                 - NotFound
                 - Forbidden
+                - Conflict
+                - PayloadTooLarge
+                - InsufficientStorage

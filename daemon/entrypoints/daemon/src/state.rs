@@ -21,6 +21,8 @@ impl DaemonState {
     pub async fn new(conf: DaemonConfig) -> Result<Self> {
         let state_dir = conf.core.state_dir.clone();
         tokio::fs::create_dir_all(&state_dir).await?;
+        tokio::fs::create_dir_all(state_dir.join("uploads")).await?;
+        tokio::fs::create_dir_all(&conf.storage.download_dir).await?;
 
         let temp_dir = TempDir::new()?;
 
@@ -51,13 +53,21 @@ impl DaemonState {
     pub async fn shutdown(&self) {
         self.axus_service.shutdown().await;
     }
+
+    pub fn service(&self) -> &AxusService {
+        &self.axus_service
+    }
+
+    pub fn uploads_dir(&self) -> std::path::PathBuf {
+        self.conf.core.state_dir.join("uploads")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use testresult::TestResult;
 
-    use crate::config::{ApiConfig, CoreConfig, LoggingConfig, P2pConfig};
+    use crate::config::{ApiConfig, CoreConfig, LoggingConfig, P2pConfig, StorageConfig, WebConfig};
 
     use super::*;
 
@@ -71,6 +81,7 @@ mod tests {
             },
             api: ApiConfig {
                 listen_addr: "127.0.0.1:0".to_string(),
+                max_upload_size: 0,
             },
             p2p: P2pConfig {
                 listen_addr: "127.0.0.1:0".to_string(),
@@ -82,6 +93,10 @@ mod tests {
                 level: "info".to_string(),
                 json: false,
             },
+            storage: StorageConfig {
+                download_dir: state_dir.path().join("downloads"),
+            },
+            web: WebConfig { dir: None },
         };
 
         let state = DaemonState::new(conf).await?;
@@ -100,6 +115,7 @@ mod tests {
             },
             api: ApiConfig {
                 listen_addr: "127.0.0.1:0".to_string(),
+                max_upload_size: 0,
             },
             p2p: P2pConfig {
                 listen_addr: "not-an-addr".to_string(),
@@ -111,6 +127,10 @@ mod tests {
                 level: "info".to_string(),
                 json: false,
             },
+            storage: StorageConfig {
+                download_dir: state_dir.path().join("downloads"),
+            },
+            web: WebConfig { dir: None },
         };
 
         assert!(DaemonState::new(conf).await.is_err());
@@ -128,6 +148,7 @@ mod tests {
             },
             api: ApiConfig {
                 listen_addr: "127.0.0.1:0".to_string(),
+                max_upload_size: 0,
             },
             p2p: P2pConfig {
                 listen_addr: "127.0.0.1:0".to_string(),
@@ -139,6 +160,10 @@ mod tests {
                 level: "info".to_string(),
                 json: false,
             },
+            storage: StorageConfig {
+                download_dir: state_dir.path().join("downloads"),
+            },
+            web: WebConfig { dir: None },
         };
 
         assert!(DaemonState::new(conf).await.is_err());

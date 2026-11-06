@@ -51,9 +51,10 @@ impl FilePublisherRepo {
     }
 
     async fn migrate(db: &SqlitePool) -> Result<()> {
-        let requests = vec![MigrationRequest {
-            name: "2024-06-23_init".to_string(),
-            queries: r#"
+        let requests = vec![
+            MigrationRequest {
+                name: "2024-06-23_init".to_string(),
+                queries: r#"
 -- committed
 CREATE TABLE IF NOT EXISTS committed_files (
     root_hash TEXT NOT NULL,
@@ -96,8 +97,27 @@ CREATE TABLE IF NOT EXISTS uncommitted_blocks (
 );
 CREATE INDEX IF NOT EXISTS index_file_id_rank_index_for_uncommitted_blocks ON uncommitted_blocks (file_id, rank ASC, `index` ASC);
 "#
-            .to_string(),
-        }];
+                .to_string(),
+            },
+            MigrationRequest {
+                name: "2026-11-06_publication".to_string(),
+                queries: r#"
+ALTER TABLE uncommitted_files ADD COLUMN size INTEGER;
+ALTER TABLE uncommitted_files ADD COLUMN received_bytes INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE uncommitted_files ADD COLUMN source_owned INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS publication_records (
+    publication_id TEXT NOT NULL PRIMARY KEY,
+    root_hash TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    size INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS index_root_hash_file_name_for_publication_records ON publication_records (root_hash, file_name);
+"#
+                .to_string(),
+            },
+        ];
 
         SqliteMigrator::migrate(db, requests).await?;
 
@@ -118,15 +138,18 @@ CREATE INDEX IF NOT EXISTS index_file_id_rank_index_for_uncommitted_blocks ON un
         let row = PublishedUncommittedFileRow::from(file)?;
         sqlx::query(
             r#"
-INSERT INTO uncommitted_files (id, file_path, file_name, block_size, attrs, priority, status, failed_reason, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO uncommitted_files (id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, priority, status, failed_reason, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#,
         )
         .bind(row.id)
         .bind(row.file_path)
         .bind(row.file_name)
+        .bind(row.size)
+        .bind(row.received_bytes)
         .bind(row.block_size)
         .bind(row.attrs)
+        .bind(row.source_owned)
         .bind(row.priority)
         .bind(row.status)
         .bind(row.failed_reason)
@@ -142,7 +165,7 @@ INSERT INTO uncommitted_files (id, file_path, file_name, block_size, attrs, prio
     pub async fn get_block_references(&self) -> Result<(HashSet<String>, HashSet<String>)> {
         let mut tx = self.db.begin().await?;
         let roots: Vec<String> = sqlx::query_scalar("SELECT DISTINCT root_hash FROM committed_files").fetch_all(&mut *tx).await?;
-        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM uncommitted_files WHERE status IN ('Pending', 'Processing')")
+        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM uncommitted_files WHERE status IN ('Receiving', 'Pending', 'Processing')")
             .fetch_all(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -193,9 +216,49 @@ INSERT INTO uncommitted_files (id, file_path, file_name, block_size, attrs, prio
         Ok(())
     }
 
+    pub async fn reconcile_receiving(&self) -> Result<Vec<PublishedUncommittedFile>> {
+        let files = self.get_uncommitted_files().await?;
+        let mut receiving = Vec::new();
+        for mut file in files {
+            if file.status != PublishedUncommittedFileStatus::Receiving {
+                continue;
+            }
+            match tokio::fs::metadata(&file.file_path).await {
+                Ok(metadata) => {
+                    let length = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+                    let next = length.min(file.size.unwrap_or(length)).max(0);
+                    if next != file.received_bytes {
+                        sqlx::query("UPDATE uncommitted_files SET received_bytes = ?, updated_at = ? WHERE id = ? AND status = 'Receiving'")
+                            .bind(next)
+                            .bind(self.clock.now().naive_utc())
+                            .bind(&file.id)
+                            .execute(self.db.as_ref())
+                            .await?;
+                        file.received_bytes = next;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    sqlx::query("DELETE FROM uncommitted_files WHERE id = ? AND status = 'Receiving'")
+                        .bind(&file.id)
+                        .execute(self.db.as_ref())
+                        .await?;
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            }
+            receiving.push(file);
+        }
+        Ok(receiving)
+    }
+
     pub async fn remove_committed_file(&self, root_hash: &OmniHash, file_name: &str) -> Result<()> {
         let mut tx = self.db.begin_with("BEGIN IMMEDIATE").await?;
         sqlx::query("DELETE FROM committed_files WHERE root_hash = ? AND file_name = ?")
+            .bind(root_hash.to_string())
+            .bind(file_name)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM publication_records WHERE root_hash = ? AND file_name = ?")
             .bind(root_hash.to_string())
             .bind(file_name)
             .execute(&mut *tx)
@@ -248,6 +311,22 @@ SELECT root_hash, file_name, block_size, attrs, created_at, updated_at
 "#,
         )
         .bind(root_hash.to_string())
+        .fetch_optional(self.db.as_ref())
+        .await?;
+
+        res.map(|r| r.into()).transpose()
+    }
+
+    pub async fn find_committed_file(&self, root_hash: &OmniHash, file_name: &str) -> Result<Option<PublishedCommittedFile>> {
+        let res: Option<PublishedCommittedFileRow> = sqlx::query_as(
+            r#"
+SELECT root_hash, file_name, block_size, attrs, created_at, updated_at
+    FROM committed_files
+    WHERE root_hash = ? AND file_name = ?
+"#,
+        )
+        .bind(root_hash.to_string())
+        .bind(file_name)
         .fetch_optional(self.db.as_ref())
         .await?;
 
@@ -311,7 +390,30 @@ SELECT COUNT(1)
         Ok(res > 0)
     }
 
-    pub async fn commit_file_with_blocks(&self, file: &PublishedCommittedFile, blocks: &[PublishedCommittedBlock], uncommitted_file_id: &str) -> Result<()> {
+    async fn insert_publication_record(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, publication_id: &str, file: &PublishedCommittedFile, size: i64) -> Result<()> {
+        sqlx::query(
+            r#"
+INSERT INTO publication_records (publication_id, root_hash, file_name, size, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(publication_id) DO UPDATE SET
+        root_hash = excluded.root_hash,
+        file_name = excluded.file_name,
+        size = excluded.size,
+        updated_at = excluded.updated_at
+"#,
+        )
+        .bind(publication_id)
+        .bind(file.root_hash.to_string())
+        .bind(&file.file_name)
+        .bind(size)
+        .bind(file.created_at.naive_utc())
+        .bind(file.updated_at.naive_utc())
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn commit_file_with_blocks(&self, file: &PublishedCommittedFile, blocks: &[PublishedCommittedBlock], uncommitted_file_id: &str, size: i64) -> Result<()> {
         let mut tx = self.db.begin().await?;
 
         let row = PublishedCommittedFileRow::from(file)?;
@@ -351,6 +453,8 @@ INSERT INTO committed_blocks (root_hash, block_hash, rank, `index`)
             query_builder.build().execute(&mut *tx).await?;
         }
 
+        Self::insert_publication_record(&mut tx, uncommitted_file_id, file, size).await?;
+
         sqlx::query(
             r#"
 DELETE FROM uncommitted_files
@@ -385,7 +489,7 @@ DELETE FROM uncommitted_blocks
         Ok(())
     }
 
-    pub async fn commit_file_without_blocks(&self, file: &PublishedCommittedFile, uncommitted_file_id: &str) -> Result<()> {
+    pub async fn commit_file_without_blocks(&self, file: &PublishedCommittedFile, uncommitted_file_id: &str, size: i64) -> Result<()> {
         let mut tx = self.db.begin().await?;
 
         let row = PublishedCommittedFileRow::from(file)?;
@@ -403,6 +507,8 @@ INSERT INTO committed_files (root_hash, file_name, block_size, attrs, created_at
         .bind(row.updated_at)
         .execute(&mut *tx)
         .await?;
+
+        Self::insert_publication_record(&mut tx, uncommitted_file_id, file, size).await?;
 
         sqlx::query(
             r#"
@@ -457,7 +563,7 @@ SELECT COUNT(1)
     pub async fn get_uncommitted_files(&self) -> Result<Vec<PublishedUncommittedFile>> {
         let res: Vec<PublishedUncommittedFileRow> = sqlx::query_as(
             r#"
-SELECT id, file_path, file_name, block_size, attrs, priority, status, failed_reason, created_at, updated_at
+SELECT id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, priority, status, failed_reason, created_at, updated_at
     FROM uncommitted_files
 "#,
         )
@@ -471,7 +577,7 @@ SELECT id, file_path, file_name, block_size, attrs, priority, status, failed_rea
     pub async fn find_uncommitted_file_by_encoding_next(&self) -> Result<Option<PublishedUncommittedFile>> {
         let res: Option<PublishedUncommittedFileRow> = sqlx::query_as(
             r#"
-SELECT id, file_path, file_name, block_size, attrs, priority, status, failed_reason, created_at, updated_at
+SELECT id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, priority, status, failed_reason, created_at, updated_at
     FROM uncommitted_files
     WHERE status = 'Pending'
     ORDER BY priority ASC, created_at ASC
@@ -487,7 +593,7 @@ SELECT id, file_path, file_name, block_size, attrs, priority, status, failed_rea
     pub async fn find_uncommitted_file_by_id(&self, id: &str) -> Result<Option<PublishedUncommittedFile>> {
         let res: Option<PublishedUncommittedFileRow> = sqlx::query_as(
             r#"
-SELECT id, file_path, file_name, block_size, attrs, priority, status, failed_reason, created_at, updated_at
+SELECT id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, priority, status, failed_reason, created_at, updated_at
     FROM uncommitted_files
     WHERE id = ?
 "#,
@@ -503,15 +609,18 @@ SELECT id, file_path, file_name, block_size, attrs, priority, status, failed_rea
         let row = PublishedUncommittedFileRow::from(item)?;
         sqlx::query(
             r#"
-INSERT INTO uncommitted_files (id, file_path, file_name, block_size, attrs, priority, status, failed_reason, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO uncommitted_files (id, file_path, file_name, size, received_bytes, block_size, attrs, source_owned, priority, status, failed_reason, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#,
         )
         .bind(row.id)
         .bind(row.file_path)
         .bind(row.file_name)
+        .bind(row.size)
+        .bind(row.received_bytes)
         .bind(row.block_size)
         .bind(row.attrs)
+        .bind(row.source_owned)
         .bind(row.priority)
         .bind(row.status)
         .bind(row.failed_reason)
@@ -587,6 +696,103 @@ DELETE FROM uncommitted_blocks
         tx.commit().await?;
 
         Ok(())
+    }
+
+    pub async fn update_received_bytes(&self, id: &str, expected: i64, next: i64) -> Result<bool> {
+        let changed = sqlx::query(
+            r#"
+UPDATE uncommitted_files
+    SET received_bytes = ?, updated_at = ?
+    WHERE id = ? AND status = 'Receiving' AND received_bytes = ?
+"#,
+        )
+        .bind(next)
+        .bind(self.clock.now().naive_utc())
+        .bind(id)
+        .bind(expected)
+        .execute(self.db.as_ref())
+        .await?
+        .rows_affected()
+            != 0;
+        Ok(changed)
+    }
+
+    pub async fn complete_receiving(&self, id: &str) -> Result<bool> {
+        let changed = sqlx::query(
+            r#"
+UPDATE uncommitted_files
+    SET status = 'Pending', updated_at = ?
+    WHERE id = ? AND status = 'Receiving' AND size IS NOT NULL AND received_bytes >= size
+"#,
+        )
+        .bind(self.clock.now().naive_utc())
+        .bind(id)
+        .execute(self.db.as_ref())
+        .await?
+        .rows_affected()
+            != 0;
+        Ok(changed)
+    }
+
+    pub async fn mark_canceled(&self, id: &str) -> Result<bool> {
+        let changed = sqlx::query(
+            r#"
+UPDATE uncommitted_files
+    SET status = 'Canceled', updated_at = ?
+    WHERE id = ? AND status IN ('Receiving', 'Pending', 'Processing')
+"#,
+        )
+        .bind(self.clock.now().naive_utc())
+        .bind(id)
+        .execute(self.db.as_ref())
+        .await?
+        .rows_affected()
+            != 0;
+        Ok(changed)
+    }
+
+    pub async fn find_publication_record(&self, publication_id: &str) -> Result<Option<PublicationRecord>> {
+        let row: Option<PublicationRecordRow> = sqlx::query_as(
+            r#"
+SELECT publication_id, root_hash, file_name, size, created_at, updated_at
+    FROM publication_records
+    WHERE publication_id = ?
+"#,
+        )
+        .bind(publication_id)
+        .fetch_optional(self.db.as_ref())
+        .await?;
+        row.map(|row| row.into()).transpose()
+    }
+
+    pub async fn get_publication_records(&self) -> Result<Vec<PublicationRecord>> {
+        let rows: Vec<PublicationRecordRow> = sqlx::query_as(
+            r#"
+SELECT publication_id, root_hash, file_name, size, created_at, updated_at
+    FROM publication_records
+    ORDER BY created_at ASC
+"#,
+        )
+        .fetch_all(self.db.as_ref())
+        .await?;
+        rows.into_iter().map(|row| row.into()).collect()
+    }
+
+    pub async fn delete_publication_record(&self, publication_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM publication_records WHERE publication_id = ?")
+            .bind(publication_id)
+            .execute(self.db.as_ref())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn count_publication_records(&self, root_hash: &OmniHash, file_name: &str) -> Result<i64> {
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(1) FROM publication_records WHERE root_hash = ? AND file_name = ?")
+            .bind(root_hash.to_string())
+            .bind(file_name)
+            .fetch_one(self.db.as_ref())
+            .await?;
+        Ok(count)
     }
 
     pub async fn contains_uncommitted_block(&self, file_id: &str, block_hash: &OmniHash) -> Result<bool> {
@@ -682,6 +888,39 @@ DELETE FROM uncommitted_blocks
     }
 }
 
+#[derive(Clone)]
+pub struct PublicationRecord {
+    pub publication_id: String,
+    pub root_hash: OmniHash,
+    pub file_name: String,
+    pub size: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(sqlx::FromRow)]
+struct PublicationRecordRow {
+    publication_id: String,
+    root_hash: String,
+    file_name: String,
+    size: i64,
+    created_at: NaiveDateTime,
+    updated_at: NaiveDateTime,
+}
+
+impl PublicationRecordRow {
+    fn into(self) -> Result<PublicationRecord> {
+        Ok(PublicationRecord {
+            publication_id: self.publication_id,
+            root_hash: OmniHash::from_str(self.root_hash.as_str()).unwrap(),
+            file_name: self.file_name,
+            size: self.size,
+            created_at: DateTime::from_naive_utc_and_offset(self.created_at, Utc),
+            updated_at: DateTime::from_naive_utc_and_offset(self.updated_at, Utc),
+        })
+    }
+}
+
 #[derive(sqlx::FromRow)]
 struct PublishedCommittedFileRow {
     root_hash: String,
@@ -752,8 +991,11 @@ struct PublishedUncommittedFileRow {
     pub id: String,
     pub file_path: String,
     pub file_name: String,
+    pub size: Option<i64>,
+    pub received_bytes: i64,
     pub block_size: u32,
     pub attrs: Option<String>,
+    pub source_owned: bool,
     pub priority: i64,
     pub status: PublishedUncommittedFileStatus,
     pub failed_reason: Option<String>,
@@ -767,8 +1009,11 @@ impl PublishedUncommittedFileRow {
             id: self.id,
             file_path: self.file_path,
             file_name: self.file_name,
+            size: self.size,
+            received_bytes: self.received_bytes,
             block_size: self.block_size,
             attrs: self.attrs,
+            source_owned: self.source_owned,
             priority: self.priority,
             status: self.status,
             failed_reason: self.failed_reason,
@@ -783,8 +1028,11 @@ impl PublishedUncommittedFileRow {
             id: item.id.to_string(),
             file_path: item.file_path.to_string(),
             file_name: item.file_name.to_string(),
+            size: item.size,
+            received_bytes: item.received_bytes,
             block_size: item.block_size,
             attrs: item.attrs.as_ref().map(|n| n.to_string()),
+            source_owned: item.source_owned,
             priority: item.priority,
             status: item.status.clone(),
             failed_reason: item.failed_reason.as_ref().map(|n| n.to_string()),
@@ -958,7 +1206,7 @@ mod tests {
             rank: 1,
             index: 0,
         };
-        repo.commit_file_with_blocks(&committed_file(&root_hash, "a.txt", now), &[committed_block], "1").await?;
+        repo.commit_file_with_blocks(&committed_file(&root_hash, "a.txt", now), &[committed_block], "1", 7).await?;
 
         assert!(!repo.contains_uncommitted_file("1").await?);
         assert!(repo.find_uncommitted_blocks_by_file_id("1").await?.is_empty());
@@ -969,7 +1217,7 @@ mod tests {
         assert_eq!(found.attrs.as_deref(), Some("attrs"));
 
         repo.insert_uncommitted_file(&uncommitted_file("2", "b.txt", now)).await?;
-        repo.commit_file_without_blocks(&committed_file(&root_hash, "b.txt", now), "2").await?;
+        repo.commit_file_without_blocks(&committed_file(&root_hash, "b.txt", now), "2", 0).await?;
         assert!(!repo.contains_uncommitted_file("2").await?);
 
         repo.insert_committed_file(&committed_file(&hash(b"other"), "c.txt", now)).await?;
@@ -989,8 +1237,11 @@ mod tests {
             id: id.to_string(),
             file_path: format!("/tmp/{file_name}"),
             file_name: file_name.to_string(),
+            size: None,
+            received_bytes: 0,
             block_size: 1024,
             attrs: Some("attrs".to_string()),
+            source_owned: false,
             priority: 0,
             status: PublishedUncommittedFileStatus::Pending,
             failed_reason: None,

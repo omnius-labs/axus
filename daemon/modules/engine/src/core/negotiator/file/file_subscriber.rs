@@ -60,9 +60,12 @@ impl FileSubscriber {
         }
         Ok(written.result)
     }
-    #[cfg(test)]
     pub async fn find_file(&self, id: &str) -> Result<Option<SubscribedFile>> {
         self.store.find_file(id).await
+    }
+
+    pub async fn list_files(&self) -> Result<Vec<SubscribedFile>> {
+        self.store.list_files().await
     }
     pub async fn get_provided_root_hashes(&self) -> Result<Vec<OmniHash>> {
         self.store.get_provided_root_hashes().await

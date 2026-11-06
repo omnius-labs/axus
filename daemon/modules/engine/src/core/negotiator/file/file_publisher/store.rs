@@ -9,7 +9,10 @@ use std::{
 
 use chrono::Utc;
 use parking_lot::Mutex;
-use tokio::sync::{Mutex as TokioMutex, Notify};
+use tokio::{
+    io::{AsyncSeekExt, AsyncWriteExt},
+    sync::{Mutex as TokioMutex, Notify},
+};
 use tokio_util::bytes::Bytes;
 
 use omnius_core_base::{clock::Clock, tsid::TsidProvider};
@@ -17,7 +20,30 @@ use omnius_core_omnikit::generated::omni_hash::OmniHash;
 
 use crate::{base::storage::KeyValueRocksdbStorage, generated::axus::file::MAX_BLOCK_LENGTH};
 
-use super::{repo::FilePublisherRepo, *};
+use super::{
+    repo::{FilePublisherRepo, PublicationRecord},
+    *,
+};
+
+pub enum PublicationView {
+    Uncommitted(PublishedUncommittedFile),
+    Committed(PublicationRecord, PublishedCommittedFile),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum AppendContentResult {
+    Accepted { received_bytes: i64 },
+    OffsetMismatch { received_bytes: i64 },
+    TooLarge { size: i64 },
+    NotReceiving,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum PublicationRemoveResult {
+    Removed,
+    Active,
+    NotFound,
+}
 
 pub struct FilePublisherStore {
     repo: FilePublisherRepo,
@@ -58,6 +84,7 @@ impl FilePublisherStore {
             let _guard = store.lock.lock().await;
             store.blocks_storage.shrink(|key| !key.starts_with(b"U/")).await?;
             store.repo.recover().await?;
+            store.repo.reconcile_receiving().await?;
             store.sweep_locked().await?;
         }
         Ok(store)
@@ -86,8 +113,11 @@ impl FilePublisherStore {
             id: id.clone(),
             file_path: file_path.to_string(),
             file_name: file_name.to_string(),
+            size: None,
+            received_bytes: 0,
             block_size,
             attrs: attrs.map(str::to_string),
+            source_owned: false,
             priority,
             status: PublishedUncommittedFileStatus::Pending,
             failed_reason: None,
@@ -106,6 +136,189 @@ impl FilePublisherStore {
             self.repo.insert_uncommitted_file(&file).await?;
         }
         Ok(id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_publication(
+        &self,
+        staging_dir: &Path,
+        file_name: &str,
+        size: i64,
+        block_size: u32,
+        attrs: Option<&str>,
+        priority: i64,
+    ) -> Result<PublishedUncommittedFile> {
+        if size < 0 {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("file size must not be negative"));
+        }
+        if block_size == 0 {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("block size must be nonzero"));
+        }
+        if block_size > MAX_BLOCK_LENGTH {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message(format!("block size must be at most {MAX_BLOCK_LENGTH} bytes")));
+        }
+
+        let _guard = self.lock.lock().await;
+        let id = self.tsid_provider.lock().create().to_string();
+        if self.repo.contains_uncommitted_file(&id).await? || self.repo.find_publication_record(&id).await?.is_some() {
+            return Err(Error::new(ErrorKind::AlreadyExists).with_message("publication id already exists"));
+        }
+        tokio::fs::create_dir_all(staging_dir).await?;
+        let file_path = staging_dir.join(&id);
+        tokio::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&file_path).await?;
+        let now = self.clock.now();
+        let file = PublishedUncommittedFile {
+            id,
+            file_path: file_path.to_string_lossy().to_string(),
+            file_name: file_name.to_string(),
+            size: Some(size),
+            received_bytes: 0,
+            block_size,
+            attrs: attrs.map(str::to_string),
+            source_owned: true,
+            priority,
+            status: if size == 0 {
+                PublishedUncommittedFileStatus::Pending
+            } else {
+                PublishedUncommittedFileStatus::Receiving
+            },
+            failed_reason: None,
+            created_at: now,
+            updated_at: now,
+        };
+        self.repo.insert_uncommitted_file(&file).await?;
+        Ok(file)
+    }
+
+    pub async fn append_content(&self, id: &str, offset: i64, bytes: Bytes) -> Result<AppendContentResult> {
+        let _guard = self.lock.lock().await;
+        let Some(file) = self.repo.find_uncommitted_file_by_id(id).await? else {
+            return Ok(AppendContentResult::NotReceiving);
+        };
+        if file.status != PublishedUncommittedFileStatus::Receiving {
+            return Ok(AppendContentResult::NotReceiving);
+        }
+        if offset != file.received_bytes {
+            return Ok(AppendContentResult::OffsetMismatch {
+                received_bytes: file.received_bytes,
+            });
+        }
+        let size = file.size.unwrap_or(0);
+        let end = offset.saturating_add(i64::try_from(bytes.len()).unwrap_or(i64::MAX));
+        if end > size {
+            return Ok(AppendContentResult::TooLarge { size });
+        }
+
+        {
+            let mut handle = tokio::fs::OpenOptions::new().write(true).create(true).truncate(false).open(&file.file_path).await?;
+            handle.seek(std::io::SeekFrom::Start(u64::try_from(offset).unwrap_or(0))).await?;
+            handle.write_all(&bytes).await?;
+            handle.flush().await?;
+            if end == size {
+                handle.set_len(u64::try_from(size).unwrap_or(0)).await?;
+            }
+        }
+
+        if !self.repo.update_received_bytes(id, offset, end).await? {
+            let current = self.repo.find_uncommitted_file_by_id(id).await?;
+            return Ok(AppendContentResult::OffsetMismatch {
+                received_bytes: current.map(|file| file.received_bytes).unwrap_or(0),
+            });
+        }
+        if end == size {
+            self.repo.complete_receiving(id).await?;
+        }
+        Ok(AppendContentResult::Accepted { received_bytes: end })
+    }
+
+    pub async fn cancel_publication(&self, id: &str) -> Result<bool> {
+        let _guard = self.lock.lock().await;
+        let Some(file) = self.repo.find_uncommitted_file_by_id(id).await? else {
+            return Ok(false);
+        };
+        if !self.repo.mark_canceled(id).await? {
+            return Ok(false);
+        }
+        self.delete_source(&file).await;
+        if let Err(error) = self.cleanup_blocks_locked(id).await {
+            warn!(?error, "canceled publication block cleanup failed");
+            self.sweep_after_failure_locked().await;
+        }
+        Ok(true)
+    }
+
+    pub async fn get_publication(&self, id: &str) -> Result<Option<PublicationView>> {
+        if let Some(file) = self.repo.find_uncommitted_file_by_id(id).await? {
+            return Ok(Some(PublicationView::Uncommitted(file)));
+        }
+        let Some(record) = self.repo.find_publication_record(id).await? else {
+            return Ok(None);
+        };
+        let Some(file) = self.repo.find_committed_file(&record.root_hash, &record.file_name).await? else {
+            return Ok(None);
+        };
+        Ok(Some(PublicationView::Committed(record, file)))
+    }
+
+    pub async fn list_publications(&self) -> Result<Vec<PublicationView>> {
+        let mut views: Vec<PublicationView> = self.repo.get_uncommitted_files().await?.into_iter().map(PublicationView::Uncommitted).collect();
+        let mut seen = HashSet::new();
+        for record in self.repo.get_publication_records().await? {
+            let key = (record.root_hash.clone(), record.file_name.clone());
+            if !seen.insert(key) {
+                continue;
+            }
+            if let Some(file) = self.repo.find_committed_file(&record.root_hash, &record.file_name).await? {
+                views.push(PublicationView::Committed(record, file));
+            }
+        }
+        Ok(views)
+    }
+
+    pub async fn remove_publication(&self, id: &str) -> Result<PublicationRemoveResult> {
+        let _guard = self.lock.lock().await;
+        if let Some(file) = self.repo.find_uncommitted_file_by_id(id).await? {
+            if matches!(
+                file.status,
+                PublishedUncommittedFileStatus::Receiving | PublishedUncommittedFileStatus::Pending | PublishedUncommittedFileStatus::Processing
+            ) {
+                return Ok(PublicationRemoveResult::Active);
+            }
+            self.repo.delete_uncommitted_file(id).await?;
+            self.delete_source(&file).await;
+            if let Err(error) = self.cleanup_blocks_locked(id).await {
+                warn!(?error, "removed publication block cleanup failed");
+                self.sweep_after_failure_locked().await;
+            }
+            return Ok(PublicationRemoveResult::Removed);
+        }
+
+        let Some(record) = self.repo.find_publication_record(id).await? else {
+            return Ok(PublicationRemoveResult::NotFound);
+        };
+        self.repo.delete_publication_record(id).await?;
+        if self.repo.count_publication_records(&record.root_hash, &record.file_name).await? == 0 {
+            self.repo.remove_committed_file(&record.root_hash, &record.file_name).await?;
+            if !self.repo.contains_committed_file(&record.root_hash).await? {
+                let result = self.delete_prefix(&format!("C/{}/", record.root_hash)).await;
+                if result.is_err() {
+                    self.sweep_after_failure_locked().await;
+                }
+                result?;
+            }
+        }
+        Ok(PublicationRemoveResult::Removed)
+    }
+
+    async fn delete_source(&self, file: &PublishedUncommittedFile) {
+        if !file.source_owned {
+            return;
+        }
+        match tokio::fs::remove_file(&file.file_path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => warn!(?error, path = file.file_path, "staged publication file deletion failed"),
+        }
     }
 
     pub async fn next_file(&self) -> Result<Option<PublishedUncommittedFile>> {
@@ -150,7 +363,12 @@ impl FilePublisherStore {
 
     pub async fn fail(&self, id: &str, reason: &str) -> Result<()> {
         let _guard = self.lock.lock().await;
-        self.repo.update_uncommitted_file_as_failed(id, reason).await
+        let file = self.repo.find_uncommitted_file_by_id(id).await?;
+        self.repo.update_uncommitted_file_as_failed(id, reason).await?;
+        if let Some(file) = file {
+            self.delete_source(&file).await;
+        }
+        Ok(())
     }
 
     pub async fn cancel(&self, id: &str) -> Result<()> {
@@ -249,6 +467,9 @@ impl FilePublisherStore {
         if result.is_err() {
             self.sweep_after_failure_locked().await;
         }
+        if matches!(result, Ok(true)) {
+            self.delete_source(file).await;
+        }
         result
     }
 
@@ -272,7 +493,7 @@ impl FilePublisherStore {
         };
         if self.repo.contains_committed_file(root_hash).await? {
             self.cleanup_blocks_locked(&file.id).await?;
-            self.repo.commit_file_without_blocks(&committed, &file.id).await?;
+            self.repo.commit_file_without_blocks(&committed, &file.id, file.size.unwrap_or(0)).await?;
         } else {
             let deletions = self.keys_with_prefix(&format!("C/{root_hash}/"))?;
             let mut hashes = HashSet::new();
@@ -300,7 +521,7 @@ impl FilePublisherStore {
                     index: block.index,
                 })
                 .collect();
-            self.repo.commit_file_with_blocks(&committed, &committed_blocks, &file.id).await?;
+            self.repo.commit_file_with_blocks(&committed, &committed_blocks, &file.id, file.size.unwrap_or(0)).await?;
         }
         Ok(true)
     }
@@ -955,6 +1176,46 @@ mod tests {
         wait_published(&publisher).await?;
         publisher.shutdown().await;
         assert!(publisher.store.repo.find_uncommitted_file_by_id(&id).await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_publication_is_created_before_its_content_and_follows_the_offsets() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FilePublisherStore::open(dir.path(), ids, clock).await?;
+        let staging = dir.path().join("uploads");
+        let file = store.create_publication(&staging, "a.bin", 4, 256, None, 0).await?;
+        assert_eq!(file.status, PublishedUncommittedFileStatus::Receiving);
+        assert_eq!(
+            store.append_content(&file.id, 1, Bytes::from_static(b"abcd")).await?,
+            AppendContentResult::OffsetMismatch { received_bytes: 0 }
+        );
+        assert_eq!(
+            store.append_content(&file.id, 0, Bytes::from_static(b"ab")).await?,
+            AppendContentResult::Accepted { received_bytes: 2 }
+        );
+        assert_eq!(
+            store.repo.find_uncommitted_file_by_id(&file.id).await?.unwrap().status,
+            PublishedUncommittedFileStatus::Receiving
+        );
+        assert_eq!(
+            store.append_content(&file.id, 2, Bytes::from_static(b"cd")).await?,
+            AppendContentResult::Accepted { received_bytes: 4 }
+        );
+        assert_eq!(
+            store.repo.find_uncommitted_file_by_id(&file.id).await?.unwrap().status,
+            PublishedUncommittedFileStatus::Pending
+        );
+        assert_eq!(tokio::fs::read(staging.join(&file.id)).await?, b"abcd");
+        assert!(store.cancel_publication(&file.id).await?);
+        assert_eq!(
+            store.repo.find_uncommitted_file_by_id(&file.id).await?.unwrap().status,
+            PublishedUncommittedFileStatus::Canceled
+        );
+        assert_eq!(store.remove_publication(&file.id).await?, PublicationRemoveResult::Removed);
+        assert!(store.repo.find_uncommitted_file_by_id(&file.id).await?.is_none());
+        assert!(!staging.join(&file.id).exists());
         Ok(())
     }
 

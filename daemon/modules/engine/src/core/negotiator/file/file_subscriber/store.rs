@@ -206,6 +206,10 @@ impl FileSubscriberStore {
     pub async fn find_file(&self, id: &str) -> Result<Option<SubscribedFile>> {
         self.repo.find_file_by_id(id).await
     }
+
+    pub async fn list_files(&self) -> Result<Vec<SubscribedFile>> {
+        self.repo.get_committed_files().await
+    }
     pub async fn next_file(&self) -> Result<Option<SubscribedFile>> {
         self.repo.find_file_by_decoding_next().await
     }

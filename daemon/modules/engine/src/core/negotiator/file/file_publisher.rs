@@ -13,6 +13,8 @@ mod task_encoder;
 mod util;
 use self::{store::FilePublisherStore, task_encoder::TaskEncoder};
 
+pub use self::store::{AppendContentResult, PublicationRemoveResult, PublicationView};
+
 pub struct FilePublisher {
     store: Arc<FilePublisherStore>,
     task_encoder: Arc<TaskEncoder>,
@@ -41,6 +43,44 @@ impl FilePublisher {
         let id = self.store.import(file_path, file_name, block_size, attrs, priority).await?;
         self.task_encoder.wake();
         Ok(id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_publication(
+        &self,
+        staging_dir: &std::path::Path,
+        file_name: &str,
+        size: i64,
+        block_size: u32,
+        attrs: Option<&str>,
+        priority: i64,
+    ) -> Result<PublishedUncommittedFile> {
+        let file = self.store.create_publication(staging_dir, file_name, size, block_size, attrs, priority).await?;
+        self.task_encoder.wake();
+        Ok(file)
+    }
+
+    pub async fn append_content(&self, id: &str, offset: i64, bytes: Bytes) -> Result<AppendContentResult> {
+        self.store.append_content(id, offset, bytes).await
+    }
+
+    pub async fn get_publication(&self, id: &str) -> Result<Option<PublicationView>> {
+        self.store.get_publication(id).await
+    }
+
+    pub async fn list_publications(&self) -> Result<Vec<PublicationView>> {
+        self.store.list_publications().await
+    }
+
+    pub async fn cancel_publication(&self, id: &str) -> Result<bool> {
+        self.task_encoder.cancel(id);
+        let changed = self.store.cancel_publication(id).await?;
+        Ok(changed)
+    }
+
+    pub async fn remove_publication(&self, id: &str) -> Result<PublicationRemoveResult> {
+        self.task_encoder.cancel(id);
+        self.store.remove_publication(id).await
     }
     pub async fn cancel(&self, id: &str) -> Result<()> {
         self.store.cancel(id).await?;

@@ -8,12 +8,15 @@ use omnius_core_base::{
     sleeper::{Sleeper, SleeperImpl},
     tsid::TsidProviderImpl,
 };
+use omnius_core_omnikit::generated::omni_hash::OmniHash;
 use omnius_core_omnikit::model::omni_addr::OmniAddr;
 use rand::{
     SeedableRng,
     rngs::{ChaCha20Rng, SysRng},
 };
 use rand_core::UnwrapErr;
+
+use tokio_util::bytes::Bytes;
 
 use crate::{
     base::{
@@ -23,14 +26,15 @@ use crate::{
     core::{
         identity::NodeIdentity,
         negotiator::{
-            FileExchanger, FileExchangerIntervals, FileExchangerOption, NodeFinder, NodeFinderIntervals, NodeFinderLocationFinder, NodeFinderOption, NodeFinderRepo,
-            NodeProfileFetcherImpl,
+            AppendContentResult, FileExchanger, FileExchangerIntervals, FileExchangerOption, NodeFinder, NodeFinderIntervals, NodeFinderLocationFinder, NodeFinderOption,
+            NodeFinderRepo, NodeProfileFetcherImpl, Publication, PublicationRemoveResult, PublicationView, SubscribedFile,
         },
         session::{
             SessionAccepter, SessionConnector,
             model::{SessionOption, SessionType},
         },
     },
+    generated::axus::file::MAX_BLOCK_LENGTH,
     model::NodeProfile,
     prelude::*,
 };
@@ -165,6 +169,74 @@ impl AxusService {
         };
 
         Ok((node_finder, file_exchanger))
+    }
+
+    pub async fn create_publication(&self, staging_dir: &std::path::Path, file_name: &str, size: i64) -> Result<Publication> {
+        let file = self
+            .file_exchanger
+            .file_publisher()
+            .create_publication(staging_dir, file_name, size, MAX_BLOCK_LENGTH, None, 0)
+            .await?;
+        Ok(Publication::from_uncommitted(file))
+    }
+
+    pub async fn append_publication_content(&self, id: &str, offset: i64, bytes: Bytes) -> Result<AppendContentResult> {
+        self.file_exchanger.file_publisher().append_content(id, offset, bytes).await
+    }
+
+    pub async fn get_publication(&self, id: &str) -> Result<Option<Publication>> {
+        let Some(view) = self.file_exchanger.file_publisher().get_publication(id).await? else {
+            return Ok(None);
+        };
+        Ok(Some(Self::publication_from_view(view)))
+    }
+
+    pub async fn list_publications(&self) -> Result<Vec<Publication>> {
+        Ok(self
+            .file_exchanger
+            .file_publisher()
+            .list_publications()
+            .await?
+            .into_iter()
+            .map(Self::publication_from_view)
+            .collect())
+    }
+
+    pub async fn cancel_publication(&self, id: &str) -> Result<bool> {
+        self.file_exchanger.file_publisher().cancel_publication(id).await
+    }
+
+    pub async fn remove_publication(&self, id: &str) -> Result<PublicationRemoveResult> {
+        self.file_exchanger.file_publisher().remove_publication(id).await
+    }
+
+    fn publication_from_view(view: PublicationView) -> Publication {
+        match view {
+            PublicationView::Uncommitted(file) => Publication::from_uncommitted(file),
+            PublicationView::Committed(record, _file) => {
+                Publication::from_committed(record.publication_id, record.file_name, record.size, record.root_hash, record.created_at, record.updated_at)
+            }
+        }
+    }
+
+    pub async fn subscribe(&self, root_hash: &OmniHash, output_path: &str) -> Result<String> {
+        self.file_exchanger.file_subscriber().subscribe(root_hash, output_path, None, 0).await
+    }
+
+    pub async fn find_subscription(&self, id: &str) -> Result<Option<SubscribedFile>> {
+        self.file_exchanger.file_subscriber().find_file(id).await
+    }
+
+    pub async fn list_subscriptions(&self) -> Result<Vec<SubscribedFile>> {
+        self.file_exchanger.file_subscriber().list_files().await
+    }
+
+    pub async fn cancel_subscription(&self, id: &str) -> Result<()> {
+        self.file_exchanger.file_subscriber().cancel(id).await
+    }
+
+    pub async fn remove_subscription(&self, id: &str) -> Result<()> {
+        self.file_exchanger.file_subscriber().remove(id).await
     }
 
     pub async fn shutdown(&self) {

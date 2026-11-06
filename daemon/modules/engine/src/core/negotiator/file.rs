@@ -39,13 +39,13 @@ pub use file_exchanger::*;
 #[allow(unused)]
 pub use file_exchanger_intervals::*;
 #[allow(unused)]
-use file_publisher::*;
+pub use file_publisher::*;
 #[allow(unused)]
 use file_subscriber::*;
 #[allow(unused)]
 pub use location_finder::*;
 #[allow(unused)]
-use model::*;
+pub use model::*;
 #[allow(unused)]
 use serve_queue::*;
 #[allow(unused)]

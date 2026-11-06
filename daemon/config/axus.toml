@@ -2,7 +2,9 @@
 state_dir = "./state"
 
 [api]
+# The API has no authentication yet, so it must listen on a loopback address.
 listen_addr = "127.0.0.1:5050"
+# max_upload_size = 0 # bytes; 0 means no limit
 
 [p2p]
 listen_addr = "127.0.0.1:5051"
@@ -13,3 +15,9 @@ bootstrap_nodes = []
 [logging]
 level = "info"
 json = false
+
+# [storage]
+# download_dir = "./downloads" # Defaults to <state_dir>/downloads
+
+# [web]
+# dir = "./web" # The build output of the browser client

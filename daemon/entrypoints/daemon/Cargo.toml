@@ -35,6 +35,8 @@ http = { workspace = true }
 bytes = { workspace = true }
 axum = { workspace = true }
 axum-extra = { workspace = true }
+futures-util = { workspace = true }
+tower = { workspace = true }
 
 [dev-dependencies]
 testresult = { workspace = true }

@@ -163,10 +163,8 @@ The following order is tentative; only the dependencies in the table must be pre
 
 | # | Item | Prerequisite dependency |
 | --- | --- | --- |
-| 1 | Serve publications and subscriptions through the REST API, with staged uploads, the download directory, and loopback-only listening | [daemon-api.md §5](./design/daemon-api.md#5-rest-resources) |
-| 2 | Require an owner session on every route except health, setup, and login, and allow a non-loopback listen address | 1 |
-| 3 | Let a publication read a configured library root | 2 |
-| 4 | Add the browser client | 1, 2, 3 |
-| 5 | Define Web of Trust, Profile, and memo in order | [trust-security.md §4](./design/trust-security.md#4-design-decisions) |
+| 1 | Let a publication read a configured library root | [daemon-api.md §5.3](./design/daemon-api.md#53-sources-of-a-publication) |
+| 2 | Add the browser client | 1 |
+| 3 | Define Web of Trust, Profile, and memo in order | [trust-security.md §4](./design/trust-security.md#4-design-decisions) |
 
 For confirmed bugs and fix directions, see [issues.md](./issues.md).

@@ -21,11 +21,12 @@ use crate::{models::check_xss_map, models::check_xss_map_nested, models::check_x
 pub fn new<I, A, E>(api_impl: I) -> Router
 where
     I: AsRef<A> + Clone + Send + Sync + 'static,
-    A: apis::health::Health<E> + apis::publications::Publications<E> + apis::subscriptions::Subscriptions<E> + Send + Sync + 'static,
+    A: apis::authentication::Authentication<E> + apis::health::Health<E> + apis::publications::Publications<E> + apis::subscriptions::Subscriptions<E> + Send + Sync + 'static,
     E: std::fmt::Debug + Send + Sync + 'static,
 {
     // build our application with a route
     Router::new()
+        .route("/api/v1/auth/session", delete(delete_session::<I, A, E>).post(create_session::<I, A, E>))
         .route("/api/v1/health", get(get_health::<I, A, E>))
         .route("/api/v1/publications", get(list_publications::<I, A, E>).post(create_publication::<I, A, E>))
         .route(
@@ -34,6 +35,8 @@ where
         )
         .route("/api/v1/publications/{publication_id}/cancel", post(cancel_publication::<I, A, E>))
         .route("/api/v1/publications/{publication_id}/content", put(write_publication_content::<I, A, E>))
+        .route("/api/v1/setup", post(create_owner::<I, A, E>))
+        .route("/api/v1/setup/status", get(get_setup_status::<I, A, E>))
         .route("/api/v1/subscriptions", get(list_subscriptions::<I, A, E>).post(create_subscription::<I, A, E>))
         .route(
             "/api/v1/subscriptions/{subscription_id}",
@@ -42,6 +45,418 @@ where
         .route("/api/v1/subscriptions/{subscription_id}/cancel", post(cancel_subscription::<I, A, E>))
         .route("/api/v1/subscriptions/{subscription_id}/content", get(get_subscription_content::<I, A, E>))
         .with_state(api_impl)
+}
+
+#[derive(validator::Validate)]
+#[allow(dead_code)]
+struct CreateOwnerBodyValidator<'a> {
+    #[validate(nested)]
+    body: &'a models::Credentials,
+}
+
+#[tracing::instrument(skip_all)]
+fn create_owner_validation(body: models::Credentials) -> std::result::Result<(models::Credentials,), ValidationErrors> {
+    let b = CreateOwnerBodyValidator { body: &body };
+    b.validate()?;
+
+    Ok((body,))
+}
+/// CreateOwner - POST /api/v1/setup
+#[tracing::instrument(skip_all)]
+async fn create_owner<I, A, E>(
+    method: Method,
+    TypedHeader(host): TypedHeader<Host>,
+    cookies: CookieJar,
+    State(api_impl): State<I>,
+    Json(body): Json<models::Credentials>,
+) -> Result<Response, StatusCode>
+where
+    I: AsRef<A> + Send + Sync,
+    A: apis::authentication::Authentication<E> + Send + Sync,
+    E: std::fmt::Debug + Send + Sync + 'static,
+{
+    #[allow(clippy::redundant_closure)]
+    let validation = tokio::task::spawn_blocking(move || create_owner_validation(body)).await.unwrap();
+
+    let Ok((body,)) = validation else {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::from(validation.unwrap_err().to_string()))
+            .map_err(|_| StatusCode::BAD_REQUEST);
+    };
+
+    let result = api_impl.as_ref().create_owner(&method, &host, &cookies, &body).await;
+
+    let mut response = Response::builder();
+
+    let resp = match result {
+        Ok(rsp) => match rsp {
+            apis::authentication::CreateOwnerResponse::Status204_TheOwnerIsRegistered => {
+                let mut response = response.status(204);
+                response.body(Body::empty())
+            }
+            apis::authentication::CreateOwnerResponse::Status400_TheRequestIsMalformed(body) => {
+                let mut response = response.status(400);
+                {
+                    let mut response_headers = response.headers_mut().unwrap();
+                    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                }
+
+                let body_content = tokio::task::spawn_blocking(move || {
+                    serde_json::to_vec(&body).map_err(|e| {
+                        error!(error = ?e);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })
+                })
+                .await
+                .unwrap()?;
+                response.body(Body::from(body_content))
+            }
+            apis::authentication::CreateOwnerResponse::Status409_TheRequestConflictsWithTheCurrentState(body) => {
+                let mut response = response.status(409);
+                {
+                    let mut response_headers = response.headers_mut().unwrap();
+                    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                }
+
+                let body_content = tokio::task::spawn_blocking(move || {
+                    serde_json::to_vec(&body).map_err(|e| {
+                        error!(error = ?e);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })
+                })
+                .await
+                .unwrap()?;
+                response.body(Body::from(body_content))
+            }
+            apis::authentication::CreateOwnerResponse::Status500_InternalServerError(body) => {
+                let mut response = response.status(500);
+                {
+                    let mut response_headers = response.headers_mut().unwrap();
+                    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                }
+
+                let body_content = tokio::task::spawn_blocking(move || {
+                    serde_json::to_vec(&body).map_err(|e| {
+                        error!(error = ?e);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })
+                })
+                .await
+                .unwrap()?;
+                response.body(Body::from(body_content))
+            }
+        },
+        Err(why) => {
+            // Application code returned an error. This should not happen, as the implementation should
+            // return a valid response.
+            return api_impl.as_ref().handle_error(&method, &host, &cookies, why).await;
+        }
+    };
+
+    resp.map_err(|e| {
+        error!(error = ?e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+#[derive(validator::Validate)]
+#[allow(dead_code)]
+struct CreateSessionBodyValidator<'a> {
+    #[validate(nested)]
+    body: &'a models::Credentials,
+}
+
+#[tracing::instrument(skip_all)]
+fn create_session_validation(
+    header_params: models::CreateSessionHeaderParams,
+    body: models::Credentials,
+) -> std::result::Result<(models::CreateSessionHeaderParams, models::Credentials), ValidationErrors> {
+    header_params.validate()?;
+    let b = CreateSessionBodyValidator { body: &body };
+    b.validate()?;
+
+    Ok((header_params, body))
+}
+/// CreateSession - POST /api/v1/auth/session
+#[tracing::instrument(skip_all)]
+async fn create_session<I, A, E>(
+    method: Method,
+    TypedHeader(host): TypedHeader<Host>,
+    cookies: CookieJar,
+    headers: HeaderMap,
+    State(api_impl): State<I>,
+    Json(body): Json<models::Credentials>,
+) -> Result<Response, StatusCode>
+where
+    I: AsRef<A> + Send + Sync,
+    A: apis::authentication::Authentication<E> + Send + Sync,
+    E: std::fmt::Debug + Send + Sync + 'static,
+{
+    // Header parameters
+    let header_params = {
+        let header_x_axus_transport = headers.get(HeaderName::from_static("x-axus-transport"));
+
+        let header_x_axus_transport = match header_x_axus_transport {
+            Some(v) => match header::IntoHeaderValue::<String>::try_from((*v).clone()) {
+                Ok(result) => Some(result.0),
+                Err(err) => {
+                    return Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Body::from(format!("Invalid header X-Axus-Transport - {err}")))
+                        .map_err(|e| {
+                            error!(error = ?e);
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        });
+                }
+            },
+            None => None,
+        };
+
+        models::CreateSessionHeaderParams {
+            x_axus_transport: header_x_axus_transport,
+        }
+    };
+
+    #[allow(clippy::redundant_closure)]
+    let validation = tokio::task::spawn_blocking(move || create_session_validation(header_params, body)).await.unwrap();
+
+    let Ok((header_params, body)) = validation else {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::from(validation.unwrap_err().to_string()))
+            .map_err(|_| StatusCode::BAD_REQUEST);
+    };
+
+    let result = api_impl.as_ref().create_session(&method, &host, &cookies, &header_params, &body).await;
+
+    let mut response = Response::builder();
+
+    let resp = match result {
+        Ok(rsp) => match rsp {
+            apis::authentication::CreateSessionResponse::Status204_TheSessionCookieIsSet => {
+                let mut response = response.status(204);
+                response.body(Body::empty())
+            }
+            apis::authentication::CreateSessionResponse::Status200_TheSessionTokenForABearerClient(body) => {
+                let mut response = response.status(200);
+                {
+                    let mut response_headers = response.headers_mut().unwrap();
+                    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                }
+
+                let body_content = tokio::task::spawn_blocking(move || {
+                    serde_json::to_vec(&body).map_err(|e| {
+                        error!(error = ?e);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })
+                })
+                .await
+                .unwrap()?;
+                response.body(Body::from(body_content))
+            }
+            apis::authentication::CreateSessionResponse::Status401_ASessionIsRequired(body) => {
+                let mut response = response.status(401);
+                {
+                    let mut response_headers = response.headers_mut().unwrap();
+                    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                }
+
+                let body_content = tokio::task::spawn_blocking(move || {
+                    serde_json::to_vec(&body).map_err(|e| {
+                        error!(error = ?e);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })
+                })
+                .await
+                .unwrap()?;
+                response.body(Body::from(body_content))
+            }
+            apis::authentication::CreateSessionResponse::Status500_InternalServerError(body) => {
+                let mut response = response.status(500);
+                {
+                    let mut response_headers = response.headers_mut().unwrap();
+                    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                }
+
+                let body_content = tokio::task::spawn_blocking(move || {
+                    serde_json::to_vec(&body).map_err(|e| {
+                        error!(error = ?e);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })
+                })
+                .await
+                .unwrap()?;
+                response.body(Body::from(body_content))
+            }
+        },
+        Err(why) => {
+            // Application code returned an error. This should not happen, as the implementation should
+            // return a valid response.
+            return api_impl.as_ref().handle_error(&method, &host, &cookies, why).await;
+        }
+    };
+
+    resp.map_err(|e| {
+        error!(error = ?e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+#[tracing::instrument(skip_all)]
+fn delete_session_validation() -> std::result::Result<(), ValidationErrors> {
+    Ok(())
+}
+/// DeleteSession - DELETE /api/v1/auth/session
+#[tracing::instrument(skip_all)]
+async fn delete_session<I, A, E>(method: Method, TypedHeader(host): TypedHeader<Host>, cookies: CookieJar, State(api_impl): State<I>) -> Result<Response, StatusCode>
+where
+    I: AsRef<A> + Send + Sync,
+    A: apis::authentication::Authentication<E> + Send + Sync,
+    E: std::fmt::Debug + Send + Sync + 'static,
+{
+    #[allow(clippy::redundant_closure)]
+    let validation = tokio::task::spawn_blocking(move || delete_session_validation()).await.unwrap();
+
+    let Ok(()) = validation else {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::from(validation.unwrap_err().to_string()))
+            .map_err(|_| StatusCode::BAD_REQUEST);
+    };
+
+    let result = api_impl.as_ref().delete_session(&method, &host, &cookies).await;
+
+    let mut response = Response::builder();
+
+    let resp = match result {
+        Ok(rsp) => match rsp {
+            apis::authentication::DeleteSessionResponse::Status204_TheSessionIsGone => {
+                let mut response = response.status(204);
+                response.body(Body::empty())
+            }
+            apis::authentication::DeleteSessionResponse::Status401_ASessionIsRequired(body) => {
+                let mut response = response.status(401);
+                {
+                    let mut response_headers = response.headers_mut().unwrap();
+                    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                }
+
+                let body_content = tokio::task::spawn_blocking(move || {
+                    serde_json::to_vec(&body).map_err(|e| {
+                        error!(error = ?e);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })
+                })
+                .await
+                .unwrap()?;
+                response.body(Body::from(body_content))
+            }
+            apis::authentication::DeleteSessionResponse::Status500_InternalServerError(body) => {
+                let mut response = response.status(500);
+                {
+                    let mut response_headers = response.headers_mut().unwrap();
+                    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                }
+
+                let body_content = tokio::task::spawn_blocking(move || {
+                    serde_json::to_vec(&body).map_err(|e| {
+                        error!(error = ?e);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })
+                })
+                .await
+                .unwrap()?;
+                response.body(Body::from(body_content))
+            }
+        },
+        Err(why) => {
+            // Application code returned an error. This should not happen, as the implementation should
+            // return a valid response.
+            return api_impl.as_ref().handle_error(&method, &host, &cookies, why).await;
+        }
+    };
+
+    resp.map_err(|e| {
+        error!(error = ?e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+#[tracing::instrument(skip_all)]
+fn get_setup_status_validation() -> std::result::Result<(), ValidationErrors> {
+    Ok(())
+}
+/// GetSetupStatus - GET /api/v1/setup/status
+#[tracing::instrument(skip_all)]
+async fn get_setup_status<I, A, E>(method: Method, TypedHeader(host): TypedHeader<Host>, cookies: CookieJar, State(api_impl): State<I>) -> Result<Response, StatusCode>
+where
+    I: AsRef<A> + Send + Sync,
+    A: apis::authentication::Authentication<E> + Send + Sync,
+    E: std::fmt::Debug + Send + Sync + 'static,
+{
+    #[allow(clippy::redundant_closure)]
+    let validation = tokio::task::spawn_blocking(move || get_setup_status_validation()).await.unwrap();
+
+    let Ok(()) = validation else {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::from(validation.unwrap_err().to_string()))
+            .map_err(|_| StatusCode::BAD_REQUEST);
+    };
+
+    let result = api_impl.as_ref().get_setup_status(&method, &host, &cookies).await;
+
+    let mut response = Response::builder();
+
+    let resp = match result {
+        Ok(rsp) => match rsp {
+            apis::authentication::GetSetupStatusResponse::Status200_SetupState(body) => {
+                let mut response = response.status(200);
+                {
+                    let mut response_headers = response.headers_mut().unwrap();
+                    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                }
+
+                let body_content = tokio::task::spawn_blocking(move || {
+                    serde_json::to_vec(&body).map_err(|e| {
+                        error!(error = ?e);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })
+                })
+                .await
+                .unwrap()?;
+                response.body(Body::from(body_content))
+            }
+            apis::authentication::GetSetupStatusResponse::Status500_InternalServerError(body) => {
+                let mut response = response.status(500);
+                {
+                    let mut response_headers = response.headers_mut().unwrap();
+                    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                }
+
+                let body_content = tokio::task::spawn_blocking(move || {
+                    serde_json::to_vec(&body).map_err(|e| {
+                        error!(error = ?e);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })
+                })
+                .await
+                .unwrap()?;
+                response.body(Body::from(body_content))
+            }
+        },
+        Err(why) => {
+            // Application code returned an error. This should not happen, as the implementation should
+            // return a valid response.
+            return api_impl.as_ref().handle_error(&method, &host, &cookies, why).await;
+        }
+    };
+
+    resp.map_err(|e| {
+        error!(error = ?e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
 }
 
 #[tracing::instrument(skip_all)]

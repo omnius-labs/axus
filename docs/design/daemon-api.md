@@ -504,8 +504,8 @@ Decide when a deployment must serve HTTPS to a browser; the origin rule, the sec
 
 Executor assembles the config, file lock, signal handling, and HTTP server, and DaemonState owns AxusService and manages it until shutdown.
 The API and P2P have separate listen addresses.
-The publication and subscription resources, the staged upload, the download directory, the static serving, and the configuration settings described in this document are implemented, and the daemon refuses a non-loopback `api.listen_addr`.
-A transfer from an upload on one daemon to a download on another is confirmed through the router tests.
-The owner and session, the library source, and the browser client are not implemented.
+The publication and subscription resources, the staged upload, the download directory, the static serving, the owner and session, and the configuration settings described in this document are implemented.
+A transfer from an upload on one daemon to a download on another, and the setup, login, cookie, bearer, and origin checks, are confirmed through the router tests.
+The library source and the browser client are not implemented.
 
 For confirmed bugs, see [issues.md](../issues.md).

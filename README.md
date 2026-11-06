@@ -57,7 +57,7 @@ The `[api]` section accepts the following keys.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `listen_addr` | required | `host:port` of the REST API. It must be a loopback address until authentication lands |
+| `listen_addr` | required | `host:port` of the REST API |
 | `max_upload_size` | `0` | Largest declared publication size in bytes; `0` means no limit |
 
 The `[storage]` section accepts the following key, and the `[web]` section follows it.
@@ -66,6 +66,7 @@ The `[storage]` section accepts the following key, and the `[web]` section follo
 | --- | --- | --- |
 | `download_dir` | `<state_dir>/downloads` | Directory in which subscription outputs are placed |
 | `web.dir` | none | Build output of the browser client, served on the API's port |
+| `web.insecure_cookie` | `false` | Drops `Secure` and the `__Host-` prefix so a LAN browser can log in over plain HTTP |
 
 At startup the daemon logs its own URI as `node_profile` in the `node profile` message.
 Add that URI to `bootstrap_nodes` of another daemon to connect the two.

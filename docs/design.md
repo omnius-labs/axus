@@ -18,6 +18,7 @@ This document assumes the vocabulary of [terms.md](./terms.md#2-terminology). Te
 | [reviews.md](./reviews.md) | History of reviews and the transcription state of their findings |
 | [daemon-api.md](./design/daemon-api.md#1-about-this-document) | Lifecycle of the daemon, configuration boundaries, REST resources, authentication, static serving, reach |
 | [web-client.md](./design/web-client.md#1-about-this-document) | Screens, routes, polling, and the build of the browser client |
+| [ci.md](./design/ci.md#1-about-this-document) | Triggers, change scope, jobs, the platform split, and the merge gate of the continuous integration |
 | [rocketpack.md](./design/rocketpack.md#1-about-this-document) | Generation of RocketPack types, migration conventions of the wire format |
 | [session.md](./design/session.md#1-about-this-document) | transport, Session establishment, use separation, shutdown |
 | [node-finder.md](./design/node-finder.md#1-about-this-document) | Node lookup, information propagation, distance calculation, lookup state |

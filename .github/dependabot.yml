@@ -28,6 +28,11 @@ updates:
       interval: "weekly"
     labels:
       - "dependabot"
+    ignore:
+      # openapi-typescript 7.x peers typescript ^5.x; remove when it accepts 6 or later.
+      - dependency-name: "typescript"
+        update-types:
+          - "version-update:semver-major"
     groups:
       dependencies:
         patterns:

@@ -153,9 +153,9 @@ Concern-local deferred decisions live in the "Design decisions" sections of each
 ### 6.1 Current status
 
 Each detailed design document is the source of truth for the implementation status of its concern.
-Overall, the daemon startup path owns down to FileExchanger and connects to other daemons starting from the configured bootstrap nodes, but the REST API that starts file publishing and subscription is not defined, so the end-to-end path is not complete.
-From file publishing to decoding, including P2P transfer between daemons over loopback TCP, is confirmed by engine-internal tests.
-The browser client in `ui-web/` covers the setup, login, publication, and subscription screens; its browser flow test and setup procedure remain.
+Overall, the daemon startup path owns down to FileExchanger and connects to other daemons starting from the configured bootstrap nodes, and the REST API starts file publishing and subscription.
+From file publishing to decoding, including P2P transfer between daemons over loopback TCP, is confirmed by engine-internal tests, and the browser flow confirms the same path through the REST API.
+The browser client in `ui-web/` covers the setup, login, publication, and subscription screens, and a Playwright flow tests it against two daemons.
 
 ### 6.2 Roadmap
 
@@ -163,7 +163,6 @@ The following order is tentative; only the dependencies in the table must be pre
 
 | # | Item | Prerequisite dependency |
 | --- | --- | --- |
-| 1 | Add the browser client | [web-client.md](./design/web-client.md#1-about-this-document) |
-| 2 | Define Web of Trust, Profile, and memo in order | [trust-security.md §4](./design/trust-security.md#4-design-decisions) |
+| 1 | Define Web of Trust, Profile, and memo in order | [trust-security.md §4](./design/trust-security.md#4-design-decisions) |
 
 For confirmed bugs and fix directions, see [issues.md](./issues.md).

@@ -10,7 +10,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "biome check .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "npm run build && tsc -p e2e && playwright test"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.0",
@@ -21,7 +22,9 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.0",
+    "@playwright/test": "1.64.0",
     "@tailwindcss/vite": "^4.1.0",
+    "@types/node": "24.19.2",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.0",

@@ -41,7 +41,7 @@ An operator can set up the owner, log in, publish an uploaded or library file, w
 ## 3. Current state
 
 The daemon serves the API under `/api/v1` and a static directory from `web.dir`, with an `index.html` fallback.
-`ui-web/` holds the screens of steps 1 to 5; the browser test and the README procedure of step 6 are not written.
+`ui-web/` holds the screens, the browser flow test, and the README procedure.
 
 ## 4. Approach
 
@@ -72,7 +72,7 @@ The development server proxies `/api` to `api.listen_addr`, so the cookie behave
 | 3 | Add the publication list, detail, and upload | 2 | Complete |
 | 4 | Add the library picker | 3 | Complete |
 | 5 | Add the subscription list, detail, and download | 2 | Complete |
-| 6 | Add the browser tests and the README procedure | 3, 5 | Not started |
+| 6 | Add the browser tests and the README procedure | 3, 5 | Complete |
 
 <a id="s-1"></a>
 ### Step 1. Create the Vite and TypeScript scaffold
@@ -92,7 +92,7 @@ Add Vite, React 19, TanStack Router and Query, Tailwind, the generated OpenAPI t
 | --- | --- | --- |
 | 1 | `cd ui-web && npm ci && npm run build` | `dist/index.html` exists |
 | 2 | a daemon started with `web.dir = ui-web/dist` and `GET /unknown` | Returns `index.html` |
-| 3-7 | `npm run test` | The screen tests pass |
+| 3-7 | `cd ui-web && npm run test:e2e` | The browser flow passes against two daemons |
 
 ## 7. Risks and rollback
 

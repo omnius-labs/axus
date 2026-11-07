@@ -1,3 +1,5 @@
 node_modules/
 dist/
 src/api/schema.d.ts
+test-results/
+playwright-report/

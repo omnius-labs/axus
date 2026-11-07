@@ -280,6 +280,7 @@ Decide when an operator publishes a directory rather than a file, and the per-fi
 
 `ui-web/` implements the setup and login screens, the publication list, detail, upload, and library picker, and the subscription list, detail, and download, on TanStack Router and Query.
 The daemon serves the build from `web.dir` ([daemon-api.md §10](./daemon-api.md#10-current-status-and-remaining-work)).
-The Playwright flow and the setup procedure in the README are not written; the unit tests cover the upload, the polling rules, and the redirect guard.
+Vitest covers the upload, the polling rules, and the redirect guard, and a Playwright flow starts two daemons and drives setup, login, upload, library publication, subscription, download, and deletion through the build.
+The setup procedure is in the [README](../../README.md).
 
 For confirmed bugs, see [issues.md](../issues.md).

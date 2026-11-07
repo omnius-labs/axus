@@ -1,6 +1,6 @@
 # Axus External Knowledge
 
-This document covers facts about depends and the OS confirmed against primary sources.
+This document covers facts about depends, the OS, and the CI platform confirmed against primary sources.
 Axus design decisions and implementation status live in the design documents, and code bugs in the issues.
 
 ## 1. About this document
@@ -16,7 +16,7 @@ Axus design decisions and implementation status live in the design documents, an
 
 ### 1.2 Usage
 
-When a dependency version, supported OS, or external specification changes, reconcile the verification targets and update the facts and evidence.
+When a dependency version, supported OS, CI runner image, or external specification changes, reconcile the verification targets and update the facts and evidence.
 Do not keep descriptions of past versions in the body.
 For "literature only", re-read the primary source every 3 months from the reference date, and advance the confirmation date if the content is unchanged.
 For "literature and runtime verification", the entry includes facts reproduced in a real environment in addition to the primary source, and does not include fault injection tests.
@@ -30,8 +30,10 @@ Items without fault injection tests are not handled as "verified".
 | [SQLite WAL power-loss durability depends on the sync conditions](./knowledge/sqlite-wal-durability.md) | SQLx 0.9.0 / libsqlite3-sys 0.30.1 / bundled SQLite 3.46.0 | Literature only | 2026-10-04 |
 | [File I/O completion alone does not align content and directory entry persistence](./knowledge/filesystem-sync-durability.md) | Tokio 1.52.3 / Rust std 1.96.0 / Linux man-pages 6.19 / Apple fsync(2) archived manual | Literature and runtime verification | 2026-10-07 |
 | [A non-replacing rename is provided by a different API on each OS](./knowledge/filesystem-output-publication.md) | Linux man-pages 6.19 / macOS 26.6.2 rename(2) / Microsoft Learn MoveFileExW / Rust std 1.96.0 | Literature and runtime verification | 2026-10-07 |
+| [Container-dependent tests cannot start a container on the Windows and macOS runners](./knowledge/github-hosted-runners-and-containers.md) | GitHub-hosted `windows-latest` (Windows Server 2025) and `macos-latest` (macos-26-arm64) | Literature and runtime verification | 2026-11-07 |
 
 The RocksDB and SQLite syncing are the premise of the order that finalizes metadata after the bodies.
 The filesystem syncing and non-replacing rename additionally relate to finalizing a subscription output and judging placement at restart.
 Because Windows directory entry persistence depends on the rename item's `MOVEFILE_WRITE_THROUGH`, the two filesystem items are re-read together.
 The dependent sections of [storage.md](./design/storage.md#1-about-this-document) are referenced from each item's implications.
+The runner item is the premise of the container-test exclusion in [ci.md §5.2](./design/ci.md#52-main-and-release-branches).

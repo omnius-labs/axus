@@ -108,7 +108,7 @@ A result of this run does not hold a change back, so a failure on macOS or Windo
 
 The test binary `omnius-core-migration::postgres` starts a Postgres container and needs a container runtime.
 It is excluded on Windows and macOS, whose runners cannot start the container.
-The Windows start fails with `no matching manifest for windows(10.0.26100)/amd64`, because the image is a Linux image, and the macOS start fails with a testcontainers error.
+The observed failures and their sources are in [knowledge.md §2](../knowledge.md#2-list).
 
 ## 6. The merge gate
 
@@ -257,17 +257,8 @@ Decide when an unrelated pull request is the first to show a break caused by a t
 ## 9. Current state and remaining work
 
 The `ci` workflow implements the jobs, the scope, and `gate`, and it replaced the earlier `test-daemon-slim` and `test-daemon-all`.
-`main` has no branch protection yet, so `gate` is not required.
-The macOS run fails at engine tests that Linux passes, and the Windows run fails at one of them intermittently, so those runs on the main branches can be red until the bugs in [issues.md](../issues.md) are fixed.
-The plan is [ci-workflow](../plans/ci-workflow.md).
-
-The order below is provisional; only the dependencies need to be respected.
-
-| # | Item | Prerequisite dependency |
-| --- | --- | --- |
-| 1 | The `ci` workflow with the scope, the Rust jobs, and `gate` | Which operating systems cannot start the container (§5.2) |
-| 2 | The `ui`, `e2e`, and `interface` jobs | 1 |
-| 3 | Dependabot for the client's packages | none |
-| 4 | Require `gate` on `main` | 1 and 2 have run on merged pull requests |
+`main` requires `gate` in its branch protection, so a pull request whose `gate` does not pass cannot merge.
+The workflow itself is complete.
+The macOS run fails at engine tests that Linux passes, and the Windows run fails at one of them intermittently, so a run that tests Rust on the main branches can be red until the bugs in [issues.md](../issues.md) are fixed.
 
 For confirmed bugs, see [issues.md](../issues.md).

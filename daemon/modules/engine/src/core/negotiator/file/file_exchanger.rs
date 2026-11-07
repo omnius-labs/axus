@@ -388,7 +388,25 @@ mod tests {
                 !publisher.get_published_root_hashes().await.unwrap().is_empty()
             })
             .await?;
-            Ok(publisher.get_published_root_hashes().await?.pop().unwrap())
+            let root_hash = publisher.get_published_root_hashes().await?.pop().unwrap();
+            // The exchange context learns the provided root hashes from its upkeep task, so a peer that dials
+            // immediately after the publication would be rejected until the next refresh.
+            Watchdog::wait_for_with_snapshot(
+                "the published root hash is provided",
+                || async { self.ctx().root_hashes().provides(&root_hash) },
+                || async {
+                    let ctx = self.ctx();
+                    let root_hashes = ctx.root_hashes();
+                    format!(
+                        "provided={}, fetching={}, session_count={}",
+                        root_hashes.provides(&root_hash),
+                        root_hashes.fetching().len(),
+                        ctx.registry.count_by_root_hash(&root_hash)
+                    )
+                },
+            )
+            .await?;
+            Ok(root_hash)
         }
 
         async fn subscribe(&self, root_hash: &OmniHash, name: &str) -> TestResult<(String, std::path::PathBuf)> {

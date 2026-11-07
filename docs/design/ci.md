@@ -107,8 +107,8 @@ A push to `main` or `release/*`, and a manual dispatch, run `rust-test` on Linux
 A result of this run does not hold a change back, so a failure on macOS or Windows is the signal to fix the next change.
 
 The test binary `omnius-core-migration::postgres` starts a Postgres container and needs a container runtime.
-It is excluded on an operating system whose runner cannot start the container.
-The Windows runner cannot: the start fails with `no matching manifest for windows(10.0.26100)/amd64`, because the image is a Linux image.
+It is excluded on Windows and macOS, whose runners cannot start the container.
+The Windows start fails with `no matching manifest for windows(10.0.26100)/amd64`, because the image is a Linux image, and the macOS start fails with a testcontainers error.
 
 ## 6. The merge gate
 
@@ -125,7 +125,7 @@ A skipped job does not report, and a native `paths:` filter on a workflow skips 
 | --- | --- |
 | Concurrency | One group per workflow and ref. A new pull request run cancels the previous one; a run on `main` or `release/*` is never cancelled |
 | Token | The workflow grants the read-only `contents` permission, and no job asks for more |
-| Time limits | Every job sets `timeout-minutes`: 30 for the Rust jobs, 20 for `ui` and `e2e`, and 5 for `changes` and `gate` |
+| Time limits | Every job sets `timeout-minutes`: 30 for the Rust jobs and `e2e`, which builds the daemon, 20 for `ui` and `interface`, and 5 for `changes` and `gate` |
 | Rust cache | Keys scoped by operating system and job, saved only on `main`, so the pull requests read the cache of `main` and do not crowd the cache quota |
 | Node cache | The npm cache, and the Playwright browsers keyed by the hash of the lockfile |
 | Setup steps | The free-space step, the submodule checkout, the timestamp restore, LLVM 20.1, cargo-make, and nextest stay as the current workflows have them |
@@ -224,10 +224,10 @@ Decide when a failure that only the macOS or Windows run on `main` shows occurs 
 #### Run the container-dependent tests on macOS and Windows
 
 **Current state**
-The tests that need a container run on Linux, and on any operating system whose runner can start the container (§5.2).
+The tests that need a container run on Linux only (§5.2).
 
 **Why not decide now**
-The Windows runner cannot start the Linux image, and nothing has asked for the container tests there.
+Neither runner can start the container, and nothing has asked for the container tests there.
 
 **Condition for deciding**
 Decide when a hosted runner for the platform can start the container, or when the test no longer needs one.
@@ -256,11 +256,9 @@ Decide when an unrelated pull request is the first to show a break caused by a t
 
 ## 9. Current state and remaining work
 
-The design above is not implemented.
-Two workflows run today: `test-daemon-slim` on a push to any branch except `main` and `release/*`, and `test-daemon-all` on a push to `main` or `release/*` that touches `daemon/**` other than `daemon/docs/**`.
-The first runs the Rust lint and tests on Linux whatever the change is, and the second adds macOS and Windows.
-Nothing checks the client, the browser flow, or the generated interface, `main` has no branch protection, and the `test-daemon-all` run has had no success since 2026-08-19.
-Whether the macOS runner can start the container of §5.2 has not been observed, because the macOS job was cancelled before it reached those tests in every run inspected.
+The `ci` workflow implements the jobs, the scope, and `gate`, and it replaced the earlier `test-daemon-slim` and `test-daemon-all`.
+`main` has no branch protection yet, so `gate` is not required.
+The macOS run fails at engine tests that Linux passes, and the Windows run fails at one of them intermittently, so those runs on the main branches can be red until the bugs in [issues.md](../issues.md) are fixed.
 The plan is [ci-workflow](../plans/ci-workflow.md).
 
 The order below is provisional; only the dependencies need to be respected.

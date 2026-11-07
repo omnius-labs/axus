@@ -4,7 +4,7 @@
 
 <h1 align="center">Axus - Omnius P2P File Distribution (Work in Progress)</h1>
 
-[![test-daemon-all](https://github.com/omnius-labs/axus/actions/workflows/test-daemon-all.yml/badge.svg)](https://github.com/omnius-labs/axus/actions/workflows/test-daemon-all.yml)
+[![ci](https://github.com/omnius-labs/axus/actions/workflows/ci.yml/badge.svg)](https://github.com/omnius-labs/axus/actions/workflows/ci.yml)
 
 Axus is a peer-to-peer (P2P) file distribution system that runs on personal servers and PCs, designed to eliminate single points of failure in file discovery.
 
@@ -105,6 +105,35 @@ The transfer between the two daemons takes about a minute and a half.
 ```sh
 (cd daemon && cargo make lint)
 ```
+
+### CI
+
+The `ci` workflow runs on a pull request, on a push to `main` or `release/*`, and on a manual dispatch.
+A change selects the jobs by the files it touches, and the `gate` job always reports, so it is the one check meant for branch protection.
+
+| Change | Jobs |
+| --- | --- |
+| `daemon/**` | `rust-lint`, `rust-test`, `e2e` |
+| `daemon/openapi.yaml` | `rust-lint`, `rust-test`, `ui`, `interface`, `e2e` |
+| `ui-web/**` | `ui`, `e2e` |
+| `.github/**` | Every job |
+| Anything else, such as `docs/` | Only `changes` and `gate` |
+
+A pull request runs the Rust tests on Linux, and a push to a main branch runs them on Linux, macOS, and Windows.
+The design is in [ci.md](./docs/design/ci.md).
+
+Run the same checks by hand:
+
+```sh
+(cd daemon && cargo make lint)
+(cd daemon && cargo nextest run --all-features)
+(cd ui-web && npm ci && npm run lint && npm run build && npm run test)
+(cd ui-web && npm run test:e2e)
+bash daemon/entrypoints/gen-interface.sh && git diff --stat daemon/entrypoints/interface
+```
+
+The tests of `omnius-core-migration::postgres` start a Postgres container, so they need a container runtime.
+The generator of the last command writes the current time into `daemon/entrypoints/interface/README.md`, which is the only difference an unchanged contract leaves.
 
 ## Contributing
 

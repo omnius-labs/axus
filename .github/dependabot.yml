@@ -22,3 +22,13 @@ updates:
       dependencies:
         patterns:
           - "*"
+  - package-ecosystem: npm
+    directory: "/ui-web"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependabot"
+    groups:
+      dependencies:
+        patterns:
+          - "*"

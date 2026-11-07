@@ -25,12 +25,16 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 
 | Item | Severity | Investigated on | Issue |
 | --- | --- | --- | --- |
-| [The Windows job of the main-branch workflow fails at the tests that start a Postgres container](./issues/container-tests-fail-on-windows-runner.md) | Medium | 2026-11-07 | - |
+| [On macOS the file exchanger tests are intermittently rejected at the handshake](./issues/file-exchanger-tests-are-rejected-at-the-handshake-on-macos.md) | Medium | 2026-11-07 | - |
+| [On Windows the presence-bitmap test finds the peer excluded](./issues/presence-bitmap-test-finds-the-peer-excluded-on-windows.md) | Medium | 2026-11-07 | - |
 | [Lock file of an abnormally terminated daemon remains and prevents restart](./issues/daemon-lock-survives-abnormal-exit.md) | Medium | 2026-10-06 | - |
 | [output_lock is common across all subscriptions and a writing subscription stops other subscriptions' finalization](./issues/output-lock-shared-across-subscriptions.md) | Medium | 2026-10-07 | - |
 | [A vanished destination directory of Failed or Canceled rows makes sweep retries continue and remove impossible](./issues/vanished-output-directory-blocks-sweep-and-remove.md) | Medium | 2026-10-07 | - |
 | [delete_bulk succeeds deleting nothing when it contains a missing key](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | Low | 2026-10-06 | - |
 | [TaskCommunicator::start does not exit its loop even when the accept channel is closed](./issues/task-communicator-spins-on-closed-session-channel.md) | Low | 2026-10-07 | - |
+
+The two engine tests that fail on the macOS and Windows runs of `ci` are independent of each other and of the items above; no relation is known.
+Both are in `file_exchanger::tests`, show only on the full run on the main branches, and have no confirmed cause yet.
 
 ## 3. Not included here
 

@@ -187,15 +187,15 @@ jobs:
           workspaces: |
             daemon -> target
 
-      # The test binary omnius-core-migration::postgres starts a Postgres container, which the Windows runner cannot
-      # start: it has no Linux image to pull. The lint is not repeated here; rust-lint runs it.
+      # The test binary omnius-core-migration::postgres starts a Postgres container, which the Windows and macOS
+      # runners cannot start. The lint is not repeated here; rust-lint runs it.
       - name: Test
         shell: bash
         env:
           NEXTEST_PROFILE: ci
         run: |
           filter=""
-          if [ "$RUNNER_OS" = "Windows" ]; then
+          if [ "$RUNNER_OS" != "Linux" ]; then
             filter="not binary_id(omnius-core-migration::postgres)"
           fi
           cargo nextest run --all-features ${filter:+-E "$filter"}

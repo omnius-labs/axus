@@ -54,7 +54,7 @@ export function SetupScreen() {
         value={password}
         onChange={(event) => setPassword(event.target.value)}
         placeholder={messages.auth.password}
-        aria-label={messages.auth.password}
+        aria-label="Secret"
         autoComplete="new-password"
       />
       <input

@@ -70,7 +70,7 @@ The development server proxies `/api` to `api.listen_addr`, so the cookie behave
 | 1 | Create the Vite and TypeScript scaffold with the generated API client | - | Complete |
 | 2 | Add the setup and login screens | 1 | In progress |
 | 3 | Add the publication list, detail, and upload | 2 | In progress |
-| 4 | Add the library picker | 3 | Not started |
+| 4 | Add the library picker | 3 | Complete |
 | 5 | Add the subscription list, detail, and download | 2 | In progress |
 | 6 | Add the browser tests and the README procedure | 3, 5 | Not started |
 

@@ -12,3 +12,4 @@ createRoot(document.getElementById("root") as HTMLElement).render(
     </QueryClientProvider>
   </StrictMode>,
 );
+const   unused  =  1;

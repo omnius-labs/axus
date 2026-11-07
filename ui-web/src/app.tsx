@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
+import { LibraryPicker } from "./library";
 
 type View = "publications" | "subscriptions" | "login";
 
@@ -104,6 +105,7 @@ function Publications() {
         </button>
       </div>
       {upload.error && <p className="text-red-600">{String(upload.error)}</p>}
+      <LibraryPicker />
       <table className="w-full border-collapse text-left">
         <thead>
           <tr className="border-b"><th>name</th><th>status</th><th>progress</th><th>root hash</th></tr>

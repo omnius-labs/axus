@@ -180,6 +180,15 @@ impl AxusService {
         Ok(Publication::from_uncommitted(file))
     }
 
+    pub async fn create_library_publication(&self, file_path: &str, file_name: &str, size: i64, modified_at: i64) -> Result<Publication> {
+        let file = self
+            .file_exchanger
+            .file_publisher()
+            .import_library(file_path, file_name, size, modified_at, MAX_BLOCK_LENGTH)
+            .await?;
+        Ok(Publication::from_uncommitted(file))
+    }
+
     pub async fn append_publication_content(&self, id: &str, offset: i64, bytes: Bytes) -> Result<AppendContentResult> {
         self.file_exchanger.file_publisher().append_content(id, offset, bytes).await
     }

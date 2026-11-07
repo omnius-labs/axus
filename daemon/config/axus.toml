@@ -17,6 +17,7 @@ json = false
 
 # [storage]
 # download_dir = "./downloads" # Defaults to <state_dir>/downloads
+# library_roots = ["./library"] # Directories a publication may read
 
 # [web]
 # dir = "./web" # The build output of the browser client

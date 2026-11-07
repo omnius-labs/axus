@@ -70,6 +70,20 @@ pub struct CreateSessionHeaderParams {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
 #[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct ListLibraryEntriesPathParams {
+    pub root_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct ListLibraryEntriesQueryParams {
+    #[serde(rename = "path")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
 pub struct CancelPublicationPathParams {
     pub publication_id: String,
 }
@@ -139,19 +153,31 @@ pub struct GetSubscriptionContentPathParams {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
 #[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
 pub struct CreatePublicationRequest {
+    /// Required for an upload source.
     #[serde(rename = "fileName")]
     #[validate(custom(function = "check_xss_string"))]
-    pub file_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
 
-    /// The final size in bytes, which is not negative.
+    /// The final size in bytes, required for an upload source.
     #[serde(rename = "size")]
-    pub size: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
+
+    #[serde(rename = "source")]
+    #[validate(nested)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<models::PublicationSource>,
 }
 
 impl CreatePublicationRequest {
     #[allow(clippy::new_without_default, clippy::too_many_arguments)]
-    pub fn new(file_name: String, size: i64) -> CreatePublicationRequest {
-        CreatePublicationRequest { file_name, size }
+    pub fn new() -> CreatePublicationRequest {
+        CreatePublicationRequest {
+            file_name: None,
+            size: None,
+            source: None,
+        }
     }
 }
 
@@ -161,10 +187,9 @@ impl CreatePublicationRequest {
 impl std::fmt::Display for CreatePublicationRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let params: Vec<Option<String>> = vec![
-            Some("fileName".to_string()),
-            Some(self.file_name.to_string()),
-            Some("size".to_string()),
-            Some(self.size.to_string()),
+            self.file_name.as_ref().map(|file_name| ["fileName".to_string(), file_name.to_string()].join(",")),
+            self.size.as_ref().map(|size| ["size".to_string(), size.to_string()].join(",")),
+            // Skipping source in query parameter serialization
         ];
 
         write!(f, "{}", params.into_iter().flatten().collect::<Vec<_>>().join(","))
@@ -184,6 +209,7 @@ impl std::str::FromStr for CreatePublicationRequest {
         struct IntermediateRep {
             pub file_name: Vec<String>,
             pub size: Vec<i64>,
+            pub source: Vec<models::PublicationSource>,
         }
 
         let mut intermediate_rep = IntermediateRep::default();
@@ -205,6 +231,10 @@ impl std::str::FromStr for CreatePublicationRequest {
                     "fileName" => intermediate_rep.file_name.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
                     #[allow(clippy::redundant_clone)]
                     "size" => intermediate_rep.size.push(<i64 as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "source" => intermediate_rep
+                        .source
+                        .push(<models::PublicationSource as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
                     _ => return std::result::Result::Err("Unexpected key while parsing CreatePublicationRequest".to_string()),
                 }
             }
@@ -215,16 +245,9 @@ impl std::str::FromStr for CreatePublicationRequest {
 
         // Use the intermediate representation to return the struct
         std::result::Result::Ok(CreatePublicationRequest {
-            file_name: intermediate_rep
-                .file_name
-                .into_iter()
-                .next()
-                .ok_or_else(|| "fileName missing in CreatePublicationRequest".to_string())?,
-            size: intermediate_rep
-                .size
-                .into_iter()
-                .next()
-                .ok_or_else(|| "size missing in CreatePublicationRequest".to_string())?,
+            file_name: intermediate_rep.file_name.into_iter().next(),
+            size: intermediate_rep.size.into_iter().next(),
+            source: intermediate_rep.source.into_iter().next(),
         })
     }
 }
@@ -813,6 +836,453 @@ impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<HealthRespon
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
 #[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct LibraryEntry {
+    #[serde(rename = "name")]
+    #[validate(custom(function = "check_xss_string"))]
+    pub name: String,
+
+    /// Note: inline enums are not fully supported by openapi-generator
+    #[serde(rename = "kind")]
+    #[validate(custom(function = "check_xss_string"))]
+    pub kind: String,
+
+    #[serde(rename = "size")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
+}
+
+impl LibraryEntry {
+    #[allow(clippy::new_without_default, clippy::too_many_arguments)]
+    pub fn new(name: String, kind: String) -> LibraryEntry {
+        LibraryEntry { name, kind, size: None }
+    }
+}
+
+/// Converts the LibraryEntry value to the Query Parameters representation (style=form, explode=false)
+/// specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde serializer
+impl std::fmt::Display for LibraryEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params: Vec<Option<String>> = vec![
+            Some("name".to_string()),
+            Some(self.name.to_string()),
+            Some("kind".to_string()),
+            Some(self.kind.to_string()),
+            self.size.as_ref().map(|size| ["size".to_string(), size.to_string()].join(",")),
+        ];
+
+        write!(f, "{}", params.into_iter().flatten().collect::<Vec<_>>().join(","))
+    }
+}
+
+/// Converts Query Parameters representation (style=form, explode=false) to a LibraryEntry value
+/// as specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde deserializer
+impl std::str::FromStr for LibraryEntry {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        /// An intermediate representation of the struct to use for parsing.
+        #[derive(Default)]
+        #[allow(dead_code)]
+        struct IntermediateRep {
+            pub name: Vec<String>,
+            pub kind: Vec<String>,
+            pub size: Vec<i64>,
+        }
+
+        let mut intermediate_rep = IntermediateRep::default();
+
+        // Parse into intermediate representation
+        let mut string_iter = s.split(',');
+        let mut key_result = string_iter.next();
+
+        while key_result.is_some() {
+            let val = match string_iter.next() {
+                Some(x) => x,
+                None => return std::result::Result::Err("Missing value while parsing LibraryEntry".to_string()),
+            };
+
+            if let Some(key) = key_result {
+                #[allow(clippy::match_single_binding)]
+                match key {
+                    #[allow(clippy::redundant_clone)]
+                    "name" => intermediate_rep.name.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "kind" => intermediate_rep.kind.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "size" => intermediate_rep.size.push(<i64 as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    _ => return std::result::Result::Err("Unexpected key while parsing LibraryEntry".to_string()),
+                }
+            }
+
+            // Get the next key
+            key_result = string_iter.next();
+        }
+
+        // Use the intermediate representation to return the struct
+        std::result::Result::Ok(LibraryEntry {
+            name: intermediate_rep.name.into_iter().next().ok_or_else(|| "name missing in LibraryEntry".to_string())?,
+            kind: intermediate_rep.kind.into_iter().next().ok_or_else(|| "kind missing in LibraryEntry".to_string())?,
+            size: intermediate_rep.size.into_iter().next(),
+        })
+    }
+}
+
+// Methods for converting between header::IntoHeaderValue<LibraryEntry> and HeaderValue
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<header::IntoHeaderValue<LibraryEntry>> for HeaderValue {
+    type Error = String;
+
+    fn try_from(hdr_value: header::IntoHeaderValue<LibraryEntry>) -> std::result::Result<Self, Self::Error> {
+        let hdr_value = hdr_value.to_string();
+        match HeaderValue::from_str(&hdr_value) {
+            std::result::Result::Ok(value) => std::result::Result::Ok(value),
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Invalid header value for LibraryEntry - value: {hdr_value} is invalid {e}"#)),
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<LibraryEntry> {
+    type Error = String;
+
+    fn try_from(hdr_value: HeaderValue) -> std::result::Result<Self, Self::Error> {
+        match hdr_value.to_str() {
+            std::result::Result::Ok(value) => match <LibraryEntry as std::str::FromStr>::from_str(value) {
+                std::result::Result::Ok(value) => std::result::Result::Ok(header::IntoHeaderValue(value)),
+                std::result::Result::Err(err) => std::result::Result::Err(format!(r#"Unable to convert header value '{value}' into LibraryEntry - {err}"#)),
+            },
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Unable to convert header: {hdr_value:?} to string: {e}"#)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct LibraryEntryList {
+    #[serde(rename = "entries")]
+    #[validate(nested)]
+    pub entries: Vec<models::LibraryEntry>,
+}
+
+impl LibraryEntryList {
+    #[allow(clippy::new_without_default, clippy::too_many_arguments)]
+    pub fn new(entries: Vec<models::LibraryEntry>) -> LibraryEntryList {
+        LibraryEntryList { entries }
+    }
+}
+
+/// Converts the LibraryEntryList value to the Query Parameters representation (style=form, explode=false)
+/// specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde serializer
+impl std::fmt::Display for LibraryEntryList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params: Vec<Option<String>> = vec![
+            // Skipping entries in query parameter serialization
+
+        ];
+
+        write!(f, "{}", params.into_iter().flatten().collect::<Vec<_>>().join(","))
+    }
+}
+
+/// Converts Query Parameters representation (style=form, explode=false) to a LibraryEntryList value
+/// as specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde deserializer
+impl std::str::FromStr for LibraryEntryList {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        /// An intermediate representation of the struct to use for parsing.
+        #[derive(Default)]
+        #[allow(dead_code)]
+        struct IntermediateRep {
+            pub entries: Vec<Vec<models::LibraryEntry>>,
+        }
+
+        let mut intermediate_rep = IntermediateRep::default();
+
+        // Parse into intermediate representation
+        let mut string_iter = s.split(',');
+        let mut key_result = string_iter.next();
+
+        while key_result.is_some() {
+            let val = match string_iter.next() {
+                Some(x) => x,
+                None => return std::result::Result::Err("Missing value while parsing LibraryEntryList".to_string()),
+            };
+
+            if let Some(key) = key_result {
+                #[allow(clippy::match_single_binding)]
+                match key {
+                    "entries" => return std::result::Result::Err("Parsing a container in this style is not supported in LibraryEntryList".to_string()),
+                    _ => return std::result::Result::Err("Unexpected key while parsing LibraryEntryList".to_string()),
+                }
+            }
+
+            // Get the next key
+            key_result = string_iter.next();
+        }
+
+        // Use the intermediate representation to return the struct
+        std::result::Result::Ok(LibraryEntryList {
+            entries: intermediate_rep
+                .entries
+                .into_iter()
+                .next()
+                .ok_or_else(|| "entries missing in LibraryEntryList".to_string())?,
+        })
+    }
+}
+
+// Methods for converting between header::IntoHeaderValue<LibraryEntryList> and HeaderValue
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<header::IntoHeaderValue<LibraryEntryList>> for HeaderValue {
+    type Error = String;
+
+    fn try_from(hdr_value: header::IntoHeaderValue<LibraryEntryList>) -> std::result::Result<Self, Self::Error> {
+        let hdr_value = hdr_value.to_string();
+        match HeaderValue::from_str(&hdr_value) {
+            std::result::Result::Ok(value) => std::result::Result::Ok(value),
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Invalid header value for LibraryEntryList - value: {hdr_value} is invalid {e}"#)),
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<LibraryEntryList> {
+    type Error = String;
+
+    fn try_from(hdr_value: HeaderValue) -> std::result::Result<Self, Self::Error> {
+        match hdr_value.to_str() {
+            std::result::Result::Ok(value) => match <LibraryEntryList as std::str::FromStr>::from_str(value) {
+                std::result::Result::Ok(value) => std::result::Result::Ok(header::IntoHeaderValue(value)),
+                std::result::Result::Err(err) => std::result::Result::Err(format!(r#"Unable to convert header value '{value}' into LibraryEntryList - {err}"#)),
+            },
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Unable to convert header: {hdr_value:?} to string: {e}"#)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct LibraryRoot {
+    #[serde(rename = "id")]
+    #[validate(custom(function = "check_xss_string"))]
+    pub id: String,
+
+    #[serde(rename = "name")]
+    #[validate(custom(function = "check_xss_string"))]
+    pub name: String,
+}
+
+impl LibraryRoot {
+    #[allow(clippy::new_without_default, clippy::too_many_arguments)]
+    pub fn new(id: String, name: String) -> LibraryRoot {
+        LibraryRoot { id, name }
+    }
+}
+
+/// Converts the LibraryRoot value to the Query Parameters representation (style=form, explode=false)
+/// specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde serializer
+impl std::fmt::Display for LibraryRoot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params: Vec<Option<String>> = vec![Some("id".to_string()), Some(self.id.to_string()), Some("name".to_string()), Some(self.name.to_string())];
+
+        write!(f, "{}", params.into_iter().flatten().collect::<Vec<_>>().join(","))
+    }
+}
+
+/// Converts Query Parameters representation (style=form, explode=false) to a LibraryRoot value
+/// as specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde deserializer
+impl std::str::FromStr for LibraryRoot {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        /// An intermediate representation of the struct to use for parsing.
+        #[derive(Default)]
+        #[allow(dead_code)]
+        struct IntermediateRep {
+            pub id: Vec<String>,
+            pub name: Vec<String>,
+        }
+
+        let mut intermediate_rep = IntermediateRep::default();
+
+        // Parse into intermediate representation
+        let mut string_iter = s.split(',');
+        let mut key_result = string_iter.next();
+
+        while key_result.is_some() {
+            let val = match string_iter.next() {
+                Some(x) => x,
+                None => return std::result::Result::Err("Missing value while parsing LibraryRoot".to_string()),
+            };
+
+            if let Some(key) = key_result {
+                #[allow(clippy::match_single_binding)]
+                match key {
+                    #[allow(clippy::redundant_clone)]
+                    "id" => intermediate_rep.id.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "name" => intermediate_rep.name.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    _ => return std::result::Result::Err("Unexpected key while parsing LibraryRoot".to_string()),
+                }
+            }
+
+            // Get the next key
+            key_result = string_iter.next();
+        }
+
+        // Use the intermediate representation to return the struct
+        std::result::Result::Ok(LibraryRoot {
+            id: intermediate_rep.id.into_iter().next().ok_or_else(|| "id missing in LibraryRoot".to_string())?,
+            name: intermediate_rep.name.into_iter().next().ok_or_else(|| "name missing in LibraryRoot".to_string())?,
+        })
+    }
+}
+
+// Methods for converting between header::IntoHeaderValue<LibraryRoot> and HeaderValue
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<header::IntoHeaderValue<LibraryRoot>> for HeaderValue {
+    type Error = String;
+
+    fn try_from(hdr_value: header::IntoHeaderValue<LibraryRoot>) -> std::result::Result<Self, Self::Error> {
+        let hdr_value = hdr_value.to_string();
+        match HeaderValue::from_str(&hdr_value) {
+            std::result::Result::Ok(value) => std::result::Result::Ok(value),
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Invalid header value for LibraryRoot - value: {hdr_value} is invalid {e}"#)),
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<LibraryRoot> {
+    type Error = String;
+
+    fn try_from(hdr_value: HeaderValue) -> std::result::Result<Self, Self::Error> {
+        match hdr_value.to_str() {
+            std::result::Result::Ok(value) => match <LibraryRoot as std::str::FromStr>::from_str(value) {
+                std::result::Result::Ok(value) => std::result::Result::Ok(header::IntoHeaderValue(value)),
+                std::result::Result::Err(err) => std::result::Result::Err(format!(r#"Unable to convert header value '{value}' into LibraryRoot - {err}"#)),
+            },
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Unable to convert header: {hdr_value:?} to string: {e}"#)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct LibraryRootList {
+    #[serde(rename = "roots")]
+    #[validate(nested)]
+    pub roots: Vec<models::LibraryRoot>,
+}
+
+impl LibraryRootList {
+    #[allow(clippy::new_without_default, clippy::too_many_arguments)]
+    pub fn new(roots: Vec<models::LibraryRoot>) -> LibraryRootList {
+        LibraryRootList { roots }
+    }
+}
+
+/// Converts the LibraryRootList value to the Query Parameters representation (style=form, explode=false)
+/// specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde serializer
+impl std::fmt::Display for LibraryRootList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params: Vec<Option<String>> = vec![
+            // Skipping roots in query parameter serialization
+
+        ];
+
+        write!(f, "{}", params.into_iter().flatten().collect::<Vec<_>>().join(","))
+    }
+}
+
+/// Converts Query Parameters representation (style=form, explode=false) to a LibraryRootList value
+/// as specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde deserializer
+impl std::str::FromStr for LibraryRootList {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        /// An intermediate representation of the struct to use for parsing.
+        #[derive(Default)]
+        #[allow(dead_code)]
+        struct IntermediateRep {
+            pub roots: Vec<Vec<models::LibraryRoot>>,
+        }
+
+        let mut intermediate_rep = IntermediateRep::default();
+
+        // Parse into intermediate representation
+        let mut string_iter = s.split(',');
+        let mut key_result = string_iter.next();
+
+        while key_result.is_some() {
+            let val = match string_iter.next() {
+                Some(x) => x,
+                None => return std::result::Result::Err("Missing value while parsing LibraryRootList".to_string()),
+            };
+
+            if let Some(key) = key_result {
+                #[allow(clippy::match_single_binding)]
+                match key {
+                    "roots" => return std::result::Result::Err("Parsing a container in this style is not supported in LibraryRootList".to_string()),
+                    _ => return std::result::Result::Err("Unexpected key while parsing LibraryRootList".to_string()),
+                }
+            }
+
+            // Get the next key
+            key_result = string_iter.next();
+        }
+
+        // Use the intermediate representation to return the struct
+        std::result::Result::Ok(LibraryRootList {
+            roots: intermediate_rep.roots.into_iter().next().ok_or_else(|| "roots missing in LibraryRootList".to_string())?,
+        })
+    }
+}
+
+// Methods for converting between header::IntoHeaderValue<LibraryRootList> and HeaderValue
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<header::IntoHeaderValue<LibraryRootList>> for HeaderValue {
+    type Error = String;
+
+    fn try_from(hdr_value: header::IntoHeaderValue<LibraryRootList>) -> std::result::Result<Self, Self::Error> {
+        let hdr_value = hdr_value.to_string();
+        match HeaderValue::from_str(&hdr_value) {
+            std::result::Result::Ok(value) => std::result::Result::Ok(value),
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Invalid header value for LibraryRootList - value: {hdr_value} is invalid {e}"#)),
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<LibraryRootList> {
+    type Error = String;
+
+    fn try_from(hdr_value: HeaderValue) -> std::result::Result<Self, Self::Error> {
+        match hdr_value.to_str() {
+            std::result::Result::Ok(value) => match <LibraryRootList as std::str::FromStr>::from_str(value) {
+                std::result::Result::Ok(value) => std::result::Result::Ok(header::IntoHeaderValue(value)),
+                std::result::Result::Err(err) => std::result::Result::Err(format!(r#"Unable to convert header value '{value}' into LibraryRootList - {err}"#)),
+            },
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Unable to convert header: {hdr_value:?} to string: {e}"#)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
 pub struct LoginResponse {
     #[serde(rename = "token")]
     #[validate(custom(function = "check_xss_string"))]
@@ -1236,6 +1706,134 @@ impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<PublicationL
             std::result::Result::Ok(value) => match <PublicationList as std::str::FromStr>::from_str(value) {
                 std::result::Result::Ok(value) => std::result::Result::Ok(header::IntoHeaderValue(value)),
                 std::result::Result::Err(err) => std::result::Result::Err(format!(r#"Unable to convert header value '{value}' into PublicationList - {err}"#)),
+            },
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Unable to convert header: {hdr_value:?} to string: {e}"#)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, validator::Validate)]
+#[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
+pub struct PublicationSource {
+    /// Note: inline enums are not fully supported by openapi-generator
+    #[serde(rename = "kind")]
+    #[validate(custom(function = "check_xss_string"))]
+    pub kind: String,
+
+    /// The library root, required when kind is library.
+    #[serde(rename = "rootId")]
+    #[validate(custom(function = "check_xss_string"))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_id: Option<String>,
+
+    /// The path inside the root, required when kind is library.
+    #[serde(rename = "path")]
+    #[validate(custom(function = "check_xss_string"))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+impl PublicationSource {
+    #[allow(clippy::new_without_default, clippy::too_many_arguments)]
+    pub fn new(kind: String) -> PublicationSource {
+        PublicationSource { kind, root_id: None, path: None }
+    }
+}
+
+/// Converts the PublicationSource value to the Query Parameters representation (style=form, explode=false)
+/// specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde serializer
+impl std::fmt::Display for PublicationSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params: Vec<Option<String>> = vec![
+            Some("kind".to_string()),
+            Some(self.kind.to_string()),
+            self.root_id.as_ref().map(|root_id| ["rootId".to_string(), root_id.to_string()].join(",")),
+            self.path.as_ref().map(|path| ["path".to_string(), path.to_string()].join(",")),
+        ];
+
+        write!(f, "{}", params.into_iter().flatten().collect::<Vec<_>>().join(","))
+    }
+}
+
+/// Converts Query Parameters representation (style=form, explode=false) to a PublicationSource value
+/// as specified in https://swagger.io/docs/specification/serialization/
+/// Should be implemented in a serde deserializer
+impl std::str::FromStr for PublicationSource {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        /// An intermediate representation of the struct to use for parsing.
+        #[derive(Default)]
+        #[allow(dead_code)]
+        struct IntermediateRep {
+            pub kind: Vec<String>,
+            pub root_id: Vec<String>,
+            pub path: Vec<String>,
+        }
+
+        let mut intermediate_rep = IntermediateRep::default();
+
+        // Parse into intermediate representation
+        let mut string_iter = s.split(',');
+        let mut key_result = string_iter.next();
+
+        while key_result.is_some() {
+            let val = match string_iter.next() {
+                Some(x) => x,
+                None => return std::result::Result::Err("Missing value while parsing PublicationSource".to_string()),
+            };
+
+            if let Some(key) = key_result {
+                #[allow(clippy::match_single_binding)]
+                match key {
+                    #[allow(clippy::redundant_clone)]
+                    "kind" => intermediate_rep.kind.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "rootId" => intermediate_rep.root_id.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    #[allow(clippy::redundant_clone)]
+                    "path" => intermediate_rep.path.push(<String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?),
+                    _ => return std::result::Result::Err("Unexpected key while parsing PublicationSource".to_string()),
+                }
+            }
+
+            // Get the next key
+            key_result = string_iter.next();
+        }
+
+        // Use the intermediate representation to return the struct
+        std::result::Result::Ok(PublicationSource {
+            kind: intermediate_rep.kind.into_iter().next().ok_or_else(|| "kind missing in PublicationSource".to_string())?,
+            root_id: intermediate_rep.root_id.into_iter().next(),
+            path: intermediate_rep.path.into_iter().next(),
+        })
+    }
+}
+
+// Methods for converting between header::IntoHeaderValue<PublicationSource> and HeaderValue
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<header::IntoHeaderValue<PublicationSource>> for HeaderValue {
+    type Error = String;
+
+    fn try_from(hdr_value: header::IntoHeaderValue<PublicationSource>) -> std::result::Result<Self, Self::Error> {
+        let hdr_value = hdr_value.to_string();
+        match HeaderValue::from_str(&hdr_value) {
+            std::result::Result::Ok(value) => std::result::Result::Ok(value),
+            std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Invalid header value for PublicationSource - value: {hdr_value} is invalid {e}"#)),
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::convert::TryFrom<HeaderValue> for header::IntoHeaderValue<PublicationSource> {
+    type Error = String;
+
+    fn try_from(hdr_value: HeaderValue) -> std::result::Result<Self, Self::Error> {
+        match hdr_value.to_str() {
+            std::result::Result::Ok(value) => match <PublicationSource as std::str::FromStr>::from_str(value) {
+                std::result::Result::Ok(value) => std::result::Result::Ok(header::IntoHeaderValue(value)),
+                std::result::Result::Err(err) => std::result::Result::Err(format!(r#"Unable to convert header value '{value}' into PublicationSource - {err}"#)),
             },
             std::result::Result::Err(e) => std::result::Result::Err(format!(r#"Unable to convert header: {hdr_value:?} to string: {e}"#)),
         }

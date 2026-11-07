@@ -65,6 +65,7 @@ The `[storage]` section accepts the following key, and the `[web]` section follo
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `download_dir` | `<state_dir>/downloads` | Directory in which subscription outputs are placed |
+| `library_roots` | `[]` | Directories a publication may read through a library source |
 | `web.dir` | none | Build output of the browser client, served on the API's port |
 | `web.insecure_cookie` | `false` | Drops `Secure` and the `__Host-` prefix so a LAN browser can log in over plain HTTP |
 

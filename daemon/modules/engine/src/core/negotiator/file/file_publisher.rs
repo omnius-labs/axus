@@ -60,6 +60,12 @@ impl FilePublisher {
         Ok(file)
     }
 
+    pub async fn import_library(&self, file_path: &str, file_name: &str, size: i64, modified_at: i64, block_size: u32) -> Result<PublishedUncommittedFile> {
+        let file = self.store.import_library(file_path, file_name, size, modified_at, block_size).await?;
+        self.task_encoder.wake();
+        Ok(file)
+    }
+
     pub async fn append_content(&self, id: &str, offset: i64, bytes: Bytes) -> Result<AppendContentResult> {
         let result = self.store.append_content(id, offset, bytes).await?;
         if matches!(result, AppendContentResult::Accepted { .. }) {

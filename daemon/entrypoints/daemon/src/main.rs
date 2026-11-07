@@ -5,6 +5,7 @@ use crate::{executor::Executor, prelude::*};
 mod config;
 mod error;
 mod executor;
+mod library;
 mod owner;
 mod prelude;
 mod result;

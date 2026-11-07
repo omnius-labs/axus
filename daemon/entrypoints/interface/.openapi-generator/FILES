@@ -4,6 +4,7 @@ Cargo.toml
 README.md
 src/apis/authentication.rs
 src/apis/health.rs
+src/apis/library.rs
 src/apis/mod.rs
 src/apis/publications.rs
 src/apis/subscriptions.rs

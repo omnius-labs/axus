@@ -33,6 +33,8 @@ struct ApiConfigToml {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 struct StorageConfigToml {
     pub download_dir: Option<String>,
+    #[serde(default)]
+    pub library_roots: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
@@ -92,6 +94,7 @@ impl ApiConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageConfig {
     pub download_dir: PathBuf,
+    pub library_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,7 +149,10 @@ impl DaemonConfig {
                 level: toml.logging.level,
                 json: toml.logging.json,
             },
-            storage: StorageConfig { download_dir },
+            storage: StorageConfig {
+                download_dir,
+                library_roots: toml.storage.library_roots.iter().map(|path| dir.join(path)).collect(),
+            },
             web: WebConfig {
                 dir: toml.web.dir.map(|path| dir.join(path)),
                 insecure_cookie: toml.web.insecure_cookie,

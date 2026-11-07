@@ -155,7 +155,7 @@ Concern-local deferred decisions live in the "Design decisions" sections of each
 Each detailed design document is the source of truth for the implementation status of its concern.
 Overall, the daemon startup path owns down to FileExchanger and connects to other daemons starting from the configured bootstrap nodes, but the REST API that starts file publishing and subscription is not defined, so the end-to-end path is not complete.
 From file publishing to decoding, including P2P transfer between daemons over loopback TCP, is confirmed by engine-internal tests.
-The browser client does not exist.
+The browser client in `ui-web/` covers the setup, login, publication, and subscription screens; its browser flow test and setup procedure remain.
 
 ### 6.2 Roadmap
 

@@ -41,7 +41,7 @@ An operator can set up the owner, log in, publish an uploaded or library file, w
 ## 3. Current state
 
 The daemon serves the API under `/api/v1` and a static directory from `web.dir`, with an `index.html` fallback.
-`ui-web/` does not exist.
+`ui-web/` holds the screens of steps 1 to 5; the browser test and the README procedure of step 6 are not written.
 
 ## 4. Approach
 
@@ -68,10 +68,10 @@ The development server proxies `/api` to `api.listen_addr`, so the cookie behave
 | # | Step | Depends on | State |
 | --- | --- | --- | --- |
 | 1 | Create the Vite and TypeScript scaffold with the generated API client | - | Complete |
-| 2 | Add the setup and login screens | 1 | In progress |
-| 3 | Add the publication list, detail, and upload | 2 | In progress |
+| 2 | Add the setup and login screens | 1 | Complete |
+| 3 | Add the publication list, detail, and upload | 2 | Complete |
 | 4 | Add the library picker | 3 | Complete |
-| 5 | Add the subscription list, detail, and download | 2 | In progress |
+| 5 | Add the subscription list, detail, and download | 2 | Complete |
 | 6 | Add the browser tests and the README procedure | 3, 5 | Not started |
 
 <a id="s-1"></a>

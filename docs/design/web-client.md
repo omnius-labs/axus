@@ -278,8 +278,8 @@ Decide when an operator publishes a directory rather than a file, and the per-fi
 
 ## 7. Current status and remaining work
 
-The client does not exist.
-`ui-web/` is not present, and the daemon serves no static output.
-The API it depends on is not implemented either; see [daemon-api.md §10](./daemon-api.md#10-current-status-and-remaining-work).
+`ui-web/` implements the setup and login screens, the publication list, detail, upload, and library picker, and the subscription list, detail, and download, on TanStack Router and Query.
+The daemon serves the build from `web.dir` ([daemon-api.md §10](./daemon-api.md#10-current-status-and-remaining-work)).
+The Playwright flow and the setup procedure in the README are not written; the unit tests cover the upload, the polling rules, and the redirect guard.
 
 For confirmed bugs, see [issues.md](../issues.md).

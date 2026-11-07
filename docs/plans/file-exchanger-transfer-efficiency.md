@@ -41,7 +41,7 @@ The starting point is the four costs recorded in §5 of the design: the absent h
 | Send bandwidth limit | [file-transfer.md §6.2](../design/file-transfer.md#62-deferred) |
 | Bloom filter of the provided hashes | Rejected in [file-transfer.md §6.1](../design/file-transfer.md#convey-the-presence-of-a-whole-request-in-one-bitmap) |
 | Persisting the throughput and the exclusion | Rejected in [file-transfer.md §6.1](../design/file-transfer.md#record-transfer-volume-per-node-id-and-narrow-send-targets-with-choke) |
-| REST API for publish and subscribe | Roadmap item 1 in [design.md](../design.md#62-roadmap) |
+| REST API for publish and subscribe | Implemented; see [daemon-api.md §10](../design/daemon-api.md#10-current-status-and-remaining-work) |
 
 ## 3. Current State
 

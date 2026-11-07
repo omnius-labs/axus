@@ -23,7 +23,7 @@ Created on 2026-10-28 against commit `d7ea4d6`.
 ## 2. Purpose and Completion Criteria
 
 Two daemons exchange the blocks of a published file and the subscriber reconstructs the file, and a block whose content hash does not match is never stored.
-This is the first item of [design.md §6.2](../design.md#62-roadmap) and the prerequisite of the REST API.
+This was the prerequisite of the REST API, which is now implemented.
 
 ### 2.1 Completion Criteria
 
@@ -42,7 +42,7 @@ This is the first item of [design.md §6.2](../design.md#62-roadmap) and the pre
 
 | Item | Where it goes |
 | --- | --- |
-| REST API and any Rust entrypoint for publish and subscribe | Roadmap item 2 in [design.md](../design.md#62-roadmap) |
+| REST API and any Rust entrypoint for publish and subscribe | Implemented; see [daemon-api.md §10](../design/daemon-api.md#10-current-status-and-remaining-work) |
 | Send bandwidth limit | [file-transfer.md §6.2](../design/file-transfer.md#62-deferred) |
 | Persisting exclusions and transfer volumes | Rejected in [file-transfer.md §6.1](../design/file-transfer.md#61-decided) |
 

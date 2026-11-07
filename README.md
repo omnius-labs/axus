@@ -72,6 +72,34 @@ The `[storage]` section accepts the following key, and the `[web]` section follo
 At startup the daemon logs its own URI as `node_profile` in the `node profile` message.
 Add that URI to `bootstrap_nodes` of another daemon to connect the two.
 
+### Browser Client
+
+The browser client in [ui-web](./ui-web) is a static build that the daemon serves on the API's port.
+It needs Node.js 20.19 or later, or 22.12 or later.
+
+Build it and point `web.dir` at the output:
+
+```sh
+(cd ui-web && npm ci && npm run build)
+```
+
+```toml
+[web]
+dir = "/path/to/axus/ui-web/dist"
+insecure_cookie = true # The daemon serves plain HTTP, and the browser needs this to keep the login cookie
+```
+
+Start the daemon and open the API's address, such as `http://127.0.0.1:5050/`.
+The first visit asks for the owner name and a password; later visits ask for the login.
+The build generates its API types from [openapi.yaml](./daemon/openapi.yaml), so rebuild it after the contract changes.
+
+For development, `npm run dev` serves the client with hot reload on its own port and proxies `/api` to `127.0.0.1:5050`, so run the daemon with that API address.
+
+`npm run test` runs the unit tests.
+`npm run test:e2e` builds the client and runs the browser flow in Chromium: it starts two daemons, publishes on the first, and downloads on the second.
+It needs the daemon binary, which defaults to `daemon/target/debug/omnius-axus-daemon` and can be set with `AXUS_DAEMON_BIN`, and a Chromium for Playwright, which `npx playwright install chromium` installs.
+The transfer between the two daemons takes about a minute and a half.
+
 ### Linting
 
 ```sh

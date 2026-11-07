@@ -41,7 +41,7 @@ Location information survives the Session that carried it, a node finds the node
 | Item | Where it goes |
 | --- | --- |
 | Changing FileExchanger's protocol or its `LocationFinder` API | Not needed: lookup results arrive in the cache that `find` already reads |
-| REST API for publish and subscribe | Roadmap item 2 in [design.md](../design.md#62-roadmap) |
+| REST API for publish and subscribe | Implemented; see [daemon-api.md §10](../design/daemon-api.md#10-current-status-and-remaining-work) |
 | Persisting the routing table, the location cache, or the exclusions | Rejected in [node-finder.md §6.1](../design/node-finder.md#61-decided) |
 | Compatibility with the previous `DataMessage` wire | The wire is replaced; see §4.1 |
 

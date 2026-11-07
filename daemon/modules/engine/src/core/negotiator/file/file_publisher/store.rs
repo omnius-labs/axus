@@ -518,10 +518,11 @@ impl FilePublisherStore {
     }
 
     async fn commit_locked(&self, file: &PublishedUncommittedFile, root_hash: &OmniHash, blocks: &[PublishedUncommittedBlock]) -> Result<bool> {
-        if !file.source_owned {
+        // Only a library file records the size and the modification time it was read at; a plain import has neither.
+        if let Some(expected_modified_at) = file.source_modified_at.filter(|_| !file.source_owned) {
             let metadata = tokio::fs::metadata(&file.file_path).await?;
             let modified_at = Self::modified_at(&metadata);
-            if metadata.len() != u64::try_from(file.size.unwrap_or(-1)).unwrap_or(u64::MAX) || Some(modified_at) != file.source_modified_at {
+            if metadata.len() != u64::try_from(file.size.unwrap_or(-1)).unwrap_or(u64::MAX) || modified_at != expected_modified_at {
                 return Err(Error::new(ErrorKind::InvalidFormat).with_message("the library file changed during the import"));
             }
         }
@@ -674,6 +675,11 @@ mod tests {
 
     async fn commit_dummy(store: &FilePublisherStore, id: &str) -> TestResult<OmniHash> {
         let file = store.claim(id).await?.unwrap();
+        commit_claimed(store, &file).await
+    }
+
+    async fn commit_claimed(store: &FilePublisherStore, file: &PublishedUncommittedFile) -> TestResult<OmniHash> {
+        let id = &file.id;
         let hash = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"block");
         let block = PublishedUncommittedBlock {
             file_id: id.to_string(),
@@ -682,8 +688,16 @@ mod tests {
             index: 0,
         };
         assert!(store.write_block(&block, Bytes::from_static(b"block")).await?);
-        assert!(store.commit(&file, &hash, &[block]).await?);
+        assert!(store.commit(file, &hash, &[block]).await?);
         Ok(hash)
+    }
+
+    async fn import_library_file(store: &FilePublisherStore, path: &std::path::Path) -> TestResult<PublishedUncommittedFile> {
+        let metadata = tokio::fs::metadata(path).await?;
+        let imported = store
+            .import_library(path.to_str().unwrap(), "a", metadata.len() as i64, FilePublisherStore::modified_at(&metadata), 256)
+            .await?;
+        Ok(store.claim(&imported.id).await?.unwrap())
     }
 
     async fn stage_blocks(store: &FilePublisherStore, id: &str) -> TestResult<(PublishedUncommittedFile, OmniHash, Vec<PublishedUncommittedBlock>)> {
@@ -941,6 +955,39 @@ mod tests {
         assert_eq!(commit_dummy(&store, &next).await?, root);
         store.sweep().await?;
         assert_eq!(store.read_block(&root, &root).await?, Some(Bytes::from_static(b"block")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_accepts_a_library_file_that_did_not_change() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FilePublisherStore::open(dir.path(), ids, clock).await?;
+        let source = dir.path().join("library.bin");
+        tokio::fs::write(&source, b"before").await?;
+        let file = import_library_file(&store, &source).await?;
+        commit_claimed(&store, &file).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_rejects_a_library_file_that_changed_during_the_import() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FilePublisherStore::open(dir.path(), ids, clock).await?;
+        let source = dir.path().join("library.bin");
+        tokio::fs::write(&source, b"before").await?;
+        let file = import_library_file(&store, &source).await?;
+        tokio::fs::write(&source, b"after the change").await?;
+        let hash = OmniHash::compute_hash(OmniHashAlgorithmType::Sha3_256, b"block");
+        let block = PublishedUncommittedBlock {
+            file_id: file.id.clone(),
+            block_hash: hash.clone(),
+            rank: 0,
+            index: 0,
+        };
+        assert!(store.write_block(&block, Bytes::from_static(b"block")).await?);
+        assert!(store.commit(&file, &hash, &[block]).await.is_err());
         Ok(())
     }
 

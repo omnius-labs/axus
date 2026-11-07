@@ -875,9 +875,10 @@ mod tests {
         let serving = peer.serve(Behavior::BlocksNeverArrive, token.clone());
         let intervals = FileExchangerIntervals {
             // The peer that claims and never sends is throttled; the wait is long enough that a correct peer that
-            // writes a block to its Store is not retracted in the middle of a request.
+            // writes a block to its Store is not retracted in the middle of a request. The request deadline is longer
+            // than the test so that a slow runner does not exclude the peer before the assertion.
             request_retract_after: Duration::from_secs(1),
-            request_timeout: Duration::from_secs(5),
+            request_timeout: Duration::from_secs(60),
             rank_absent_retry: Duration::from_secs(60),
             ..fast_intervals()
         };

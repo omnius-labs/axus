@@ -27,3 +27,10 @@ async fn main() -> ExitCode {
         }
     }
 }
+#[cfg(test)]
+mod scratch {
+    #[test]
+    fn first() {
+        panic!("first");
+    }
+}

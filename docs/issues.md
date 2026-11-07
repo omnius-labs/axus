@@ -33,6 +33,9 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 | [delete_bulk succeeds deleting nothing when it contains a missing key](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | Low | 2026-10-06 | - |
 | [TaskCommunicator::start does not exit its loop even when the accept channel is closed](./issues/task-communicator-spins-on-closed-session-channel.md) | Low | 2026-10-07 | - |
 
+The two engine tests that fail on the macOS and Windows runs of `ci` are independent of each other and of the items above; no relation is known.
+Both are in `file_exchanger::tests`, show only on the full run on the main branches, and have no confirmed cause yet.
+
 ## 3. Not included here
 
 | Item | Reference |

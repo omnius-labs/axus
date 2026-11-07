@@ -1,6 +1,6 @@
 # On Windows the presence-bitmap test finds the peer excluded
 
-**Severity: Medium** (the Windows run on the main branches fails; whether the exclusion is wrong in the daemon or only in the test's timing is not known)
+**Severity: Medium** (the Windows run on the main branches fails intermittently; whether the exclusion is wrong in the daemon or only in the test's timing is not known)
 
 Investigated on 2026-11-07 / Target commit `82dbb0e`
 
@@ -10,7 +10,7 @@ One item of [issues.md](../issues.md).
 
 On the Windows runner, `a_peer_that_answers_only_presence_bitmaps_loses_the_rank_and_the_file_completes_from_another_peer` fails after the file completed, with `assertion failed: !subscriber.ctx().is_excluded(&peer.id())`.
 It took 16.2 seconds in run 42349325499, and the Linux and macOS jobs of that run passed it.
-Only that run has shown the failure: earlier Windows runs stopped at the container tests before they reached the engine tests.
+Run 42362720758 passed it on Windows, so the failure is intermittent. Earlier Windows runs stopped at the container tests before they reached the engine tests.
 
 ## Location
 
@@ -24,7 +24,7 @@ What excluded it on Windows is not known.
 
 ## Impact
 
-The Windows job of every `ci` run on a main branch fails while this stays.
+Some `ci` runs on a main branch fail at the Windows job while this stays.
 If the exclusion comes from the daemon's own judgment rather than the test, a peer could be excluded wrongly on Windows, which was not checked.
 
 ## Remedy

@@ -9,8 +9,8 @@ One item of [issues.md](../issues.md).
 ## Symptoms
 
 On the macOS runner, tests of `file_exchanger::tests` fail with `kind: Reject` and `the peer rejected the root hash`, and every one panics at the same line.
-Run 42347912979 failed `a_request_that_crosses_the_choke_is_ignored_and_a_request_after_the_unchoke_is_served`, and run 42349325499 failed `a_requested_hash_the_node_does_not_hold_is_answered_by_the_presence_bitmap` and `a_requester_exceeding_the_requests_awaiting_responses_is_excluded`.
-Each macOS run failed a different set of these tests, and the Linux job passed in both runs.
+Run 42347912979 failed `a_request_that_crosses_the_choke_is_ignored_and_a_request_after_the_unchoke_is_served`, run 42349325499 failed `a_requested_hash_the_node_does_not_hold_is_answered_by_the_presence_bitmap` and `a_requester_exceeding_the_requests_awaiting_responses_is_excluded`, and run 42362720758 failed the first two.
+Each macOS run failed a different set of these tests, and the Linux job passed in all three runs.
 
 ## Location
 

@@ -48,9 +48,9 @@ A change merges only when the checks that match what it touches have passed, and
 ## 3. Current state
 
 Two workflows exist.
-[test-daemon-slim.yml](../../.github/workflows/test-daemon-slim.yml#L3-L9) runs on a push to every branch except `main` and `release/*`, with no path filter, and runs the Rust lint and the tests through `cargo make test` on Linux ([L112-L113](../../.github/workflows/test-daemon-slim.yml#L112-L113)).
-[test-daemon-all.yml](../../.github/workflows/test-daemon-all.yml#L3-L11) runs on a push to `main` or `release/*` that touches `daemon/**` other than `daemon/docs/**`, on [three operating systems](../../.github/workflows/test-daemon-all.yml#L68-L72), and the matrix cancels the others when one fails.
-Both cancel an earlier run of the same ref ([slim L11-L13](../../.github/workflows/test-daemon-slim.yml#L11-L13), [all L14-L15](../../.github/workflows/test-daemon-all.yml#L14-L15)).
+[test-daemon-slim.yml](https://github.com/omnius-labs/axus/blob/558c053/.github/workflows/test-daemon-slim.yml#L3-L9) runs on a push to every branch except `main` and `release/*`, with no path filter, and runs the Rust lint and the tests through `cargo make test` on Linux ([L112-L113](https://github.com/omnius-labs/axus/blob/558c053/.github/workflows/test-daemon-slim.yml#L112-L113)).
+[test-daemon-all.yml](https://github.com/omnius-labs/axus/blob/558c053/.github/workflows/test-daemon-all.yml#L3-L11) runs on a push to `main` or `release/*` that touches `daemon/**` other than `daemon/docs/**`, on [three operating systems](https://github.com/omnius-labs/axus/blob/558c053/.github/workflows/test-daemon-all.yml#L68-L72), and the matrix cancels the others when one fails.
+Both cancel an earlier run of the same ref ([slim L11-L13](https://github.com/omnius-labs/axus/blob/558c053/.github/workflows/test-daemon-slim.yml#L11-L13), [all L14-L15](https://github.com/omnius-labs/axus/blob/558c053/.github/workflows/test-daemon-all.yml#L14-L15)).
 
 `cargo make test` depends on the lint, so `lint` runs twice in each workflow ([Makefile.toml:22-26](../../daemon/Makefile.toml#L22-L26)).
 [nextest.toml](../../daemon/.config/nextest.toml#L1-L7) defines the group that limits the loopback transfer tests, and no profile for the workflows.
@@ -90,10 +90,10 @@ The gate comes last, after every job has run on real pull requests.
 | No. | Content | Depends on | Status |
 | --- | --- | --- | --- |
 | [0](#s-0) | Observe the container tests on macOS | | done |
-| [1](#s-1) | The `ci` workflow with the scope, the Rust jobs, and the gate; remove the old workflows | 0 | in progress |
-| [2](#s-2) | The `ui` job | 1 | in progress |
-| [3](#s-3) | The `e2e` job | 2 | in progress |
-| [4](#s-4) | The `interface` job | 1 | in progress |
+| [1](#s-1) | The `ci` workflow with the scope, the Rust jobs, and the gate; remove the old workflows | 0 | done |
+| [2](#s-2) | The `ui` job | 1 | done |
+| [3](#s-3) | The `e2e` job | 2 | done |
+| [4](#s-4) | The `interface` job | 1 | done |
 | [5](#s-5) | Dependabot for the client's packages | | done |
 | [6](#s-6) | Require `gate` on `main` | 1, 2, 3, 4 | not started |
 
@@ -101,7 +101,7 @@ The gate comes last, after every job has run on real pull requests.
 ### Step 0. Observe the container tests on macOS
 
 **Locations to change**
-A throwaway branch that sets `fail-fast: false` in the matrix of [test-daemon-all.yml](../../.github/workflows/test-daemon-all.yml#L70-L72). The branch is not merged.
+A throwaway branch that sets `fail-fast: false` in the matrix of [test-daemon-all.yml](https://github.com/omnius-labs/axus/blob/558c053/.github/workflows/test-daemon-all.yml#L70-L72). The branch is not merged.
 
 **What to do**
 Push the throwaway branch, run `gh workflow run test-daemon-all.yml --ref scratch/ci-macos-probe`, follow it with `gh run watch`, and read the result of `omnius-core-migration::postgres` on the macOS job with `gh run view --log`.
@@ -115,7 +115,7 @@ The macOS result for the `omnius-core-migration::postgres` tests is written in t
 ### Step 1. The `ci` workflow with the scope, the Rust jobs, and the gate
 
 **Locations to change**
-New `.github/workflows/ci.yml` with `changes`, `rust-lint`, `rust-test`, and `gate`. Removed [test-daemon-slim.yml](../../.github/workflows/test-daemon-slim.yml#L1-L113) and [test-daemon-all.yml](../../.github/workflows/test-daemon-all.yml#L1-L119). [nextest.toml](../../daemon/.config/nextest.toml#L1-L7) for the profile. [README.md](../../README.md#L7) for the badge and a new CI section.
+New `.github/workflows/ci.yml` with `changes`, `rust-lint`, `rust-test`, and `gate`. Removed [test-daemon-slim.yml](https://github.com/omnius-labs/axus/blob/558c053/.github/workflows/test-daemon-slim.yml#L1-L113) and [test-daemon-all.yml](https://github.com/omnius-labs/axus/blob/558c053/.github/workflows/test-daemon-all.yml#L1-L119). [nextest.toml](../../daemon/.config/nextest.toml#L1-L7) for the profile. [README.md](../../README.md#L7) for the badge and a new CI section.
 
 **What to do**
 Write the triggers of [ci.md §3.1](../design/ci.md#31-triggers), the scope of [ci.md §3.2](../design/ci.md#32-change-scope), the token, the concurrency, the time limits, and the cache keys of [ci.md §7](../design/ci.md#7-runtime-conventions).
@@ -125,7 +125,7 @@ Add a nextest profile that does not stop at the first failure and keeps the tran
 Add the CI section to the README: what runs for which change, and the commands to run the same checks by hand.
 
 **Completion criterion**
-A documentation-only pull request shows `changes` and `gate` passing and no other job, a pull request that touches `daemon/**` shows `rust-lint` and `rust-test` on Linux passing, and a manual dispatch on the branch shows `rust-test` on three systems passing.
+A documentation-only pull request shows `changes` and `gate` passing and no other job, a pull request that touches `daemon/**` shows `rust-lint` and `rust-test` on Linux passing, and a manual dispatch on the branch shows `rust-test` running on three systems, with the container tests absent on Windows and macOS.
 
 <a id="s-2"></a>
 ### Step 2. The `ui` job
@@ -201,7 +201,7 @@ The pull request of condition 7 is not a draft, because a draft cannot be merged
 | 2 | `git switch -c scratch/ci-ui main && printf '// scratch\n' >> ui-web/src/main.tsx && git commit -qam scratch && git push -q -u origin scratch/ci-ui && gh pr create --draft --fill && gh pr checks --watch` | `changes`, `ui`, `e2e`, and `gate` are `pass`; `rust-lint`, `rust-test`, and `interface` are not listed |
 | 3 | `git switch -c scratch/ci-rust main && printf '// scratch\n' >> daemon/entrypoints/daemon/src/main.rs && git commit -qam scratch && git push -q -u origin scratch/ci-rust && gh pr create --draft --fill && gh pr checks --watch` | `changes`, `rust-lint`, `rust-test (ubuntu-latest)`, `e2e`, and `gate` are `pass`; `ui`, `interface`, and the other operating systems are not listed |
 | 4 | `git switch -c scratch/ci-openapi main && printf '# scratch\n' >> daemon/openapi.yaml && git commit -qam scratch && git push -q -u origin scratch/ci-openapi && gh pr create --draft --fill && gh pr checks --watch` | `rust-lint`, `rust-test`, `ui`, `interface`, `e2e`, and `gate` are all listed and `pass` |
-| 5 | `git push -q origin scratch/ci-rust:refs/heads/release/ci-probe && gh workflow run ci.yml --ref scratch/ci-rust && sleep 20 && for e in "release/ci-probe push" "scratch/ci-rust workflow_dispatch"; do id="$(run_id $e)"; gh run watch "$id" > /dev/null; for os in ubuntu windows macos; do gh run view "$id" --json jobs -q ".jobs[] \| select(.name \| test(\"$os\")) \| .databaseId" \| xargs -I{} gh run view --job {} --log \| { rg -c 'omnius-core-migration::postgres' \|\| echo 0; }; done; done` | Each of the two runs has a `rust-test` job on all three systems; the count printed per run is greater than 0 for `ubuntu` and `0` for `windows` and `macos`, and no job fails at a `postgres` test |
+| 5 | `git push -q origin scratch/ci-rust:refs/heads/release/ci-probe && gh workflow run ci.yml --ref scratch/ci-rust && sleep 20 && for e in "release/ci-probe push" "scratch/ci-rust workflow_dispatch"; do id="$(run_id $e)"; gh run watch "$id" > /dev/null; for os in ubuntu windows macos; do gh run view "$id" --json jobs -q ".jobs[] \| select(.name \| test(\"$os\")) \| .databaseId" \| xargs -I{} gh run view --job {} --log \| { rg -c 'migrate_twice_test' \|\| echo 0; }; done; done` | Each of the two runs has a `rust-test` job on all three systems; the count of `migrate_twice_test` lines printed per run is 1 or more for `ubuntu` and `0` for `windows` and `macos`, and no job fails at a `postgres` test |
 | 6 | On `scratch/ci-rust`, `printf '// scratch\n' >> daemon/entrypoints/interface/src/lib.rs && git commit -qam edit && git push -q && gh pr checks --watch` | `interface` is `fail` and its log shows the diff; condition 4 shows the unedited tree passing |
 | 7 | `git switch -c scratch/ci-failures main && printf '#[cfg(test)]\nmod scratch {\n    #[test]\n    fn first() {\n        panic!("first");\n    }\n\n    #[test]\n    fn second() {\n        panic!("second");\n    }\n}\n' >> daemon/entrypoints/daemon/src/main.rs && git commit -qam scratch && git push -q -u origin scratch/ci-failures && gh pr create --fill && gh pr checks --watch; gh run view "$(gh run list --workflow ci.yml --branch scratch/ci-failures --limit 1 --json databaseId -q '.[0].databaseId')" --log-failed \| rg 'Summary\|not run due to test failure'` | The nextest summary counts both failures, and no `not run due to test failure` line appears |
 | 8 | Conditions 1 to 4 and condition 7 | `gate` is `pass` when jobs were skipped by the scope, and `fail` when `rust-test` failed |

@@ -109,7 +109,7 @@ The transfer between the two daemons takes about a minute and a half.
 ### CI
 
 The `ci` workflow runs on a pull request, on a push to `main` or `release/*`, and on a manual dispatch.
-A change selects the jobs by the files it touches, and the `gate` job, which always reports, is the check that `main` requires.
+A change selects the jobs by the files it touches, and the `gate` job always reports, so it is the one check meant for branch protection.
 
 | Change | Jobs |
 | --- | --- |
@@ -117,7 +117,7 @@ A change selects the jobs by the files it touches, and the `gate` job, which alw
 | `daemon/openapi.yaml` | `rust-lint`, `rust-test`, `ui`, `interface`, `e2e` |
 | `ui-web/**` | `ui`, `e2e` |
 | `.github/**` | Every job |
-| Anything else, such as `docs/` | None besides `gate` |
+| Anything else, such as `docs/` | Only `changes` and `gate` |
 
 A pull request runs the Rust tests on Linux, and a push to a main branch runs them on Linux, macOS, and Windows.
 The design is in [ci.md](./docs/design/ci.md).

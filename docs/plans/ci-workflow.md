@@ -175,7 +175,7 @@ A pull request that edits a generated file by hand fails `interface`, and a pull
 Add the `npm` ecosystem for `/ui-web`, weekly and grouped like the existing ones.
 
 **Completion criterion**
-`.github/dependabot.yml` lists the npm ecosystem for `/ui-web`, and the Dependabot configuration check on the pull request reports no error.
+`.github/dependabot.yml` lists the npm ecosystem for `/ui-web`, weekly and grouped like the other ecosystems.
 
 <a id="s-6"></a>
 ### Step 6. Require `gate` on `main`

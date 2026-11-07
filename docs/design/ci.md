@@ -258,7 +258,7 @@ Decide when an unrelated pull request is the first to show a break caused by a t
 
 The `ci` workflow implements the jobs, the scope, and `gate`, and it replaced the earlier `test-daemon-slim` and `test-daemon-all`.
 `main` has no branch protection yet, so `gate` is not required.
-The macOS and Windows runs on the main branches fail at engine tests that Linux passes, so those runs are red until the bugs in [issues.md](../issues.md) are fixed.
+The macOS run fails at engine tests that Linux passes, and the Windows run fails at one of them intermittently, so those runs on the main branches can be red until the bugs in [issues.md](../issues.md) are fixed.
 The plan is [ci-workflow](../plans/ci-workflow.md).
 
 The order below is provisional; only the dependencies need to be respected.

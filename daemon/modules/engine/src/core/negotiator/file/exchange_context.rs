@@ -153,10 +153,22 @@ impl ExchangeContext {
 
     /// Whether a Session with the node for the root hash may be accepted or dialed.
     pub fn can_exchange(&self, node_id: &[u8], root_hash: &OmniHash) -> bool {
-        node_id != self.my_node_id.as_slice()
-            && !self.is_excluded(node_id)
-            && self.root_hashes().provides(root_hash)
-            && self.registry.count_by_root_hash(root_hash) < self.option.max_session_per_root_hash_count
+        let is_self = node_id == self.my_node_id.as_slice();
+        let excluded = self.is_excluded(node_id);
+        let provides = self.root_hashes().provides(root_hash);
+        let session_count = self.registry.count_by_root_hash(root_hash);
+        let accepted = !is_self && !excluded && provides && session_count < self.option.max_session_per_root_hash_count;
+        if !accepted {
+            debug!(
+                is_self,
+                excluded,
+                provides,
+                session_count,
+                max_session_count = self.option.max_session_per_root_hash_count,
+                "file exchange rejected"
+            );
+        }
+        accepted
     }
 
     /// Registers the Session and starts its worker, or drops the Session when an existing one is kept.

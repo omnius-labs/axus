@@ -6,3 +6,7 @@ heavy-integration = { max-threads = 2 }
 [[profile.default.overrides]]
 filter = 'test(/file_exchanger::tests|service::tests|file_subscriber::store::tests/)'
 test-group = 'heavy-integration'
+
+# The workflows report every failing test of a run instead of stopping at the first.
+[profile.ci]
+fail-fast = false

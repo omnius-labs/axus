@@ -125,7 +125,7 @@ A skipped job does not report, and a native `paths:` filter on a workflow skips 
 | --- | --- |
 | Concurrency | One group per workflow and ref. A new pull request run cancels the previous one; a run on `main` or `release/*` is never cancelled |
 | Token | The workflow grants the read-only `contents` permission, and no job asks for more |
-| Time limits | Every job sets `timeout-minutes`: 30 for the Rust jobs, 20 for `ui` and `e2e`, and 5 for `changes` and `gate` |
+| Time limits | Every job sets `timeout-minutes`: 30 for the Rust jobs and `e2e`, which builds the daemon, 20 for `ui` and `interface`, and 5 for `changes` and `gate` |
 | Rust cache | Keys scoped by operating system and job, saved only on `main`, so the pull requests read the cache of `main` and do not crowd the cache quota |
 | Node cache | The npm cache, and the Playwright browsers keyed by the hash of the lockfile |
 | Setup steps | The free-space step, the submodule checkout, the timestamp restore, LLVM 20.1, cargo-make, and nextest stay as the current workflows have them |

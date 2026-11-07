@@ -150,7 +150,7 @@ Add the `e2e` job for the rust or ui scope: set up Node, build the daemon with `
 Cache the browsers by the hash of `ui-web/package-lock.json`, set no retry, and upload `ui-web/test-results` when the job fails.
 
 **Completion criterion**
-A pull request that touches `ui-web/src` shows `e2e` passing in under 20 minutes, and a pull request that breaks a label the flow reads fails it and attaches the trace.
+A pull request that touches `ui-web/src` shows `e2e` passing in under 30 minutes, and a pull request that breaks a label the flow reads fails it and attaches the trace.
 
 <a id="s-4"></a>
 ### Step 4. The `interface` job
@@ -207,7 +207,7 @@ The pull request of condition 7 is not a draft, because a draft cannot be merged
 | 9 | `gh api repos/omnius-labs/axus/branches/main/protection --jq '.required_status_checks.contexts'`, then `gh pr view scratch/ci-failures --json mergeStateStatus -q .mergeStateStatus` | The contexts are `["gate"]`, and the state is `BLOCKED` |
 | 10 | `rg -n 'permissions:\|contents: read\|timeout-minutes\|cancel-in-progress' .github/workflows/ci.yml` | A `permissions` block with `contents: read`, a `timeout-minutes` on every job, and a `cancel-in-progress` that is true for a pull request only |
 | 11 | `rg -n -A1 'package-ecosystem: npm' .github/dependabot.yml` | The npm ecosystem with `directory: "/ui-web"` |
-| 12 | `rg -n -A14 '^## .*CI' README.md` | A CI section that lists the job run for each kind of change and the local commands `cargo make lint`, `cargo nextest run --all-features`, and `npm run test:e2e` |
+| 12 | `rg -n -A14 '^### CI$' README.md` | A CI section that lists the job run for each kind of change and the local commands `cargo make lint`, `cargo nextest run --all-features`, and `npm run test:e2e` |
 
 Conditions 1 to 8 run after step 4, condition 9 after step 6, and the branches are deleted at the end with `gh pr close --delete-branch`.
 

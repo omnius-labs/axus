@@ -20,3 +20,4 @@ Add a row when starting work, advance its state, and delete the row and child do
 | [web-client](./plans/web-client.md) | An operator publishes, subscribes, and downloads from a browser | in progress | - |
 | [file-exchanger-block-exchange](./plans/file-exchanger-block-exchange.md) | Two daemons exchange blocks and a mismatched block is never stored | in progress | - |
 | [file-exchanger-transfer-efficiency](./plans/file-exchanger-transfer-efficiency.md) | The fetch ignores the peers holding nothing and the slow peers at the tail | in progress | - |
+

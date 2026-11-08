@@ -104,6 +104,7 @@ The script needs Java and downloads the generator, so a failed download fails th
 `dependency-audit` is a separate workflow.
 It runs on a weekly schedule and on a change to a dependency manifest or lockfile, and it does not report to `gate`.
 It runs `npm audit` for the client and `cargo audit` for the daemon, denying unmaintained and unsound advisories.
+The one documented exception is `astral-tokio-tar`, a test-only testcontainers dependency with no maintained replacement at the pinned version (RUSTSEC-2026-0440).
 A finding is fixed in the dependency or filed in [issues.md](../issues.md); it does not block an unrelated merge.
 
 ## 5. Platforms

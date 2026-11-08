@@ -24,3 +24,9 @@ workspace = false
 command = "cargo"
 args = ["nextest", "run", "--all-features"]
 dependencies = ["lint"]
+
+[tasks.watch]
+workspace = false
+command = "cargo"
+install_crate = "cargo-watch"
+args = ["watch", "-x", "run --bin omnius-axus-daemon -- start --config-dir ./config"]

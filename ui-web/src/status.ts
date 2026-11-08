@@ -11,23 +11,24 @@ const activeSubscription: readonly SubscriptionStatus[] = ["Downloading", "Decod
 export const isActivePublication = (status: PublicationStatus) => activePublication.includes(status);
 export const isActiveSubscription = (status: SubscriptionStatus) => activeSubscription.includes(status);
 export const isTerminalSubscription = (status: SubscriptionStatus) =>
-  status === "Completed" || status === "Failed" || status === "Canceled";
-export const isTerminalPublication = (status: PublicationStatus) => status === "Committed" || status === "Failed" || status === "Canceled";
+    status === "Completed" || status === "Failed" || status === "Canceled";
+export const isTerminalPublication = (status: PublicationStatus) =>
+    status === "Committed" || status === "Failed" || status === "Canceled";
 
 export const POLL_ITEM_MS = 1000;
 export const POLL_LIST_MS = 5000;
 
 export function itemRefetchInterval(terminal: boolean) {
-  return terminal ? false : POLL_ITEM_MS;
+    return terminal ? false : POLL_ITEM_MS;
 }
 
 export function percent(done: number, total: number) {
-  return total === 0 ? 0 : Math.min(100, Math.floor((done / total) * 100));
+    return total === 0 ? 0 : Math.min(100, Math.floor((done / total) * 100));
 }
 
 // Returns a same-origin path or the fallback, so a crafted redirect cannot leave the site.
 export function safeRedirect(value: unknown, fallback = "/publications") {
-  if (typeof value !== "string") return fallback;
-  if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return fallback;
-  return value;
+    if (typeof value !== "string") return fallback;
+    if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return fallback;
+    return value;
 }

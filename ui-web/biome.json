@@ -1,10 +1,19 @@
 {
-  "files": {
-    "includes": ["src/**", "e2e/**", "*.ts", "*.json", "!src/api/schema.d.ts", "!dist", "!node_modules", "!test-results"]
-  },
-  "formatter": {
-    "indentStyle": "space",
-    "indentWidth": 2,
-    "lineWidth": 140
-  }
+    "files": {
+        "includes": [
+            "src/**",
+            "e2e/**",
+            "*.ts",
+            "*.json",
+            "!src/api/schema.d.ts",
+            "!dist",
+            "!node_modules",
+            "!test-results"
+        ]
+    },
+    "formatter": {
+        "indentStyle": "space",
+        "indentWidth": 4,
+        "lineWidth": 120
+    }
 }

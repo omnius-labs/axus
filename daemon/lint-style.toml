@@ -1,4 +1,4 @@
-# 検査対象から外す path。docs/coding/rust.md の「1.2 適用範囲」の表と対応する。
+# Paths excluded from checking. Corresponds to the table in "1.2 Scope" of docs/coding/rust.md.
 exclude = [
   "refs",
   "entrypoints/interface",

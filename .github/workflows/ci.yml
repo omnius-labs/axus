@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      rust: ${{ steps.scope.outputs.rust }}
+      daemon: ${{ steps.scope.outputs.daemon }}
       ui: ${{ steps.scope.outputs.ui }}
       interface: ${{ steps.scope.outputs.interface }}
       e2e: ${{ steps.scope.outputs.e2e }}
@@ -67,22 +67,22 @@ jobs:
           touches() {
             [ "$all" = true ] || printf '%s\n' "$files" | grep -Eq "$1"
           }
-          rust=false; ui=false; interface=false
-          if touches '^daemon/'; then rust=true; fi
-          if touches '^(ui-web/|daemon/openapi\.yaml$)'; then ui=true; fi
+          daemon=false; ui=false; interface=false
+          if touches '^daemon/'; then daemon=true; fi
+          if touches '^(ui-web/|daemon/openapi\.yaml$|mise\.toml$|mise\.lock$)'; then ui=true; fi
           if touches '^(daemon/openapi\.yaml$|daemon/entrypoints/interface/|daemon/entrypoints/gen-interface\.sh$)'; then interface=true; fi
           e2e=false
-          if [ "$rust" = true ] || [ "$ui" = true ]; then e2e=true; fi
+          if [ "$daemon" = true ] || [ "$ui" = true ]; then e2e=true; fi
           {
-            echo "rust=$rust"
+            echo "daemon=$daemon"
             echo "ui=$ui"
             echo "interface=$interface"
             echo "e2e=$e2e"
           } | tee -a "$GITHUB_OUTPUT"
 
-  rust-lint:
+  daemon-lint:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.daemon == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -134,9 +134,9 @@ jobs:
         run: cargo make lint
 
   # A pull request runs Linux only. A main branch and a manual dispatch run every target of storage.md.
-  rust-test:
+  daemon-test:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.daemon == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -188,7 +188,7 @@ jobs:
             daemon -> target
 
       # The test binary omnius-core-migration::postgres starts a Postgres container, which the Windows and macOS
-      # runners cannot start. The lint is not repeated here; rust-lint runs it.
+      # runners cannot start. The lint is not repeated here; daemon-lint runs it.
       - name: Test
         shell: bash
         env:
@@ -212,12 +212,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup node
-        uses: actions/setup-node@v7
+      - name: Setup tools
+        uses: jdx/mise-action@v5
+
+      - name: Cache npm
+        uses: actions/cache@v6
         with:
-          node-version-file: .node-version
-          cache: npm
-          cache-dependency-path: ui-web/package-lock.json
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('ui-web/package-lock.json') }}
 
       - name: Install
         run: npm ci
@@ -225,11 +227,22 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Build
         run: npm run build
 
       - name: Unit tests
         run: npm run test
+
+      - name: Generate the API types
+        run: npm run gen:api
+
+      - name: Check the generated API types
+        run: |
+          git status --porcelain -- src/api/schema.d.ts
+          test -z "$(git status --porcelain -- src/api/schema.d.ts)"
 
   # The browser flow starts two daemons and drives the built client through them.
   e2e:
@@ -276,12 +289,14 @@ jobs:
         working-directory: ./daemon
         run: cargo build -p omnius-axus-daemon
 
-      - name: Setup node
-        uses: actions/setup-node@v7
+      - name: Setup tools
+        uses: jdx/mise-action@v5
+
+      - name: Cache npm
+        uses: actions/cache@v6
         with:
-          node-version-file: .node-version
-          cache: npm
-          cache-dependency-path: ui-web/package-lock.json
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('ui-web/package-lock.json') }}
 
       - name: Install
         working-directory: ./ui-web
@@ -329,10 +344,8 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Setup node
-        uses: actions/setup-node@v7
-        with:
-          node-version-file: .node-version
+      - name: Setup tools
+        uses: jdx/mise-action@v5
 
       - name: Setup rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -342,21 +355,15 @@ jobs:
       - name: Regenerate
         run: bash daemon/entrypoints/gen-interface.sh
 
-      # The generator writes the build date into the README on every run, so that line is not compared.
       - name: Compare
         run: |
-          git status --short
-          git diff --exit-code -- daemon/entrypoints/interface ':(exclude)daemon/entrypoints/interface/README.md'
-          changed=$(git diff -U0 -- daemon/entrypoints/interface/README.md | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' | grep -v 'Build date' || true)
-          if [ -n "$changed" ]; then
-            echo "$changed"
-            exit 1
-          fi
+          git status --porcelain -- daemon/entrypoints/interface
+          test -z "$(git status --porcelain -- daemon/entrypoints/interface)"
 
   # A skipped job does not report, so `gate` is the only job that branch protection can require.
   gate:
     if: always()
-    needs: [changes, rust-lint, rust-test, ui, e2e, interface]
+    needs: [changes, daemon-lint, daemon-test, ui, e2e, interface]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

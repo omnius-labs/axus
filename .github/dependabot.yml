@@ -10,8 +10,12 @@ updates:
       - dependency-name: "dtolnay/rust-toolchain"
     groups:
       dependencies:
+        applies-to: version-updates
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: cargo
     directory: "/daemon"
     schedule:
@@ -20,20 +24,23 @@ updates:
       - "dependabot"
     groups:
       dependencies:
+        applies-to: version-updates
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: npm
     directory: "/ui-web"
     schedule:
       interval: "weekly"
     labels:
       - "dependabot"
-    ignore:
-      # openapi-typescript 7.x peers typescript ^5.x; remove when it accepts 6 or later.
-      - dependency-name: "typescript"
-        update-types:
-          - "version-update:semver-major"
     groups:
       dependencies:
+        applies-to: version-updates
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch

@@ -1,0 +1,62 @@
+name: dependency-audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * 1"
+  pull_request:
+    paths:
+      - "daemon/**/Cargo.toml"
+      - "daemon/Cargo.toml"
+      - "daemon/Cargo.lock"
+      - "ui-web/package.json"
+      - "ui-web/package-lock.json"
+      - "mise.toml"
+      - "mise.lock"
+      - ".github/workflows/dependency-audit.yml"
+  push:
+    branches:
+      - "main"
+    paths:
+      - "daemon/**/Cargo.toml"
+      - "daemon/Cargo.toml"
+      - "daemon/Cargo.lock"
+      - "ui-web/package.json"
+      - "ui-web/package-lock.json"
+      - "mise.toml"
+      - "mise.lock"
+      - ".github/workflows/dependency-audit.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup tools
+        uses: jdx/mise-action@v5
+
+      - name: Audit web dependencies
+        run: npm audit --prefix ui-web --package-lock-only --include=dev --audit-level=high
+
+  cargo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install cargo audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.22.1
+
+      - name: Audit Rust dependencies
+        run: cargo audit --file daemon/Cargo.lock --deny unmaintained --deny unsound

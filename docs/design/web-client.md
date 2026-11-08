@@ -139,12 +139,12 @@ The client lives in `ui-web/` in this repository, next to `daemon/`, so that the
 | UI | React 19, TypeScript, Tailwind CSS, shadcn/ui on Radix |
 | Routing | TanStack Router |
 | Server state | TanStack Query |
-| API types | `openapi-typescript` generated from `daemon/openapi.yaml`, `openapi-fetch` as the client |
+| API types | `openapi-typescript` generated from `daemon/openapi.yaml` and committed, `openapi-fetch` as the client |
 | Lint and format | Biome |
 | Tests | Vitest for units, Playwright for the browser flow |
 
 The generated type file is not edited by hand.
-Regenerating it from `openapi.yaml` is the only way it changes, for the same reason as the Rust interface ([daemon-api.md §4.2](./daemon-api.md#42-code-generation-from-openapi)).
+Regenerating it from `openapi.yaml` is the only way it changes, and the result is committed, for the same reason as the Rust interface ([daemon-api.md §4.2](./daemon-api.md#42-code-generation-from-openapi)).
 
 User-visible strings live in one module.
 The first version ships one language, and a second language does not touch the components.
@@ -155,7 +155,8 @@ In development, Vite serves the client on its own port and proxies `/api` to `ap
 No CORS setting exists on either side.
 
 The production build is a static directory that the operator places where `web.dir` points, and the daemon serves it ([daemon-api.md §7.1](./daemon-api.md#71-same-origin-static-serving)).
-The build is reproducible from the checked-in sources; the generated API types are part of the build, not a committed artifact.
+The build is reproducible from the checked-in sources.
+The generated API types are committed, and the CI checks that regenerating them changes nothing, so the build does not need the generator.
 
 ## 6. Design decisions
 
@@ -222,13 +223,16 @@ Fetching the content into a `Blob` and saving it lets the client show its own pr
 #### Generate the API client types from OpenAPI
 
 **Decision**
-The client's request and response types are generated from `daemon/openapi.yaml`.
+The client's request and response types are generated from `daemon/openapi.yaml`, committed as `ui-web/src/api/schema.d.ts`, and checked in the CI by regenerating them.
+The build does not regenerate them.
 
 **Rationale**
 The same contract produces the Rust router and the client's types, so a field that changes on one side fails the other side's type check.
+Committing the result makes a contract change visible in review and keeps the build independent of the generator, as the Rust interface already does.
 
 **Rejected**
 Hand-written types drift silently and turn a contract change into a runtime error.
+Generating at build time keeps the tree smaller, but it hides the contract change from review and makes every build depend on the generator.
 
 ### 6.2 Deferred
 

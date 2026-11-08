@@ -36,13 +36,15 @@ This package is required for RocksDB.
 ### Daemon Configuration
 
 The daemon selects its configuration directory from `AXUS_DAEMON_CONFIG_DIR`, `~/.config/axus`, then `.config/axus`.
-The selected directory must contain [axus.toml](./daemon/config/axus.toml).
-
-Run the repository's development configuration with:
+The selected directory must contain `axus.toml`.
+The repository ships a development template as [axus.toml.example](./daemon/config/axus.toml.example); copy it before the first run:
 
 ```sh
+cp daemon/config/axus.toml.example daemon/config/axus.toml
 cargo run --manifest-path daemon/Cargo.toml -p omnius-axus-daemon -- start --config-dir daemon/config
 ```
+
+The actual `axus.toml` is not tracked by git, so local paths and state do not enter the repository.
 
 The `[p2p]` section accepts the following keys.
 
@@ -75,7 +77,7 @@ Add that URI to `bootstrap_nodes` of another daemon to connect the two.
 ### Browser Client
 
 The browser client in [ui-web](./ui-web) is a static build that the daemon serves on the API's port.
-It needs Node.js 20.19 or later, or 22.12 or later.
+Node.js and the OpenAPI type generator are managed with [mise](https://mise.jdx.dev/); run `mise install` in the repository root to install the versions pinned in `mise.toml` and `mise.lock`.
 
 Build it and point `web.dir` at the output:
 
@@ -91,10 +93,11 @@ insecure_cookie = true # The daemon serves plain HTTP, and the browser needs thi
 
 Start the daemon and open the API's address, such as `http://127.0.0.1:5050/`.
 The first visit asks for the owner name and a password; later visits ask for the login.
-The build generates its API types from [openapi.yaml](./daemon/openapi.yaml), so rebuild it after the contract changes.
+The API types are generated from [openapi.yaml](./daemon/openapi.yaml) and committed; run `npm run gen:api` in `ui-web/` after the contract changes, and commit the result.
 
 For development, `npm run dev` serves the client with hot reload on its own port and proxies `/api` to `127.0.0.1:5050`, so run the daemon with that API address.
 
+`npm run lint` checks the formatting and lint rules, and `npm run typecheck` checks the types.
 `npm run test` runs the unit tests.
 `npm run test:e2e` builds the client and runs the browser flow in Chromium: it starts two daemons, publishes on the first, and downloads on the second.
 It needs the daemon binary, which defaults to `daemon/target/debug/omnius-axus-daemon` and can be set with `AXUS_DAEMON_BIN`, and a Chromium for Playwright, which `npx playwright install chromium` installs.
@@ -113,13 +116,14 @@ A change selects the jobs by the files it touches, and the `gate` job always rep
 
 | Change | Jobs |
 | --- | --- |
-| `daemon/**` | `rust-lint`, `rust-test`, `e2e` |
-| `daemon/openapi.yaml` | `rust-lint`, `rust-test`, `ui`, `interface`, `e2e` |
-| `ui-web/**` | `ui`, `e2e` |
+| `daemon/**` | `daemon-lint`, `daemon-test`, `e2e` |
+| `daemon/openapi.yaml` | `daemon-lint`, `daemon-test`, `ui`, `interface`, `e2e` |
+| `ui-web/**`, `mise.toml`, `mise.lock` | `ui`, `e2e` |
 | `.github/**` | Every job |
 | Anything else, such as `docs/` | Only `changes` and `gate` |
 
-A pull request runs the Rust tests on Linux, and a push to a main branch runs them on Linux, macOS, and Windows.
+A pull request runs the daemon tests on Linux, and a push to `main` or `release/*` runs them on Linux, macOS, and Windows.
+A separate `dependency-audit` workflow runs weekly and on dependency changes; it is not part of the merge gate.
 The design is in [ci.md](./docs/design/ci.md).
 
 Run the same checks by hand:
@@ -127,13 +131,13 @@ Run the same checks by hand:
 ```sh
 (cd daemon && cargo make lint)
 (cd daemon && cargo nextest run --all-features)
-(cd ui-web && npm ci && npm run lint && npm run build && npm run test)
+(cd ui-web && npm ci && npm run lint && npm run typecheck && npm run build && npm run test)
+(cd ui-web && npm run gen:api && test -z "$(git status --porcelain -- src/api/schema.d.ts)")
 (cd ui-web && npm run test:e2e)
-bash daemon/entrypoints/gen-interface.sh && git diff --stat daemon/entrypoints/interface
+bash daemon/entrypoints/gen-interface.sh && test -z "$(git status --porcelain -- daemon/entrypoints/interface)"
 ```
 
 The tests of `omnius-core-migration::postgres` start a Postgres container, so they need a container runtime.
-The generator of the last command writes the current time into `daemon/entrypoints/interface/README.md`, which is the only difference an unchanged contract leaves.
 
 ## Contributing
 
@@ -141,7 +145,7 @@ If you would like to contribute to this project, please contact us through [Issu
 
 ## License
 
-Axus is licensed under the [MIT License](LICENSE.txt).
+Axus is licensed under the [MIT License](LICENSE).
 
 ## Links
 

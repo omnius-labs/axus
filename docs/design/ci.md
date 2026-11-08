@@ -36,6 +36,9 @@ It does not release, deploy, or publish, and it holds no secret.
 **A required check stops a change only before the merge.**
 A check that runs after the merge can report a failure but cannot keep the change out of `main`, so the checks that must hold for every merge run on the pull request.
 
+The dependency audit is outside this boundary.
+It runs on a schedule and on dependency changes, and it does not gate a merge (§4.4).
+
 ## 3. Triggers and change scope
 
 ### 3.1 Triggers
@@ -43,6 +46,7 @@ A check that runs after the merge can report a failure but cannot keep the chang
 One workflow, `ci`, runs on a pull request, on a push to `main` or `release/*`, and on a manual dispatch.
 A pull request run tests the result of merging the branch into its base, which a push to the branch does not.
 A push to `main` or `release/*` runs the merged state again on the operating systems of §5.2, and a manual dispatch runs the ref it is given in the same way.
+The dependency audit is a separate workflow, `dependency-audit` (§4.4).
 
 ### 3.2 Change scope
 
@@ -52,12 +56,12 @@ A manual dispatch and a change under `.github/` select every scope.
 
 | Scope | Paths | Jobs |
 | --- | --- | --- |
-| rust | `daemon/**` | `rust-lint`, `rust-test` |
-| ui | `ui-web/**`, `daemon/openapi.yaml` | `ui` |
+| daemon | `daemon/**` | `daemon-lint`, `daemon-test` |
+| ui | `ui-web/**`, `daemon/openapi.yaml`, `mise.toml`, `mise.lock` | `ui` |
 | interface | `daemon/openapi.yaml`, `daemon/entrypoints/interface/**`, `daemon/entrypoints/gen-interface.sh` | `interface` |
-| e2e | the rust scope or the ui scope | `e2e` |
+| e2e | the daemon scope or the ui scope | `e2e` |
 
-A path can belong to more than one scope: `daemon/openapi.yaml` is in the rust, ui, and interface scopes, so a change to it also selects `e2e`.
+A path can belong to more than one scope: `daemon/openapi.yaml` is in the daemon, ui, and interface scopes, so a change to it also selects `e2e`.
 A change that touches no scope, such as a documentation-only change, runs `changes` and `gate` only.
 The browser flow depends on both the daemon and the client, so a change to the daemon or to the client selects it.
 
@@ -66,23 +70,24 @@ The browser flow depends on both the daemon and the client, so a change to the d
 | Job | Runs when | Operating system | What it checks |
 | --- | --- | --- | --- |
 | `changes` | always | Linux | Decides the scopes of §3.2 |
-| `rust-lint` | rust | Linux | `cargo make lint` |
-| `rust-test` | rust | §5 | The Rust tests with all features |
-| `ui` | ui | Linux | The client's lint, build, and unit tests |
+| `daemon-lint` | daemon | Linux | `cargo make lint` |
+| `daemon-test` | daemon | §5 | The daemon tests with all features |
+| `ui` | ui | Linux | The client's lint, typecheck, build, unit tests, and regenerated API types |
 | `e2e` | e2e | Linux | The browser flow against two daemons |
 | `interface` | interface | Linux | The generated Rust interface equals the regeneration of `openapi.yaml` |
 | `gate` | always | Linux | §6 |
 
-### 4.1 Rust
+### 4.1 Daemon
 
-`rust-test` calls `cargo nextest` directly and does not go through `cargo make test`, because that task depends on the lint and `rust-lint` already runs it.
+`daemon-test` calls `cargo nextest` directly and does not go through `cargo make test`, because that task depends on the lint and `daemon-lint` already runs it.
 The run uses a nextest profile for the workflows that does not stop at the first failure, so one run lists every failing test.
 The profile keeps the group that limits the loopback transfer tests to two at a time, because four tests at once push the tests that wait on a transfer past their limit on a four-core runner ([nextest.toml](../../daemon/.config/nextest.toml)).
 The matrix does not cancel the other operating systems when one fails.
 
 ### 4.2 Client and browser flow
 
-The `ui` job runs the lint, build, and unit-test scripts of [package.json](../../ui-web/package.json) on a Node version pinned in the repository, with the tools of [web-client.md §5.1](./web-client.md#51-stack-and-layout).
+The `ui` job installs the toolchain with mise and runs the lint, typecheck, build, and unit-test scripts of [package.json](../../ui-web/package.json), with the tools of [web-client.md §5.1](./web-client.md#51-stack-and-layout).
+It also runs `gen:api` and fails when it changes the committed `src/api/schema.d.ts` ([web-client.md §5.2](./web-client.md#52-development-proxy-and-production-build)).
 The `e2e` job builds the daemon, installs Chromium, and runs the flow of `npm run test:e2e` with the binary named by `AXUS_DAEMON_BIN`.
 The flow is one serial group and holds state across its steps, so a retry would start from a used daemon; the job has no retry, and a failed run is run again as a whole.
 A failed run keeps the trace that Playwright writes.
@@ -90,20 +95,27 @@ The transfer step waits about a minute and a half for the two daemons to find ea
 
 ### 4.3 Generated interface
 
-The `interface` job runs `gen-interface.sh` and compares the result with the tree.
-The generator writes the build date into `entrypoints/interface/README.md` on every run, so that line is excluded from the comparison.
+The `interface` job runs `gen-interface.sh` and fails when the regenerated tree differs.
+The script removes the generator's build timestamp, so an unchanged contract leaves no diff.
 The script needs Java and downloads the generator, so a failed download fails the job, and the remedy is to run it again.
+
+### 4.4 Dependency audit
+
+`dependency-audit` is a separate workflow.
+It runs on a weekly schedule and on a change to a dependency manifest or lockfile, and it does not report to `gate`.
+It runs `npm audit` for the client and `cargo audit` for the daemon, denying unmaintained and unsound advisories.
+A finding is fixed in the dependency or filed in [issues.md](../issues.md); it does not block an unrelated merge.
 
 ## 5. Platforms
 
 ### 5.1 Pull requests
 
-A pull request runs the Rust jobs on Linux only.
+A pull request runs the daemon jobs on Linux only.
 The wait stays short, and the platform-specific code is checked after the merge.
 
 ### 5.2 Main and release branches
 
-A push to `main` or `release/*`, and a manual dispatch, run `rust-test` on Linux, macOS, and Windows, the targets of [storage.md §4.2](./storage.md#42-durability-guarantees-and-boundaries).
+A push to `main` or `release/*`, and a manual dispatch, run `daemon-test` on Linux, macOS, and Windows, the targets of [storage.md §4.2](./storage.md#42-durability-guarantees-and-boundaries).
 A result of this run does not hold a change back, so a failure on macOS or Windows is the signal to fix the next change.
 
 The test binary `omnius-core-migration::postgres` starts a Postgres container and needs a container runtime.
@@ -125,10 +137,10 @@ A skipped job does not report, and a native `paths:` filter on a workflow skips 
 | --- | --- |
 | Concurrency | One group per workflow and ref. A new pull request run cancels the previous one; a run on `main` or `release/*` is never cancelled |
 | Token | The workflow grants the read-only `contents` permission, and no job asks for more |
-| Time limits | Every job sets `timeout-minutes`: 30 for the Rust jobs and `e2e`, which builds the daemon, 20 for `ui` and `interface`, and 5 for `changes` and `gate` |
+| Time limits | Every job sets `timeout-minutes`: 30 for the daemon jobs and `e2e`, which builds the daemon, 20 for `ui` and `interface`, and 5 for `changes` and `gate` |
 | Rust cache | Keys scoped by operating system and job, saved only on `main`, so the pull requests read the cache of `main` and do not crowd the cache quota |
-| Node cache | The npm cache, and the Playwright browsers keyed by the hash of the lockfile |
-| Setup steps | The free-space step, the submodule checkout, the timestamp restore, LLVM 20.1, cargo-make, and nextest stay as the current workflows have them |
+| Node cache | The npm cache keyed by the lockfile, the mise tool cache, and the Playwright browsers keyed by the hash of the lockfile |
+| Setup steps | The free-space step, the submodule checkout, the timestamp restore, LLVM 20.1, cargo-make, and nextest stay as the current workflows have them. The client jobs install Node and the client's OpenAPI type generator with mise |
 | Actions | Pinned to a version tag and updated weekly by Dependabot, which also covers the Rust crates and the client's npm packages |
 
 ## 8. Design decisions
@@ -186,11 +198,11 @@ Running all three on every pull request catches the regression before the merge,
 #### Run the browser flow on pull requests
 
 **Decision**
-The `e2e` job runs on a pull request whenever the rust or ui scope changes.
+The `e2e` job runs on a pull request whenever the daemon or ui scope changes.
 
 **Reason**
 `main` does not stop a change, so a flow that ran only there would report a break after it merged.
-The job runs beside the Rust tests, so it adds little to the wait once the daemon build is cached.
+The job runs beside the daemon tests, so it adds little to the wait once the daemon build is cached.
 
 **Rejected alternatives**
 Running it only on `main` and on a manual dispatch costs nothing on a pull request, but the flow is the only check that drives the client against real daemons.
@@ -198,15 +210,39 @@ Running it only on `main` and on a manual dispatch costs nothing on a pull reque
 #### Check the generated interface by regenerating it
 
 **Decision**
-The `interface` job regenerates the interface from `openapi.yaml` and fails if the tree differs, apart from the build date.
+The `interface` job regenerates the interface from `openapi.yaml` and fails if the tree differs.
 
 **Reason**
 [daemon-api.md §4.2](./daemon-api.md#42-code-generation-from-openapi) makes regeneration from scratch a precondition, and a hand edit of a generated file is hard to see in a review.
-Regenerating the current tree changes only the build date line, so the comparison can hold.
+The committed interface carries no build timestamp, so regenerating the current tree leaves it unchanged and a plain comparison holds.
 The cost is the generator download, which can fail for a network reason.
 
 **Rejected alternatives**
 Leaving it to the review costs nothing, but nothing then enforces the precondition.
+
+#### Run the dependency audit outside the merge gate
+
+**Decision**
+The dependency audit is a separate workflow that runs weekly and on dependency changes, and it is not a required check.
+
+**Reason**
+An advisory can appear with no change in the repository, so the audit needs a schedule, and a schedule cannot hold an unrelated merge.
+The merge gate stays limited to checks the change can fix.
+
+**Rejected alternatives**
+Running the audit in `ci` gives it the `gate` treatment, but a newly published advisory would then block every merge until someone updates a dependency.
+
+#### Pin the client's toolchain with mise
+
+**Decision**
+Node and `openapi-typescript` are installed by mise from `mise.toml` and `mise.lock`, and the client jobs use `jdx/mise-action`.
+
+**Reason**
+The generator peers on an older TypeScript, so keeping it outside `package.json` lets the client track the current TypeScript while the generator stays pinned.
+One lockfile pins both tools for local development and CI.
+
+**Rejected alternatives**
+Keeping the generator in `devDependencies` forces TypeScript to the generator's peer range, which is why Dependabot ignored TypeScript major updates.
 
 ### 8.2 Deferred
 
@@ -243,10 +279,10 @@ The workflow holds a read-only token and no secret, so a compromised tag has lit
 **Condition for deciding**
 Decide when a workflow gets a secret, a token with write permission, or publishes an artifact.
 
-#### Run the checks on a schedule
+#### Run the merge checks on a schedule
 
 **Current state**
-Nothing runs unless a pull request or a main branch receives a change, or a run is dispatched by hand.
+The merge checks run only on a pull request, a main branch, or a manual dispatch. The dependency audit is the only check with a schedule (§4.4).
 
 **Why not decide now**
 No break from a toolchain or dependency update has been seen to hide until the next change.
@@ -258,6 +294,7 @@ Decide when an unrelated pull request is the first to show a break caused by a t
 
 The `ci` workflow implements the jobs, the scope, and `gate`, and it replaced the earlier `test-daemon-slim` and `test-daemon-all`.
 `main` requires `gate` in its branch protection, so a pull request whose `gate` does not pass cannot merge.
+The client jobs install Node and the OpenAPI generator with mise, check the committed API types against regeneration, and the separate `dependency-audit` workflow runs weekly and on dependency changes.
 The workflow itself is complete.
 The macOS run fails at engine tests that Linux passes, and the Windows run fails at one of them intermittently, so a run that tests Rust on the main branches can be red until the bugs in [issues.md](../issues.md) are fixed.
 

@@ -208,7 +208,7 @@ mod tests {
             .expect_err("second daemon should fail to acquire the state lock");
         assert_eq!(*error.kind(), ErrorKind::IoError);
         let source = error.source().unwrap().downcast_ref::<std::io::Error>().unwrap();
-        assert_eq!(source.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(source.kind(), std::io::ErrorKind::WouldBlock);
 
         Ok(())
     }

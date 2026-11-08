@@ -255,10 +255,12 @@ mod tests {
     #[tokio::test]
     async fn load_repository_sample_test() -> TestResult {
         let config_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config");
+        let temp_dir = tempfile::tempdir()?;
+        std::fs::copy(config_dir.join("axus.toml.example"), temp_dir.path().join("axus.toml"))?;
 
-        let conf = DaemonConfig::load(&config_dir).await?;
+        let conf = DaemonConfig::load(temp_dir.path()).await?;
 
-        assert_eq!(conf.core.state_dir, config_dir.join("./state"));
+        assert_eq!(conf.core.state_dir, temp_dir.path().join("state"));
         assert_eq!(conf.api.listen_addr, "127.0.0.1:5050");
         assert_eq!(conf.p2p.listen_addr, "127.0.0.1:5051");
         assert!(conf.p2p.advertise_addrs.is_empty());

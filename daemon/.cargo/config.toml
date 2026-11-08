@@ -2,6 +2,6 @@
 rustflags = ["--cfg", "tracing_unstable"]
 
 [env]
-# librocksdb-sys の cc build に、macOS target の同期方法を指定する。
+# Tell the cc build of librocksdb-sys how macOS targets sync.
 CXXFLAGS_aarch64_apple_darwin = { value = "-DHAVE_FULLFSYNC", force = true }
 CXXFLAGS_x86_64_apple_darwin = { value = "-DHAVE_FULLFSYNC", force = true }

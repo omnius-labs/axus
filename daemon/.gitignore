@@ -3,8 +3,9 @@
 /bin
 /state
 
+# Do not include the actual configuration; include only the template config/axus.toml.example.
 config/*
-!config/axus.toml
+!config/axus.toml.example
 
 # Visual Studio Code
 .vscode/*

@@ -23,7 +23,6 @@ once_cell = { workspace = true }
 base64 = { workspace = true }
 futures = { workspace = true }
 rupnp = { workspace = true }
-pin-utils = { workspace = true }
 local-ip-address = { workspace = true }
 nom = { workspace = true }
 fast-socks5 = { workspace = true }

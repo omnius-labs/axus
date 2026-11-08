@@ -1,5 +1,5 @@
 {
-  "extends": "../tsconfig.json",
-  "compilerOptions": { "types": ["node"], "allowImportingTsExtensions": false },
-  "include": [".", "../playwright.config.ts", "../src/messages.ts"]
+    "extends": "../tsconfig.json",
+    "compilerOptions": { "types": ["node"], "allowImportingTsExtensions": false },
+    "include": [".", "../playwright.config.ts", "../src/messages.ts"]
 }

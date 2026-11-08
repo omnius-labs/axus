@@ -58,5 +58,8 @@ jobs:
         with:
           tool: cargo-audit@0.22.1
 
+      # `astral-tokio-tar` is a test-only testcontainers dependency and has no
+      # maintained replacement at the pinned testcontainers version
+      # (RUSTSEC-2026-0440). Every other advisory is denied.
       - name: Audit Rust dependencies
-        run: cargo audit --file daemon/Cargo.lock --deny unmaintained --deny unsound
+        run: cargo audit --file daemon/Cargo.lock --deny unmaintained --deny unsound --ignore RUSTSEC-2026-0440

@@ -1,4 +1,5 @@
 mod announce_budget;
+mod dialed_peers;
 mod kadx;
 mod location_cache;
 mod lookup_registry;
@@ -17,6 +18,7 @@ mod task_lookup;
 mod want_cache;
 
 pub(crate) use announce_budget::AnnounceLocationsBudget;
+use dialed_peers::*;
 use kadx::*;
 pub(crate) use location_cache::*;
 pub(crate) use lookup_registry::*;

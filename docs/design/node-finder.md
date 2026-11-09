@@ -103,7 +103,7 @@ If the Session to keep finishes its handshake later, the earlier-registered Sess
 **Rationale**
 TaskConnectors of the same node reserve their connecting peer, so a duplicate happens when two nodes connect to each other simultaneously.
 A rule that keeps the Session that finished the handshake first can make both sides keep different Sessions.
-Because one side closing the connection is also the Session kept by the other, both Sessions close, and the dialer stays with the peer recorded as connected and does not reconnect.
+Because one side closing the connection is also the Session kept by the other, both Sessions close, and the nodes have to dial each other again.
 Since the node ID is derived from the public key verified in the Session's signature, both sides choose the same Session with the same rule without an extra message.
 
 **Rejected**
@@ -238,6 +238,7 @@ Iterating toward closer nodes reaches a provider through nodes the asker is not 
 The store keeps `last_seen`, `fail_count`, and `last_attempt` per node instead of `weight`.
 A finished handshake marks the node reachable and clears the failure count; a dial that fails on every address marks it unreachable.
 The wait before the next dial doubles per failure up to 30 minutes.
+A peer that a connector dialed stays out of its candidates until the Session the dial produced ends, however it ends, and each overlapping dial to the same peer holds its own reservation.
 The oldest `last_seen` is evicted first.
 
 **Rationale**

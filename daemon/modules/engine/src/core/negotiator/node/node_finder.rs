@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use futures::future::join_all;
 use parking_lot::Mutex;
 use tokio::sync::{Mutex as TokioMutex, mpsc};
@@ -10,7 +10,6 @@ use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 
 use crate::{
     base::{
-        collections::VolatileHashSet,
         runtime::Shutdown,
         sync::{FnHandle, FnHub},
     },
@@ -39,7 +38,7 @@ pub struct NodeFinder {
     sessions: Arc<SessionRegistry>,
     location_cache: Arc<Mutex<LocationCache>>,
     want_cache: Arc<Mutex<WantCache>>,
-    connected_node_profiles: Arc<Mutex<VolatileHashSet<NodeProfile>>>,
+    dialed_peers: Arc<DialedPeers>,
     connecting_ids: Arc<Mutex<HashSet<Vec<u8>>>>,
     get_want_asset_keys_fn: Arc<FnHub<Vec<AssetKey>, ()>>,
     get_push_asset_keys_fn: Arc<FnHub<Vec<AssetKey>, ()>>,
@@ -118,7 +117,7 @@ impl NodeFinder {
             sessions: Arc::new(SessionRegistry::new()),
             location_cache: Arc::new(Mutex::new(LocationCache::new(clock.clone()))),
             want_cache: Arc::new(Mutex::new(WantCache::new())),
-            connected_node_profiles: Arc::new(Mutex::new(VolatileHashSet::new(Duration::seconds(180), clock))),
+            dialed_peers: Arc::new(DialedPeers::new()),
             connecting_ids: Arc::new(Mutex::new(HashSet::new())),
             get_want_asset_keys_fn: Arc::new(FnHub::new()),
             get_push_asset_keys_fn: Arc::new(FnHub::new()),
@@ -167,7 +166,7 @@ impl NodeFinder {
                 self.sessions.clone(),
                 self.session_sender.clone(),
                 self.session_connector.clone(),
-                self.connected_node_profiles.clone(),
+                self.dialed_peers.clone(),
                 self.connecting_ids.clone(),
                 self.node_profile_repo.clone(),
                 self.clock.clone(),

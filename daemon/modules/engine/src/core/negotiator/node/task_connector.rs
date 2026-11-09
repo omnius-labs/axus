@@ -16,7 +16,7 @@ use chrono::Utc;
 use omnius_core_base::{clock::Clock, sleeper::Sleeper};
 
 use crate::{
-    base::{collections::VolatileHashSet, runtime::Shutdown},
+    base::runtime::Shutdown,
     core::session::{
         SessionConnector,
         model::{SessionHandshakeType, SessionType},
@@ -33,7 +33,7 @@ pub struct TaskConnector {
     sessions: Arc<SessionRegistry>,
     session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
     session_connector: Arc<SessionConnector>,
-    connected_node_profiles: Arc<Mutex<VolatileHashSet<NodeProfile>>>,
+    dialed_peers: Arc<DialedPeers>,
     connecting_ids: Arc<Mutex<HashSet<Vec<u8>>>>,
     node_profile_repo: Arc<NodeFinderRepo>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
@@ -61,7 +61,7 @@ impl TaskConnector {
         sessions: Arc<SessionRegistry>,
         session_sender: Arc<TokioMutex<mpsc::Sender<SessionStatus>>>,
         session_connector: Arc<SessionConnector>,
-        connected_node_profiles: Arc<Mutex<VolatileHashSet<NodeProfile>>>,
+        dialed_peers: Arc<DialedPeers>,
         connecting_ids: Arc<Mutex<HashSet<Vec<u8>>>>,
         node_profile_repo: Arc<NodeFinderRepo>,
         clock: Arc<dyn Clock<Utc> + Send + Sync>,
@@ -74,7 +74,7 @@ impl TaskConnector {
             sessions,
             session_sender,
             session_connector,
-            connected_node_profiles,
+            dialed_peers,
             connecting_ids,
             node_profile_repo,
             clock,
@@ -121,10 +121,8 @@ impl TaskConnector {
             return Ok(());
         }
 
-        self.connected_node_profiles.lock().refresh();
-
         let excluded_ids: HashSet<Vec<u8>> = {
-            let v1: Vec<Vec<u8>> = self.connected_node_profiles.lock().iter().map(|n| n.id().to_vec()).collect();
+            let v1: Vec<Vec<u8>> = self.dialed_peers.ids();
             let v2: Vec<Vec<u8>> = self.sessions.ids().await;
             let my_id = self.my_node_profile.lock().id().to_vec();
             v1.into_iter().chain(v2).chain([my_id]).collect()
@@ -170,15 +168,13 @@ impl TaskConnector {
                     warn!(address = addr.to_string(), "the peer's key does not match the node profile");
                     continue;
                 }
-                let status = SessionStatus::new(session);
+                let status = SessionStatus::new(session).with_dialed_peer(self.dialed_peers.reserve(node_profile.id()));
                 self.session_sender
                     .lock()
                     .await
                     .send(status)
                     .await
                     .map_err(|e| Error::from_error(e, ErrorKind::UnexpectedError))?;
-
-                self.connected_node_profiles.lock().insert(node_profile.clone());
 
                 return Ok(());
             }
@@ -216,7 +212,6 @@ mod tests {
 
     use crate::{
         base::{
-            collections::VolatileHashSet,
             connection::{ConnectionTcpAccepterImpl, ConnectionTcpConnector, ConnectionTcpConnectorImpl, TcpProxyOption, TcpProxyType},
             runtime::Shutdown as _,
         },
@@ -228,7 +223,7 @@ mod tests {
         prelude::*,
     };
 
-    use super::{NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, SessionRegistry, TaskConnector};
+    use super::{DialedPeers, NodeFinderIntervals, NodeFinderOption, NodeFinderRepo, SessionRegistry, TaskConnector};
 
     #[tokio::test]
     async fn connect_skips_own_node_profile() -> TestResult {
@@ -325,14 +320,14 @@ mod tests {
 
         let node_profile_repo = Arc::new(NodeFinderRepo::new(dir.path().to_str().unwrap(), clock.clone()).await?);
         node_profile_repo.insert_or_update_node_profiles(&[&candidate]).await?;
-        let connected_node_profiles = Arc::new(Mutex::new(VolatileHashSet::new(chrono::Duration::seconds(180), clock.clone())));
+        let dialed_peers = Arc::new(DialedPeers::new());
         let (session_sender, mut session_receiver) = mpsc::channel(20);
         let task = TaskConnector::new(
             Arc::new(Mutex::new(my_node_profile)),
             Arc::new(SessionRegistry::new()),
             Arc::new(TokioMutex::new(session_sender)),
             Arc::new(SessionConnector::new(tcp_connector, my_signer, clock.clone(), rng.clone(), SessionOption::default())),
-            connected_node_profiles.clone(),
+            dialed_peers.clone(),
             Arc::new(Mutex::new(HashSet::new())),
             node_profile_repo,
             clock.clone(),
@@ -349,8 +344,81 @@ mod tests {
 
         task.connect().await?;
 
-        assert!(connected_node_profiles.lock().is_empty());
+        assert!(dialed_peers.ids().is_empty());
         assert!(session_receiver.try_recv().is_err());
+        task.shutdown().await;
+        session_accepter.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_dialed_peer_is_released_when_the_session_ends() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
+        let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
+        let tcp_connector = Arc::new(
+            ConnectionTcpConnectorImpl::new(TcpProxyOption {
+                typ: TcpProxyType::None,
+                addr: None,
+            })
+            .await?,
+        );
+
+        // The peer listens at the address and signs its own key.
+        let peer_signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "peer")?);
+        let tcp_accepter = ConnectionTcpAccepterImpl::new(&OmniAddr::create_tcp("127.0.0.1".parse()?, 0), false).await?;
+        let addrs = tcp_accepter.get_advertised_addrs().await?;
+        let session_accepter = SessionAccepter::new(
+            Arc::new(tcp_accepter),
+            peer_signer.clone(),
+            clock.clone(),
+            Arc::new(SleeperImpl),
+            rng.clone(),
+            &[SessionType::NodeFinder],
+            SessionOption::default(),
+        )
+        .await;
+
+        let peer = NodeProfile::sign(&peer_signer, addrs, clock.now())?;
+        let my_signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "mine")?);
+        let my_node_profile = NodeProfile::sign(&my_signer, vec![], clock.now())?;
+
+        let node_profile_repo = Arc::new(NodeFinderRepo::new(dir.path().to_str().unwrap(), clock.clone()).await?);
+        node_profile_repo.insert_or_update_node_profiles(&[&peer]).await?;
+        let dialed_peers = Arc::new(DialedPeers::new());
+        let (session_sender, mut session_receiver) = mpsc::channel(20);
+        let task = TaskConnector::new(
+            Arc::new(Mutex::new(my_node_profile)),
+            Arc::new(SessionRegistry::new()),
+            Arc::new(TokioMutex::new(session_sender)),
+            Arc::new(SessionConnector::new(tcp_connector, my_signer, clock.clone(), rng.clone(), SessionOption::default())),
+            dialed_peers.clone(),
+            Arc::new(Mutex::new(HashSet::new())),
+            node_profile_repo,
+            clock.clone(),
+            Arc::new(SleeperImpl),
+            rng,
+            NodeFinderOption {
+                state_dir: dir.path().to_str().unwrap().to_string(),
+                max_connected_session_count: 3,
+                max_accepted_session_count: 3,
+                intervals: NodeFinderIntervals::default(),
+            },
+        )
+        .await?;
+
+        task.connect().await?;
+        let status = session_receiver.try_recv()?;
+        assert_eq!(dialed_peers.ids(), vec![peer.id().to_vec()]);
+
+        // The Session ends before it registers, as it does when its handshake fails.
+        drop(status);
+        assert!(dialed_peers.ids().is_empty());
+
+        // The peer is a candidate again, so the next cycle dials it instead of finding no node to connect.
+        task.connect().await?;
+        let _status = session_receiver.try_recv()?;
+
         task.shutdown().await;
         session_accepter.shutdown().await;
         Ok(())
@@ -377,7 +445,7 @@ mod tests {
             Arc::new(SessionRegistry::new()),
             Arc::new(TokioMutex::new(session_sender)),
             Arc::new(SessionConnector::new(tcp_connector, signer, clock.clone(), rng.clone(), SessionOption::default())),
-            Arc::new(Mutex::new(VolatileHashSet::new(chrono::Duration::seconds(180), clock.clone()))),
+            Arc::new(DialedPeers::new()),
             connecting_ids,
             node_profile_repo,
             clock.clone(),

@@ -60,6 +60,12 @@ jobs:
 
       # `astral-tokio-tar` is a test-only testcontainers dependency and has no
       # maintained replacement at the pinned testcontainers version
-      # (RUSTSEC-2026-0440). Every other advisory is denied.
+      # (RUSTSEC-2026-0440).
+      # `libsqlite3-sys` bundles SQLite through sqlx's `sqlite` feature, and its
+      # advisory needs a database file and a sibling -wal written by a less
+      # trusted party; the daemon opens only the databases it created in its
+      # state directory. sqlx 0.9.0 caps the crate below the patched 0.39, so
+      # this exception is removed when sqlx allows that version
+      # (RUSTSEC-2026-0459). Every other advisory is denied.
       - name: Audit Rust dependencies
-        run: cargo audit --file daemon/Cargo.lock --deny unmaintained --deny unsound --ignore RUSTSEC-2026-0440
+        run: cargo audit --file daemon/Cargo.lock --deny unmaintained --deny unsound --ignore RUSTSEC-2026-0440 --ignore RUSTSEC-2026-0459

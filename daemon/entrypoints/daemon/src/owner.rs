@@ -1,11 +1,9 @@
 use std::path::Path;
 
-use argon2::{
-    Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
-    password_hash::{SaltString, rand_core::OsRng},
-};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use chrono::{DateTime, Duration, Utc};
 use omnius_core_migration::sqlite::{MigrationRequest, SqliteMigrator};
+use rand::RngExt as _;
 use sha3::{Digest, Sha3_256};
 use sqlx::{Row as _, sqlite::SqlitePool};
 
@@ -147,7 +145,9 @@ INSERT INTO owner (id, name, password_hash, created_at)
     }
 
     fn hash_password(password: &str) -> Result<String> {
-        let salt = SaltString::generate(&mut OsRng);
+        // The salt only has to be unique. Use the crate's rand so the salt does not depend on password-hash's
+        // optional rand_core feature.
+        let salt = SaltString::encode_b64(&rand::rng().random::<[u8; 16]>()).map_err(|error| Error::new(ErrorKind::UnexpectedError).with_message(error.to_string()))?;
         let hash = Argon2::default()
             .hash_password(password.as_bytes(), &salt)
             .map_err(|error| Error::new(ErrorKind::UnexpectedError).with_message(error.to_string()))?;

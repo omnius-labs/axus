@@ -80,7 +80,6 @@ futures-util = "0.3.32"
 tower = { version = "0.5", features = ["util"] }
 serial_test = "3.4.0"
 rupnp = "3.0.0"
-pin-utils = "0.1.0"
 local-ip-address = "0.6.13"
 nom = "8.0.0"
 fast-socks5 = "1.0.0"

@@ -129,7 +129,7 @@ impl UpnpClient {
     async fn action(urn: &URN, name: &str, args: &str) -> Result<HashMap<String, String>> {
         let search_target = SearchTarget::URN(urn.clone());
         let devices = rupnp::discover(&search_target, Duration::from_secs(3), None).await?;
-        pin_utils::pin_mut!(devices);
+        let mut devices = std::pin::pin!(devices);
 
         while let Some(device) = devices.try_next().await? {
             let service = device.find_service(&urn.clone());

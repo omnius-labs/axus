@@ -11,8 +11,8 @@ Axus is a peer-to-peer (P2P) file distribution system that runs on personal serv
 ## Features
 
 - **File Upload and Download**: Users can easily upload and download files, making data sharing effortless.
-- **File Search and Publishing**: Files can be searched and published with protection provided by a Web of Trust system, ensuring security and integrity.
-- **Bulletin Board Functionality**: Provides a platform within the network for users to safely exchange and share information.
+- **File Publishing and Subscription** (planned): Files are published under a signed Profile, so subscribers see who claims a file and how far their own Web of Trust trusts that author.
+- **Bulletin Board Functionality** (planned): Provides a platform within the network for users to safely exchange and share information.
 
 ## Development
 

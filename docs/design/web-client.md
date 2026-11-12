@@ -286,5 +286,6 @@ Decide when an operator publishes a directory rather than a file, and the per-fi
 The daemon serves the build from `web.dir` ([daemon-api.md §10](./daemon-api.md#10-current-status-and-remaining-work)).
 Vitest covers the upload, the polling rules, and the redirect guard, and a Playwright flow starts two daemons and drives setup, login, upload, library publication, subscription, download, and deletion through the build.
 The setup procedure is in the [README](../../README.md).
+Profiles and the trust state of an author are not part of the client yet ([profile.md §9](./profile.md#9-current-status-and-remaining-work)).
 
 For confirmed bugs, see [issues.md](../issues.md).

@@ -2,29 +2,33 @@
 
 ## 1. About this document
 
-This document covers what the Session, Merkle hash, and Web of Trust each guarantee, and the boundaries of node identity and threats.
-Term definitions are the source of [terms.md](../terms.md).
+This document covers what the Session, the node identity, and the Merkle hash each guarantee, and the boundaries of the threats.
+The authorship of content and the trust in its author are in [web-of-trust.md](./web-of-trust.md#1-about-this-document).
+This document assumes the vocabulary of [terms.md](../terms.md). Term definitions are not given here.
 
 ### 1.1 Division of responsibilities among documents
 
 | Document or source of truth | Owns |
 | --- | --- |
 | [design.md](../design.md#11-division-of-responsibilities-among-documents) | Overall structure, boundaries with other concerns, cross-cutting dependencies |
-| This document | Scale of security guarantees, threats, identity, and the Web of Trust design decisions |
+| This document | Scale of the Session and identity guarantees, threats, and the node identity decisions |
 | [session.md](./session.md#2-responsibilities-and-boundaries) | Session establishment and use separation |
 | [file-transfer.md](./file-transfer.md#5-block-exchange) | Content hash verification of blocks |
-| [profile-memo.md](./profile-memo.md#2-responsibilities-and-boundaries) | Profile payload and memo responsibility boundary |
+| [web-of-trust.md](./web-of-trust.md#1-about-this-document) | Content authorship, the trust and block lists, and their evaluation |
+| [profile.md](./profile.md#1-about-this-document) | Profile identity and the signed body |
+| [profile-exchanger.md](./profile-exchanger.md#1-about-this-document) | The exchange frame and the refresh of Profiles |
 
 ### 1.2 Tenses used in this document
 
 The body describes the completed design.
 The implementation status and remaining work are consolidated in §5.
+To find out what runs now, read §5 first.
 
 ## 2. Responsibilities and boundaries
 
 Authentication, encryption, content hashing, and trust evaluation are separate guarantees, and no single one replaces another.
-This document holds the boundary of each guarantee and the identity and Web of Trust decisions derived from it.
-The individual Session protocol, file protocol, and Profile payload structures belong to their corresponding design documents.
+This document holds the boundary of each guarantee and the node identity decisions derived from it.
+The individual Session protocol, file protocol, and NodeProfile structures belong to their corresponding design documents, and the authorship of content belongs to [web-of-trust.md](./web-of-trust.md#1-about-this-document).
 
 ## 3. Division of guarantees and threats
 
@@ -34,20 +38,23 @@ The individual Session protocol, file protocol, and Profile payload structures b
 | Public key reconciliation at the NodeFinder handshake | That the peer's NodeProfile and node ID belong to the Session's signer | That the reachable address still belongs to that node |
 | NodeProfile signature | That the owner showed the public key, reachable addresses, and update time | Trust in the node, that the reachable address still belongs to that node |
 | FramedStream | Message boundaries and the frame size limits | Confidentiality and tamper detection of the communication content |
-| Merkle hash | That a block's content matches the expected hash | Reliability of the provider, soundness of search results |
-| Web of Trust | The trust policy decided in §4 | Transport encryption and block content verification |
+| Merkle hash | That a block's content matches the expected hash | Reliability of the provider, authorship of the content |
+
+The evaluation of trust in a content author is not part of this table; it is in [web-of-trust.md](./web-of-trust.md#4-evaluation).
+The Profile signature and its verification belong to [profile.md](./profile.md#41-fields) and [profile-exchanger.md](./profile-exchanger.md#43-serving-rules).
 
 Even when Session authentication succeeds, the peer's NodeProfile and public content are not necessarily trustworthy.
 Under this premise, identity, encryption, content verification, and trust evaluation can be implemented separately.
 
 The node ID is derived from the public key, but because keys can be generated at low cost, an attacker can gather IDs close to an AssetKey in Sybil and Eclipse attacks.
 The count limits on known nodes and propagated information curb resource consumption but do not prevent only the attacker's information from remaining.
-Web of Trust takes on this trust selection, and wiretap and tampering of the transport are prevented by the Session secure channel ([session.md](./session.md#secure-channel-of-the-session)).
+The trust in an author is evaluated from the signed Profiles ([web-of-trust.md](./web-of-trust.md#4-evaluation)), and wiretap and tampering of the transport are prevented by the Session secure channel ([session.md](./session.md#secure-channel-of-the-session)).
 
 NodeFinder relay can amplify information, so TTL, count, connection count, and message-size limits and the handshake and receive deadlines are enforced at protocol input boundaries.
 The handshake from Session authentication through use selection spans 10 seconds in total after the TCP connection, and the accepting side runs at most 64 concurrently.
 Connections over the limit are closed without reading or writing, and connections past the deadline are also closed.
-The frame limits are 16 KiB during the handshake, 256 KiB for NodeFinder after use selection, and a value based on FileExchanger's maximum block length of 1 MiB; a Session whose reception exceeds the limit is closed.
+The frame limits are 16 KiB during the handshake, 256 KiB for NodeFinder after use selection, 1 MiB for ProfileExchanger, and a value based on FileExchanger's maximum block length of 1 MiB; a Session whose reception exceeds the limit is closed.
+The ProfileExchanger limit matches the maximum encoded Profile ([profile.md](./profile.md#7-limits)).
 These are constraints for curbing the receiving side's resource consumption by pre- and post-authentication peers, and the details and rationale are the source of [session.md](./session.md#51-decided).
 NodeFinder closes a Session that receives nothing, both during the Hello/Profile exchange and after establishment, for 3 times the communication cycle.
 With the default communication cycle of 20 seconds the receive deadline is 60 seconds, and the peer sends a Status every cycle even when it has nothing else to send.
@@ -70,7 +77,7 @@ The sending side randomly narrows the NodeProfile count within the same limits b
 Limiting both the frame byte count and the element count curbs the receiving side's allocations, processing, and the resource consumption of relaying location info.
 The propagation procedure and the rationale for the count limits are the source of [node-finder.md](./node-finder.md#61-decided), and the byte lengths and send budget judgments are the source of [rocketpack.md](./rocketpack.md#5-design-decisions).
 
-FileExchanger hash-verifies received blocks, NodeProfile verifies signatures, and the Profile exchange verifies signatures and versions.
+FileExchanger hash-verifies received blocks, and NodeProfile verifies signatures.
 FileExchanger excludes for a period the node ID that sent a block failing verification, but the exclusion does not reach a peer that regenerated its key (see [file-transfer.md](./file-transfer.md#57-verification-and-violations)).
 
 ## 4. Design decisions
@@ -93,7 +100,7 @@ Rotating the key changes the node ID, but there is no requirement to carry the I
 
 **Rejected**
 A design that proves a stable ID-to-key correspondence with a signature can express key rotation, but requires a proof chain and revocation, so it is not taken.
-A design that separates the ID and the key and ties them in a trust graph requires the Web of Trust design first and complicates every reconciliation, so it is not taken.
+A design that separates the ID and the key and ties them in a trust graph requires the Profile design first and complicates every reconciliation, so it is not taken.
 
 #### NodeProfile binds reachable addresses with the node's own signature
 
@@ -125,12 +132,12 @@ The Session is not closed over a NodeProfile past the tolerance because even an 
 The ProfileMessage is not checked because it is the peer's own NodeProfile and, after reconciliation with the Session cert's public key, is used only for identifying the Session and does not enter the known-node update order.
 Refusing by age is not done because refusing would force long-running nodes to re-sign and re-advertise periodically, and URIs issued at startup for bootstrap would expire.
 What redelivering an old signature causes is a connection attempt to an old reachable address, and even if that address now belongs to another node, the dialing side can distinguish it by reconciling the connection candidate's public key with the Session's cert.
-The dialing sides of NodeFinder and FileExchanger perform this reconciliation, closing the Session and trying the next address when the key differs.
+The dialing sides of NodeFinder, FileExchanger, and ProfileExchanger perform this reconciliation, closing the Session and trying the next address when the key differs.
 
 The signature shows only that the owner showed the reachable addresses.
 It does not show trust in the node or that the reachable address still belongs to it.
 A third party can provoke connection failures and push a specific node out of lookup.
-This selection is taken on by the Web of Trust.
+The trust in a content author is evaluated from the Profile in [web-of-trust.md](./web-of-trust.md#4-evaluation).
 The cost is that a NodeProfile grows by the signature and update time.
 Also, a NodeProfile re-signed with an update time no greater than the previous one due to a clock rollback is not used for replacement by the receiving side holding the previous value, and the owner must re-sign with a larger update time.
 
@@ -144,21 +151,7 @@ Refusing old NodeProfiles by age and re-signing periodically lets old informatio
 
 ### 4.2 Deferred
 
-#### Unit and propagation of Web of Trust
-
-**Current state**
-The README advertises search and publish protection via Web of Trust, but the trust target and score calculation rules are not defined.
-
-The candidates are the following two.
-
-1. Using only direct signatures keeps explanation and revocation simple, but cannot evaluate unknown subjects.
-2. Using transitive trust widens discovery, but requires defining depth, decay, cycles, and Sybil resistance.
-
-**Why not decided yet**
-Because the API that applies trust is not fixed.
-
-**Decision condition**
-Decide before defining the first API that selects search results or Profiles by trust score.
+The deferred items of the content trust are in [web-of-trust.md](./web-of-trust.md#72-deferred).
 
 ## 5. Current status and remaining work
 
@@ -172,5 +165,4 @@ Tests confirm disconnection on each over-limit, acceptance exactly at limits, an
 NodeProfile is generated with a signature and verified through the paths built from the wire and a URI.
 It is signed at startup with the local node's key, and of the NodeProfiles received in an AnnounceProfiles message, those whose update time is ahead by more than the tolerance are discarded.
 Tests confirm signature verification, rejection of tampering, fixed signed bytes, and replacement by update time.
-The Web of Trust policy is undecided.
-The process in which the dialing side reconciles a connection candidate's public key with the Session's cert is listed as a known bug in [issues.md](../issues.md).
+The dialing sides of NodeFinder and FileExchanger reconcile a connection candidate's public key with the Session's cert and close a Session whose key differs; a test confirms a key that differs at the candidate's address is not recorded as connected.

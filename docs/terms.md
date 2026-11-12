@@ -58,9 +58,16 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 | reachable address | node-finder | `NodeProfile.addrs` | - | List of addresses carried in a NodeProfile at which the node can be reached | - |
 | node ID | node-finder | `NodeProfile::id()` | - | SHA3-256 hash of the node's public key; used for Kadex distance calculation and Session duplicate resolution | `NodeProfile.id` |
 | update time | node-finder | `NodeProfile::updated_time` | - | Time at which the NodeProfile was signed (unix seconds); decides which NodeProfile is newer for the same node ID | - |
-| FileRef | profile-memo | `FileRef` | - | Pair of a name and a hash with which higher-level data references a published file | file body |
-| memo | profile-memo | `MemoExchanger` | - | Lower-level mechanism that discovers, exchanges, and distributes Profiles | post body |
-| Profile | profile-memo | `Profile` | - | Higher-level data representing a subject's public information and FileRefs to public data | - |
+| FileRef | profile | `FileRef` | - | Pair of a name and a root hash with which a Profile references a published file | file body |
+| message | profile | `ProfileMessage` | - | Bulletin-board entry in a Profile, with an inline body or a FileRef | post |
+| Profile | profile | `Profile` | - | Signed public statement of one identity, identified by its Profile ID: its FileRefs, trust and block lists, and messages | - |
+| Profile ID | profile | `Profile::id` | `name@xxxx` | Immutable identity of a Profile; `name` is 1–32 lowercase `[a-z0-9._-]` characters and `xxxx` is the first 128 bits of the SHA3-256 of the profile public key in Crockford base32 | - |
+| profile key | profile | - | - | Ed25519 key pair that signs one Profile, distinct from the node key | profile signing key |
+| trust list | profile | `Profile::trusted` | - | Profile IDs the Profile trusts | allow list |
+| block list | profile | `Profile::blocked` | - | Profile IDs the Profile blocks | deny list, distrust list |
+| ProfileExchanger | profile-exchanger | `ProfileExchanger` | - | Component that looks up, exchanges, and refreshes Profiles | MemoExchanger, memo |
+| Web of Trust | web-of-trust | - | - | Local evaluation of the trust and block lists over signed Profiles | WoT |
+| F2F | web-of-trust | - | - | Network that admits only mutually trusted peers at connection time; not adopted | friend-to-friend |
 | rpf | rocketpack | `.rpf` | `.rpf` file | Schema file defining RocketPack types and field numbers | Rust type definition |
 | Session | session | `Session` | - | Communication channel that carries the peer's proof, the connection direction, and a use | TCP connection |
 | sweep | storage | - | - | Reclamation that reconciles RocksDB keys and temporary outputs against SQLite rows and deletes unreferenced ones | - |
@@ -139,12 +146,32 @@ A FileRef is a value with which higher-level data references content by name.
 **What goes wrong if misread**
 Treating the root hash alone as a FileRef loses the display name and classification that the higher-level service should keep.
 
-<a id="t-profile-vs-memo"></a>
-#### Profile and memo
+<a id="t-nodeprofile-vs-profile"></a>
+#### NodeProfile and Profile
 
 **Boundary**
-A Profile is a payload representing public information and a set of FileRefs.
-A memo is a lower-level mechanism that discovers, exchanges, and distributes that payload, and does not interpret the post body or attachments.
+A NodeProfile is the transport identity of a node: its public key, reachable addresses, and update time, signed with the node key.
+A Profile is a content identity: its FileRefs, trust and block lists, and messages, signed with the profile key, and its identity is independent of the node that serves it.
 
 **What goes wrong if misread**
-If the memo interprets the Profile content, changes to the higher-level data model ripple into the discovery and distribution protocol.
+Treating a NodeProfile as an author, or a Profile as a reachable peer, makes the trust lists look like connection permissions (F2F) and makes a node's address part of the author's identity.
+
+<a id="t-f2f-vs-wot"></a>
+#### F2F and Web of Trust
+
+**Boundary**
+F2F admits only mutually trusted peers at connection time.
+The Web of Trust evaluates signed content and never refuses a connection.
+
+**What goes wrong if misread**
+Gate the Session by the trust list and the design becomes F2F: a new peer cannot exchange a Profile, and the address becomes part of the trust decision.
+
+<a id="t-profile-vs-profile-exchanger"></a>
+#### Profile and ProfileExchanger
+
+**Boundary**
+A Profile is a signed body with its lists and messages.
+A ProfileExchanger finds and transfers the body and does not interpret it.
+
+**What goes wrong if misread**
+Storing trust in the exchanger, or letting it interpret the lists, duplicates the evaluation and makes a transport component the owner of a trust rule.

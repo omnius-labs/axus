@@ -17,30 +17,25 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 
 ### 1.2 Usage
 
-- When a GitHub Issue is filed, append the number to the Issue column of the list.
+- When a bug is confirmed, add a child document and a row to the list.
 - When fixed, remove the list row and the child document.
 - Line numbers drift with code changes, so re-check the relevant locations when fixing.
 
+Confirmed bugs are tracked in this document family and are not filed as GitHub Issues.
+
 ## 2. List
 
-| Item | Severity | Investigated on | Issue |
-| --- | --- | --- | --- |
-| [On macOS the file exchanger tests are intermittently rejected at the handshake](./issues/file-exchanger-tests-are-rejected-at-the-handshake-on-macos.md) | Medium | 2026-11-07 | - |
-| [On Windows the presence-bitmap test finds the peer excluded](./issues/presence-bitmap-test-finds-the-peer-excluded-on-windows.md) | Medium | 2026-11-07 | - |
-| [Lock file of an abnormally terminated daemon remains and prevents restart](./issues/daemon-lock-survives-abnormal-exit.md) | Medium | 2026-10-06 | - |
-| [output_lock is common across all subscriptions and a writing subscription stops other subscriptions' finalization](./issues/output-lock-shared-across-subscriptions.md) | Medium | 2026-10-07 | - |
-| [A vanished destination directory of Failed or Canceled rows makes sweep retries continue and remove impossible](./issues/vanished-output-directory-blocks-sweep-and-remove.md) | Medium | 2026-10-07 | - |
-| [delete_bulk succeeds deleting nothing when it contains a missing key](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | Low | 2026-10-06 | - |
-| [TaskCommunicator::start does not exit its loop even when the accept channel is closed](./issues/task-communicator-spins-on-closed-session-channel.md) | Low | 2026-10-07 | - |
+| Item | Severity | Investigated |
+| --- | --- | --- |
+| [output_lock is common across all subscriptions and a writing subscription stops other subscriptions' finalization](./issues/output-lock-shared-across-subscriptions.md) | Medium | 2026-11-12 |
+| [A vanished destination directory of Failed or Canceled rows makes sweep retries continue and remove impossible](./issues/vanished-output-directory-blocks-sweep-and-remove.md) | Medium | 2026-11-12 |
+| [delete_bulk succeeds deleting nothing when it contains a missing key](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | Low | 2026-11-12 |
+| [TaskCommunicator::start does not exit its loop even when the accept channel is closed](./issues/task-communicator-spins-on-closed-session-channel.md) | Low | 2026-11-12 |
 
-The two engine tests that fail on the macOS and Windows runs of `ci` are independent of each other and of the items above; no relation is known.
-Both are in `file_exchanger::tests`, show only on the full run on the main branches, and have no confirmed cause yet.
+The two Medium items are both on the subscriber output path: the shared lock delays finalization, and the vanished directory blocks reclamation. The two Low items are independent of them and of each other.
 
 ## 3. Not included here
 
 | Item | Reference |
 | --- | --- |
-| No REST API to start publishing and subscribing | [file-transfer.md](./design/file-transfer.md#7-current-status-and-remaining-work) |
-| No NodeFinder active lookup | [node-finder.md](./design/node-finder.md#6-design-decisions) |
-| Web of Trust not designed | [trust-security.md](./design/trust-security.md#4-design-decisions) |
-| Profile and memo not implemented | [profile-memo.md](./design/profile-memo.md#5-current-status-and-remaining-work) |
+| File search is not designed | [web-of-trust.md §5.3](./design/web-of-trust.md#53-subscription-and-search) |

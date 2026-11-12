@@ -197,6 +197,15 @@ Separating the purposes removes the relay of requests and gives each remaining m
 **Rejected**
 Keeping the delta and adding a lookup message would keep two distribution models in one Session.
 
+#### Replace the wire without a compatibility path
+
+**Decision**
+The `NodeMessage` wire replaces the previous `DataMessage` wire without a compatibility path, and `NodeFinderVersion::V1` stays as it is.
+
+**Rationale**
+The daemon is a pre-release, so the previous wire has no peer that must keep working.
+A compatibility path would add a version branch to every message.
+
 #### Relay an announcement with a decreasing hop count
 
 **Decision**

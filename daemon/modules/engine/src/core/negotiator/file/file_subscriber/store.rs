@@ -17,7 +17,7 @@ use omnius_core_omnikit::generated::omni_hash::{OmniHash, OmniHashAlgorithmType}
 
 use crate::base::storage::KeyValueRocksdbStorage;
 
-use super::{output_publication::OutputPublication, repo::FileSubscriberRepo, *};
+use super::{output_locks::OutputLocks, output_publication::OutputPublication, repo::FileSubscriberRepo, *};
 
 /// The outcome of saving a block, and whether the save completed the rank so that the decoder should run.
 pub struct WrittenBlock {
@@ -35,7 +35,7 @@ pub struct FileSubscriberStore {
     repo: FileSubscriberRepo,
     blocks_storage: KeyValueRocksdbStorage,
     lock: RwLock<()>,
-    output_lock: Arc<TokioMutex<()>>,
+    output_locks: OutputLocks,
     finalization_lock: TokioMutex<()>,
     finalization_notify: Notify,
     sweep_needed: AtomicBool,
@@ -44,6 +44,8 @@ pub struct FileSubscriberStore {
     output_failures: Mutex<std::collections::HashMap<OutputStep, usize>>,
     #[cfg(test)]
     rename_pause: Mutex<Option<(tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>)>>,
+    #[cfg(test)]
+    finalize_waiting: TokioMutex<Option<tokio::sync::oneshot::Sender<()>>>,
     tsid_provider: Arc<Mutex<dyn TsidProvider + Send + Sync>>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
 }
@@ -56,7 +58,7 @@ impl FileSubscriberStore {
             repo: FileSubscriberRepo::new(&repo_dir, clock.clone()).await?,
             blocks_storage: KeyValueRocksdbStorage::new(state_dir.join("blocks"), tsid_provider.clone()).await?,
             lock: RwLock::new(()),
-            output_lock: Arc::new(TokioMutex::new(())),
+            output_locks: OutputLocks::default(),
             finalization_lock: TokioMutex::new(()),
             finalization_notify: Notify::new(),
             sweep_needed: AtomicBool::new(false),
@@ -65,6 +67,8 @@ impl FileSubscriberStore {
             output_failures: Mutex::new(std::collections::HashMap::new()),
             #[cfg(test)]
             rename_pause: Mutex::new(None),
+            #[cfg(test)]
+            finalize_waiting: TokioMutex::new(None),
             tsid_provider,
             clock,
         });
@@ -246,7 +250,7 @@ impl FileSubscriberStore {
     }
 
     pub async fn create_output(&self, file: &SubscribedFile) -> Result<Option<OutputWriter>> {
-        let guard = self.output_lock.clone().lock_owned().await;
+        let guard = self.output_locks.get(&file.output_path()).lock_owned().await;
         if !self.repo.find_file_by_id(&file.id).await?.is_some_and(|file| file.status == SubscribedFileStatus::Decoding) {
             return Ok(None);
         }
@@ -301,8 +305,22 @@ impl FileSubscriberStore {
     }
 
     pub async fn finalize(&self, id: &str) -> Result<()> {
+        let Some(file) = self.repo.find_file_by_id(id).await? else {
+            return Ok(());
+        };
+        #[cfg(test)]
+        {
+            let mut waiting = self.finalize_waiting.lock().await;
+            if let Some(entered) = waiting.take() {
+                let _ = entered.send(());
+            }
+        }
+        let output_lock = self.output_locks.get(&file.output_path());
+        let _output_guard = output_lock.lock().await;
+        // Take the store-wide lock only after this destination's lock, so a
+        // destination that is still being written cannot hold up the finalization
+        // worker for another destination.
         let _guard = self.finalization_lock.lock().await;
-        let _output_guard = self.output_lock.lock().await;
         let Some(file) = self.repo.find_file_by_id(id).await? else {
             return Ok(());
         };
@@ -392,7 +410,7 @@ impl FileSubscriberStore {
             return Err(Error::new(ErrorKind::Reject).with_message("output finalization state changed"));
         }
         // finalize の writer lock 内で、Failed の永続化後にだけ消す。
-        if let Err(error) = self.delete_temporary_output(file).await {
+        if let Err(error) = self.delete_abandoned_temporary_output(file).await {
             self.request_sweep();
             return Err(error);
         }
@@ -400,20 +418,51 @@ impl FileSubscriberStore {
     }
 
     pub async fn discard_output(&self, id: &str) -> Result<()> {
-        let _guard = self.output_lock.lock().await;
+        let Some(file) = self.repo.find_file_by_id(id).await? else {
+            return Ok(());
+        };
+        let output_lock = self.output_locks.get(&file.output_path());
+        let _guard = output_lock.lock().await;
         let Some(file) = self.repo.find_file_by_id(id).await? else {
             return Ok(());
         };
         if matches!(file.status, SubscribedFileStatus::Finalizing | SubscribedFileStatus::Completed) {
             return Ok(());
         }
-        if let Err(error) = self.delete_temporary_output(&file).await {
+        // Only a terminal row treats a missing path as already deleted. An active
+        // row keeps the destination-directory check so a vanished disk is reported.
+        let result = if matches!(file.status, SubscribedFileStatus::Canceled | SubscribedFileStatus::Failed) {
+            self.delete_abandoned_temporary_output(&file).await
+        } else {
+            self.delete_temporary_output(&file).await
+        };
+        if let Err(error) = result {
             self.request_sweep();
             return Err(error);
         }
         Ok(())
     }
 
+    /// Deletes the temporary output of a Canceled or Failed row. A destination directory that no longer exists
+    /// took the temporary output with it, or has it on a disk that may never return, so nothing waits for it.
+    async fn delete_abandoned_temporary_output(&self, file: &SubscribedFile) -> Result<()> {
+        #[cfg(test)]
+        self.inject_failure(OutputStep::DeleteTemporary)?;
+        match tokio::fs::remove_file(file.temporary_output_path()).await {
+            Ok(()) => Ok(()),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory | std::io::ErrorKind::InvalidFilename
+                ) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Clears the way for a new temporary output, so a destination directory that is gone is an error here.
     async fn delete_temporary_output(&self, file: &SubscribedFile) -> Result<()> {
         #[cfg(test)]
         self.inject_failure(OutputStep::DeleteTemporary)?;
@@ -478,8 +527,9 @@ impl FileSubscriberStore {
         let mut failure = None;
         for file in files {
             if matches!(file.status, SubscribedFileStatus::Canceled | SubscribedFileStatus::Failed) {
-                let _guard = self.output_lock.lock().await;
-                if let Err(error) = self.delete_temporary_output(file).await {
+                let output_lock = self.output_locks.get(&file.output_path());
+                let _guard = output_lock.lock().await;
+                if let Err(error) = self.delete_abandoned_temporary_output(file).await {
                     failure = Some(error);
                 }
             }
@@ -1137,7 +1187,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn startup_sweep_failure_is_retried_after_parent_returns() -> TestResult {
+    async fn vanished_directory_stops_the_sweep_and_a_later_startup_sweep_deletes_the_temporary() -> TestResult {
         let dir = tempfile::tempdir()?;
         let (ids, clock) = dependencies();
         let state = dir.path().join("state");
@@ -1150,14 +1200,13 @@ mod tests {
         let file = store.find_file(&id).await?.unwrap();
         store.cancel(&id).await?;
         tokio::fs::rename(&parent, &unavailable).await?;
+        store.sweep().await?;
+        assert!(!store.needs_sweep());
         drop(store);
-        let store = FileSubscriberStore::open(&state, ids, clock.clone()).await?;
-        assert!(store.needs_sweep());
-        let sleeper = Arc::new(RecordingSleeper::new());
-        let task = TaskDecoder::new(store.clone(), clock, sleeper.clone()).await?;
-        sleeper.wait_count(1).await?;
         tokio::fs::rename(&unavailable, &parent).await?;
-        sleeper.permits.add_permits(1);
+        let store = FileSubscriberStore::open(&state, ids, clock.clone()).await?;
+        let sleeper = Arc::new(RecordingSleeper::new());
+        let task = TaskDecoder::new(store.clone(), clock, sleeper).await?;
         tokio::time::timeout(TEST_WATCHDOG, async {
             while store.needs_sweep() || file.temporary_output_path().exists() {
                 tokio::task::yield_now().await;
@@ -1168,6 +1217,85 @@ mod tests {
         assert!(store.find_file(&id).await?.unwrap().status == SubscribedFileStatus::Canceled);
         assert!(!file.temporary_output_path().exists());
         assert!(!file.output_path().exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_of_canceled_and_failed_rows_succeeds_after_vanished_directory() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let parent = dir.path().join("parent");
+        tokio::fs::create_dir(&parent).await?;
+        let canceled = rank_zero_subscription(&store, &parent.join("canceled"), b"content").await?;
+        write_temporary(&store, &canceled, b"content").await?;
+        store.cancel(&canceled).await?;
+        let failed = rank_zero_subscription(&store, &parent.join("failed"), b"content").await?;
+        store.fail(&failed, "failure").await?;
+        tokio::fs::remove_dir_all(&parent).await?;
+        store.remove(&canceled).await?;
+        store.remove(&failed).await?;
+        assert!(store.find_file(&canceled).await?.is_none());
+        assert!(store.find_file(&failed).await?.is_none());
+        assert!(!store.needs_sweep());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discard_output_of_a_decoding_row_reports_a_vanished_directory() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let parent = dir.path().join("parent");
+        tokio::fs::create_dir(&parent).await?;
+        let id = rank_zero_subscription(&store, &parent.join("file"), b"content").await?;
+        let file = store.find_file(&id).await?.unwrap();
+        let writer = store.create_output(&file).await?.unwrap();
+        drop(writer);
+        tokio::fs::remove_dir_all(&parent).await?;
+
+        assert!(store.discard_output(&id).await.is_err());
+        store.fail(&id, "vanished directory").await?;
+        store.discard_output(&id).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_writer_of_one_destination_does_not_hold_the_finalization_lock() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (ids, clock) = dependencies();
+        let store = FileSubscriberStore::open(&dir.path().join("state"), ids, clock).await?;
+        let writing = rank_zero_subscription(&store, &dir.path().join("writing"), b"writing").await?;
+        let writing_file = store.find_file(&writing).await?.unwrap();
+        let writer = store.create_output(&writing_file).await?.unwrap();
+        assert!(store.begin_finalizing(&writing).await?);
+
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        *store.finalize_waiting.lock().await = Some(entered_tx);
+        let blocked = tokio::spawn({
+            let store = store.clone();
+            let writing = writing.clone();
+            async move { store.finalize(&writing).await }
+        });
+        entered_rx.await?;
+        assert!(
+            store.finalization_lock.try_lock().is_ok(),
+            "a destination that is still being written must not hold the finalization lock"
+        );
+
+        let finishing = rank_zero_subscription(&store, &dir.path().join("finishing"), b"finishing").await?;
+        tokio::time::timeout(TEST_WATCHDOG, async {
+            write_temporary(&store, &finishing, b"finishing").await?;
+            assert!(store.begin_finalizing(&finishing).await?);
+            store.finalize(&finishing).await?;
+            TestResult::Ok(())
+        })
+        .await??;
+        assert!(store.find_file(&finishing).await?.unwrap().status == SubscribedFileStatus::Completed);
+
+        drop(writer);
+        blocked.await??;
+        assert!(store.find_file(&writing).await?.unwrap().status == SubscribedFileStatus::Completed);
         Ok(())
     }
 

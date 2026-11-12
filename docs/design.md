@@ -24,13 +24,15 @@ This document assumes the vocabulary of [terms.md](./terms.md#2-terminology). Te
 | [node-finder.md](./design/node-finder.md#1-about-this-document) | Node lookup, information propagation, distance calculation, lookup state |
 | [file-transfer.md](./design/file-transfer.md#1-about-this-document) | Publishing and subscribing to files, Merkle structure, output reservation, block exchange protocol, block verification |
 | [storage.md](./design/storage.md#1-about-this-document) | Persistence of metadata, blocks, and output files, finalization and reclamation, recovery after failure, migration |
-| [trust-security.md](./design/trust-security.md#1-about-this-document) | Authentication, encryption, content verification, identity, Web of Trust |
-| [profile-memo.md](./design/profile-memo.md#1-about-this-document) | Responsibility boundary between Profile and memo; the public data they reference |
+| [trust-security.md](./design/trust-security.md#1-about-this-document) | Session authentication, node identity, and transport security |
+| [profile.md](./design/profile.md#1-about-this-document) | Profile identity, the signed body, FileRefs, trust and block lists, messages, update rules |
+| [profile-exchanger.md](./design/profile-exchanger.md#1-about-this-document) | Lookup, exchange, serving, and refresh of Profiles |
+| [web-of-trust.md](./design/web-of-trust.md#1-about-this-document) | Evaluation of the trust and block lists and the states derived from them |
 | [rust.md](./coding/rust.md) | Rust coding conventions. The canonical is in core-rs |
 | [README.md](../README.md) | Project overview, setup, development procedures |
 | [openapi.yaml](../daemon/openapi.yaml) | REST API paths, schemas, and status codes |
 | [entrypoints/interface](../daemon/entrypoints/interface) | Rust interface generated from OpenAPI |
-| `.rpf` files | Definitions of types and field numbers encoded with RocketPack |
+| [.rpf files](../daemon/rpfs/) | Definitions of types and field numbers encoded with RocketPack |
 | [Rust sources](../daemon) | Byte-level formats, constants, dependency versions |
 
 This document does not hold an exhaustive API list, the RocketPack field numbers, setup procedures, or known bugs.
@@ -129,8 +131,10 @@ This dependency direction lets the lookup rules and the file semantics change in
 | NodeFinder | [node-finder.md](./design/node-finder.md#1-about-this-document) | Handles the AssetKey-to-NodeProfile mapping; does not interpret file content |
 | Publishing and subscribing to files | [file-transfer.md](./design/file-transfer.md#1-about-this-document) | Publishes, subscribes to, and verifies blocks; no lookup algorithm |
 | Persistence | [storage.md](./design/storage.md#1-about-this-document) | Persists metadata, blocks, and output files and recovers them; no higher-level protocol |
-| trust and security | [trust-security.md](./design/trust-security.md#1-about-this-document) | Defines the guarantees and limits of each layer; does not choose individual cryptographic protocols |
-| Profile and memo | [profile-memo.md](./design/profile-memo.md#1-about-this-document) | Handles referencing and distributing higher-level data; does not interpret post bodies or block transfer |
+| trust and security | [trust-security.md](./design/trust-security.md#1-about-this-document) | Defines the guarantees and limits of the Session and the node identity; does not choose individual cryptographic protocols |
+| Profile | [profile.md](./design/profile.md#1-about-this-document) | Owns the signed statement of one identity and the data it lists; does not carry blocks or evaluate trust |
+| Profile exchange | [profile-exchanger.md](./design/profile-exchanger.md#1-about-this-document) | Turns a Profile ID into a signed body; does not interpret the lists |
+| content trust | [web-of-trust.md](./design/web-of-trust.md#1-about-this-document) | Evaluates the lists; does not authenticate the transport or exchange Profiles |
 
 ## 5. Design decisions
 
@@ -157,13 +161,17 @@ Each detailed design document is the source of truth for the implementation stat
 Overall, the daemon startup path owns down to FileExchanger and connects to other daemons starting from the configured bootstrap nodes, and the REST API starts file publishing and subscription.
 From file publishing to decoding, including P2P transfer between daemons over loopback TCP, is confirmed by engine-internal tests, and the browser flow confirms the same path through the REST API.
 The browser client in `ui-web/` covers the setup, login, publication, and subscription screens, and a Playwright flow tests it against two daemons.
+The Profile, the ProfileExchanger, and the Web of Trust are designed but not implemented; their status is in their own documents.
 
 ### 6.2 Roadmap
 
 The following order is tentative; only the dependencies in the table must be preserved.
+The implementation order follows the data: a Profile must exist before it can be exchanged, and exchanged Profiles must exist before their lists can be evaluated.
 
 | # | Item | Prerequisite dependency |
 | --- | --- | --- |
-| 1 | Define Web of Trust, Profile, and memo in order | [trust-security.md §4](./design/trust-security.md#4-design-decisions) |
+| 1 | Implement the Profile, its FileRefs and lists, and its signature | - |
+| 2 | Implement ProfileExchanger lookup, exchange, and refresh | 1 |
+| 3 | Implement the Web of Trust evaluation and the trust display | 1, 2 |
 
 For confirmed bugs and fix directions, see [issues.md](./issues.md).

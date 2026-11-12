@@ -508,5 +508,6 @@ The publication and subscription resources, the staged upload, the download dire
 A transfer from an upload on one daemon to a download on another, the setup, login, cookie, bearer, and origin checks, and the resume of an upload and its session across a restart are confirmed through the router tests.
 A publication can also read a configured library root, and the daemon lists the roots and their entries.
 The browser client in `ui-web/` is built against this API; a Playwright flow drives it against two daemons.
+Profiles and the trust of their authors are not part of this API yet ([profile.md §9](./profile.md#9-current-status-and-remaining-work)).
 
 For confirmed bugs, see [issues.md](../issues.md).

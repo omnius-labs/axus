@@ -770,7 +770,7 @@ Holding the exclusion in memory avoids a release mechanism and a storage format.
 
 **Rejected**
 Only closing the Session adds no state but accepts the peer's reconnection as-is, letting a bad-block node keep consuming accept slots.
-Persisting excluded node IDs to the DB to keep the exclusion across restarts requires a release mechanism and storage format and overlaps the role of the Web of Trust's trust evaluation ([trust-security.md](./trust-security.md#unit-and-propagation-of-web-of-trust)).
+Persisting excluded node IDs to the DB to keep the exclusion across restarts requires a release mechanism and storage format and overlaps the role of the content trust ([web-of-trust.md](./web-of-trust.md#4-evaluation)).
 
 #### Record transfer volume per node ID and narrow send targets with choke
 

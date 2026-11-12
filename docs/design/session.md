@@ -3,7 +3,7 @@
 ## 1. About this document
 
 This document covers the procedure for assembling a TCP connection into a Session, use separation, and the shutdown contract.
-Term definitions are the source of [terms.md](../terms.md).
+This document assumes the vocabulary of [terms.md](../terms.md). Term definitions are not given here.
 
 ### 1.1 Division of responsibilities among documents
 
@@ -20,11 +20,12 @@ Term definitions are the source of [terms.md](../terms.md).
 
 The body describes the completed design.
 The implementation status and remaining work are consolidated in §6.
+To find out what runs now, read §6 first.
 
 ## 2. Responsibilities and boundaries
 
 The Session layer authenticates a connection, assigns it to one use, and hands it to the higher-level component.
-The messages of NodeFinder and FileExchanger are interpreted by each protocol layer.
+The messages of NodeFinder, FileExchanger, and ProfileExchanger are interpreted by each protocol layer.
 
 ## 3. Connection and establishment
 
@@ -56,7 +57,7 @@ sequenceDiagram
 ```
 
 Because version and use are exchanged after encryption, a third party can neither read nor rewrite the negotiation.
-Placing the use determination after authentication keeps unauthenticated connections out of the NodeFinder and FileExchanger queues.
+Placing the use determination after authentication keeps unauthenticated connections out of the NodeFinder, FileExchanger, and ProfileExchanger queues.
 The version negotiation must select only the procedures that both sides support in common.
 The Session handshake spans from after the TCP connection to the completion of the secure channel and use selection, with the deadline, concurrency, and frame limits restricted per §5.1.
 The NodeFinder Hello/Profile exchange happens afterwards in the higher-level protocol.
@@ -64,7 +65,7 @@ This exchange and post-establishment reception apply a deadline of 3 times the c
 
 ## 4. Uses and shutdown
 
-One Session is assigned to either NodeFinder or FileExchanger (§5.1).
+One Session is assigned to one of NodeFinder, FileExchanger, or ProfileExchanger (§5.1).
 Because multiplexing across uses is not introduced into the session layer, each higher-level protocol processes only its own messages.
 
 [Shutdown](../../daemon/modules/engine/src/base/runtime/shutdown.rs) is the common contract for stopping owned lower-level components in order.
@@ -78,7 +79,7 @@ Because futures are not aborted from outside with `abort`, a worker does not out
 #### Assign one Session to one use
 
 **Decision**
-NodeFinder and FileExchanger use separate Sessions and each have an accept queue and connection limits for their use.
+NodeFinder, FileExchanger, and ProfileExchanger use separate Sessions and each have an accept queue and connection limits for their use.
 
 **Rationale**
 To isolate message protocols and connection resources per use so that the load of one does not monopolize the other's processing.
@@ -104,7 +105,7 @@ A design where a few workers process handshakes serially is not adopted because 
 
 **Decision**
 Frames during the handshake are at most 16 KiB in both directions.
-After use selection, the limit switches to 256 KiB for NodeFinder and, for FileExchanger, the maximum block length of 1 MiB plus the hash and tag carried in the block message.
+After use selection, the limit switches to 256 KiB for NodeFinder, 1 MiB for ProfileExchanger, and, for FileExchanger, the maximum block length of 1 MiB plus the hash and tag carried in the block message.
 A Session whose received frame exceeds the limit is closed.
 The post-establishment receive deadline of FileExchanger is the source of [file-transfer.md](./file-transfer.md#53-state-messages-and-session-lifetime).
 
@@ -117,14 +118,14 @@ The largest message FileExchanger sends carries one block, so the limit is deriv
 
 **Decision**
 FramedStream holds a receive deadline, and the owner of each use sets it right after the Session is established.
-NodeFinder sets 3 times the communication cycle and FileExchanger sets 30 seconds, and a `recv_message` that exceeds it returns an error.
+NodeFinder sets 3 times the communication cycle, and FileExchanger and ProfileExchanger set 30 seconds; a `recv_message` that exceeds it returns an error.
 The deadline is not extended by the local node's sends.
 A Session that finished the handshake but is not taken by `accept` within 10 seconds, the same as the handshake deadline, is discarded.
 
 **Rationale**
 A receive without a deadline leaves a task waiting forever for a silent peer, and a caller that forgets to apply one reproduces the problem individually.
 Holding the deadline in the stream next to the per-use frame limit makes a receive without a deadline impossible on an established Session.
-The value stays with the owner of the use because it derives from that use's send cycle (see [NodeFinder receive deadline](./node-finder.md#nodefinder-receive-deadline) and [file-transfer.md](./file-transfer.md#53-state-messages-and-session-lifetime)).
+The value stays with the owner of the use because it derives from that use's traffic (see [NodeFinder receive deadline](./node-finder.md#nodefinder-receive-deadline) and [file-transfer.md](./file-transfer.md#53-state-messages-and-session-lifetime), and [profile-exchanger.md](./profile-exchanger.md#42-frame-and-messages)).
 
 **Rejected**
 Holding a per-use deadline in `SessionOption` makes the session layer know each use's send cycle and duplicates NodeFinder's cycle setting.
@@ -238,7 +239,6 @@ SessionConnector returns a Session only on Accept, and the dialing sides of Node
 The wire decode of NodeMessage and NodeProfile checks the element count limits before allocation.
 Tests confirm the decode-time rejection of the profile and AssetKey counts and a Session closed by a frame over the limit.
 NodeFinder's frame limit is 256 KiB, confirmed by tests sending and receiving at exactly the limit and rejecting over-limit frames.
-FileExchanger starts with the daemon, but it advertises and dials nothing until a file is published or subscribed, and the REST API that starts them is not defined yet.
-Until multiple-version selection is decided, Profile exchange on an untrusted network is not enabled.
+FileExchanger starts with the daemon, advertises the root hashes of committed files, and dials the nodes that provide a subscribed root hash; the REST API starts publishing and subscribing.
 
 For confirmed bugs, see [issues.md](../issues.md).

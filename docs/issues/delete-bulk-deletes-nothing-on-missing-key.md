@@ -2,11 +2,11 @@
 
 **Severity: Low** (not visible because the current callers pass only existing keys)
 
-Investigated on 2026-10-06 / Target commit `8432b83`
+Investigated 2026-11-12 / Target commit `6068650`
 
 One item of [issues.md](../issues.md).
 
-## Symptoms
+## Symptom
 
 When `KeyValueRocksdbStorage::delete_bulk` contains at least one missing key, it returns success without writing anything, including the deletions queued before that key.
 A key that was not deleted looks deleted to the caller.
@@ -26,10 +26,10 @@ Skipping a missing key needs `continue`, but the code is written as `return Ok((
 
 ## Impact
 
-The only caller, `delete_prefix` ([store.rs:189](../../daemon/modules/engine/src/core/negotiator/file/file_publisher/store.rs#L189)), passes only the keys enumerated inside the same mutex, so it is not affected at this point.
+The only production caller, `delete_prefix` ([store.rs:445](../../daemon/modules/engine/src/core/negotiator/file/file_publisher/store.rs#L445)), passes only the keys enumerated inside the same mutex, so it is not affected at this point.
 Adding a call that mixes existing and missing keys leaves undeleted keys.
 
-## Proposed fix
+## Remedy
 
 Skip missing keys with `continue` and delete the rest in one batch.
 Test that a call mixing existing and missing keys deletes all the existing keys.

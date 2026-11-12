@@ -2,11 +2,11 @@
 
 **Severity: Medium** (only after the destination directory is deleted)
 
-Investigated on 2026-10-07 / Target commit `9bbbcbd`
+Investigated 2026-11-12 / Target commit `6068650`
 
 One item of [issues.md](../issues.md).
 
-## Symptoms
+## Symptom
 
 When the destination directory of a Failed or Canceled row is gone (such as when an external disk is removed), the following two continue.
 
@@ -15,7 +15,7 @@ When the destination directory of a Failed or Canceled row is gone (such as when
 
 ## Location
 
-`delete_temporary_output` at [store.rs:371](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L371) treats a temporary output's `NotFound` as "absent" and then checks the destination directory's existence with `metadata`. When the directory is gone, `metadata` errors, and `delete_temporary_output` returns the error.
+`delete_temporary_output` at [store.rs:417](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L417) treats a temporary output's `NotFound` as "absent" and then checks the destination directory's existence with `metadata`. When the directory is gone, `metadata` errors, and `delete_temporary_output` returns the error.
 
 ```rust
 if !tokio::fs::metadata(&file.output_directory).await?.is_dir() {
@@ -23,8 +23,8 @@ if !tokio::fs::metadata(&file.output_directory).await?.is_dir() {
 }
 ```
 
-`sweep_outputs_locked` at [store.rs:431](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L431) calls `delete_temporary_output` for the Canceled and Failed rows, and when it returns an error, schedules a retry with `request_sweep`. The next sweep hits the same error.
-`remove` at [store.rs:143](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L143) calls `discard_output` (at [the same file:356](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L356)), so the same error prevents row deletion.
+`sweep_outputs_locked` at [store.rs:477](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L477) calls `delete_temporary_output` for the Canceled and Failed rows, and when it returns an error, schedules a retry with `request_sweep`. The next sweep hits the same error.
+`remove` at [store.rs:185](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L185) calls `discard_output` (at [the same file:402](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/store.rs#L402)), so the same error prevents row deletion.
 
 ## Cause
 
@@ -37,7 +37,7 @@ While the destination directory is kept deleted, the daemon repeatedly logs the 
 Restoring the disk recovers.
 Confirmed by reading the code. Not reproduced by execution.
 
-## Proposed fix
+## Remedy
 
 For Failed and Canceled rows, treat a temporary output's absence when the destination directory is vanished as "already deleted" (if the whole directory is gone, the temporary output is gone too).
 Limit the destination directory existence check to the operations that need to protect an existing output (writing and finalizing).

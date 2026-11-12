@@ -27,10 +27,9 @@ Confirmed bugs are tracked in this document family and are not filed as GitHub I
 
 | Item | Severity | Investigated |
 | --- | --- | --- |
-| [delete_bulk succeeds deleting nothing when it contains a missing key](./issues/delete-bulk-deletes-nothing-on-missing-key.md) | Low | 2026-11-12 |
 | [TaskCommunicator::start does not exit its loop even when the accept channel is closed](./issues/task-communicator-spins-on-closed-session-channel.md) | Low | 2026-11-12 |
 
-The two Low items are independent of each other.
+No relation to another item is known.
 
 ## 3. Not included here
 

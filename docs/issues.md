@@ -27,9 +27,8 @@ Confirmed bugs are tracked in this document family and are not filed as GitHub I
 
 | Item | Severity | Investigated |
 | --- | --- | --- |
-| [TaskCommunicator::start does not exit its loop even when the accept channel is closed](./issues/task-communicator-spins-on-closed-session-channel.md) | Low | 2026-11-12 |
 
-No relation to another item is known.
+There are no known issues.
 
 ## 3. Not included here
 

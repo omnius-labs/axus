@@ -16,3 +16,4 @@ Add a row when starting work, advance its state, and delete the row and child do
 
 | Plan | Purpose | State | Prerequisite |
 | --- | --- | --- | --- |
+| [profile-foundation](./plans/profile-foundation.md) | A Profile can be created, signed, stored, updated, and activated, and a fresh daemon starts with an active Anonymous Profile | not started | - |

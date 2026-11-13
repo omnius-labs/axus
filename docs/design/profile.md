@@ -12,6 +12,7 @@ This document assumes the vocabulary of [terms.md](../terms.md). Term definition
 | --- | --- |
 | [design.md](../design.md#11-division-of-responsibilities-among-documents) | Overall structure, boundaries with other concerns, cross-cutting dependencies |
 | This document | Profile identity, the signed body, the lists it holds, and the update rules |
+| [storage.md](./storage.md#48-profile-storage) | The local layout of Profile keys, signed bodies, and the active flag |
 | [profile-exchanger.md](./profile-exchanger.md#1-about-this-document) | Lookup, exchange, and refresh of Profiles |
 | [web-of-trust.md](./web-of-trust.md#1-about-this-document) | Evaluation of the trust and block lists |
 | [file-transfer.md](./file-transfer.md#2-responsibilities-and-boundaries) | Publishing and subscribing to the files a FileRef names |
@@ -41,7 +42,8 @@ It names files through FileRefs, and the file protocol owns how a FileRef's root
 ### 3.1 Profile ID
 
 A Profile ID is the readable handle defined in [terms.md](../terms.md), with a display part and a key-derived suffix.
-The ID is immutable and is part of the signed body: renaming a Profile creates a different ID and therefore a different identity.
+The form and name rule are defined in [terms.md](../terms.md#2-terminology), and the ID is at most 80 bytes ([§7](#7-limits)).
+The ID is immutable and is part of the signed body: renaming a Profile creates a different ID and therefore a different identity, and changing the form after profiles exist would break the trust lists and the ProfileExchanger AssetKey.
 
 The suffix exists because a Profile is addressed by a string that anyone can choose.
 Without a key-derived part, two Profiles could claim the same display string and the receiver could not tell them apart before fetching both.
@@ -53,6 +55,7 @@ The ID is also the trust unit: the trust and block lists name Profile IDs, and a
 
 Each Profile has its own Ed25519 key pair and signs its body with it.
 The key is generated when the Profile is created and stored in the state directory beside the node key.
+The key and body layout is in [storage.md §4.8](./storage.md#48-profile-storage).
 
 The profile key is not the node key.
 The node key proves reachability ([trust-security.md](./trust-security.md#node-id-is-derived-from-the-public-key)) and is bound to the node ID, while the profile key proves authorship and is bound to the Profile ID.
@@ -62,8 +65,8 @@ Keeping them apart lets one node hold several identities and keeps a Profile's i
 ### 3.3 Several Profiles on one node
 
 A node stores any number of Profiles it owns and serves all of them.
-The owner selects one active Profile.
-The active Profile is the author of new publications and the root of the trust evaluation ([web-of-trust.md](./web-of-trust.md#41-the-root)).
+The owner selects one active Profile ([terms.md](../terms.md#2-terminology)).
+It authors new publications and is the root of the trust evaluation ([web-of-trust.md](./web-of-trust.md#41-the-root)).
 
 The other local Profiles are not trusted by the active Profile unless the active Profile's trust list says so.
 Selecting a different Profile therefore changes the trust result, and the client must show which Profile is active.
@@ -95,11 +98,12 @@ The trust list names the Profile IDs this Profile trusts, and the block list nam
 The two lists are data: this document owns their format and the update rules, and [web-of-trust.md](./web-of-trust.md#4-evaluation) owns what a receiver computes from them.
 
 A Profile cannot trust or block itself; the encoder rejects it.
-An entry appears in at most one list; when both lists name the same ID, the block list wins at evaluation time ([web-of-trust.md](./web-of-trust.md#44-block-precedence)).
+An entry appears in at most one list, and the encoder rejects a body that places the same Profile ID in both lists.
+Block precedence applies across Profiles at evaluation time ([web-of-trust.md](./web-of-trust.md#44-block-precedence)).
 
 ### 4.4 Messages
 
-A message carries an identifier, a posted time, a title, and a body.
+A message carries a posted time and a body.
 The body is inline up to 64 KiB.
 A larger body or an attachment is published as a file, and the message holds a FileRef to it.
 
@@ -127,7 +131,7 @@ An older snapshot is ignored, so a redelivered old Profile cannot roll the lists
 An update time more than 5 minutes ahead of the receive time is rejected, with the same tolerance the NodeProfile uses ([trust-security.md](./trust-security.md#nodeprofile-binds-reachable-addresses-with-the-nodes-own-signature)).
 Without the limit, a forged far-future time would win every comparison for years.
 
-An honest owner whose clock moves back must wait or set a later time before the network accepts the next snapshot.
+An honest owner whose clock moves back must wait until the stored update time is no longer ahead before the network accepts the next snapshot.
 This is the same cost the NodeProfile accepts, and keeping both to one rule avoids a second clock premise.
 
 ### 5.3 Equivocation
@@ -135,10 +139,17 @@ This is the same cost the NodeProfile accepts, and keeping both to one rule avoi
 When two different bodies carry the same update time and the same version, the receiver keeps the first and logs the second.
 The receiver cannot tell which one the owner meant, and choosing the later arrival would let a relaying node decide.
 
+### 5.4 Local updates
+
+An owner update takes a complete draft of the FileRefs, trust and block lists, and messages, increments the version, sets the update time to the current time, signs the whole body, and stores it.
+If the current time is earlier than the stored update time, the update is rejected and the owner must wait.
+Updates of one Profile are serialized so two updates cannot sign from the same snapshot.
+
 ## 6. Publishing through a Profile
 
-The first Profile is created during the daemon setup.
-The owner gives it a name, the daemon generates the key, and the Profile is signed and stored.
+At startup, a stored key without a body is recovered as an empty Profile ([storage.md §4.8](./storage.md#48-profile-storage)).
+If no Profile exists after that, the daemon creates `Anonymous`, generates its key, signs an empty snapshot, and makes it active. The daemon does this so a node always has an author for new publications and a trust root.
+The owner can create other Profiles later and select the active one.
 
 A publication selects the active Profile.
 At the publish commit the daemon appends a FileRef to the active Profile's list and signs a new snapshot; removing a committed file removes the FileRef and signs again.
@@ -153,7 +164,7 @@ When several Profiles list the same file, the client shows every claimant and th
 
 | Item | Limit |
 | --- | --- |
-| Profile ID | 64 bytes |
+| Profile ID | 80 bytes |
 | Trust list entries | 256 |
 | Block list entries | 256 |
 | FileRefs | 1024 |
@@ -291,6 +302,17 @@ An avatar, a description, or a display color has no consumer yet and would grow 
 
 **Decision condition**
 Decide before the client shows a field that the body does not carry.
+
+#### Deleting a local Profile
+
+**Current state**
+A local Profile can be created and activated, but not deleted.
+
+**Why not decided yet**
+Deleting a local Profile removes its key and body, but the Profile ID may still be referenced by trust lists and by copies that other nodes serve. Whether to keep a tombstone or to forbid deletion while references remain is not decided.
+
+**Decision condition**
+Decide when the owner needs to remove a local Profile.
 
 ## 9. Current status and remaining work
 

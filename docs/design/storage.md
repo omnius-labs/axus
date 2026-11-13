@@ -12,6 +12,7 @@ This document assumes the vocabulary of [terms.md](../terms.md#2-terminology) an
 | --- | --- |
 | [design.md](../design.md#11-division-of-responsibilities-among-documents) | Overall structure, boundaries with other concerns, cross-cutting dependencies |
 | This document | Persistence of metadata, blocks, and output files, finalization and reclamation procedures, startup recovery, the state directory, migration |
+| [profile.md](./profile.md#1-about-this-document) | Profile identity, the signed body, the lists it holds, and the update rules |
 | [file-transfer.md](./file-transfer.md#2-responsibilities-and-boundaries) | File state transitions, output reservation, block verification, Store and Task responsibilities |
 | [knowledge.md](../knowledge.md) | Evidence on the external specifications of RocksDB, SQLite, and filesystem syncing and placement |
 | [base/storage](../../daemon/modules/engine/src/base/storage) | Block storage implementation |
@@ -28,13 +29,13 @@ To check what works currently, read §6 first.
 The persistence layer handles metadata, which needs state transitions and conditional queries, and block bodies, which are read and written by hash key, with separate storage models.
 Subscription outputs are placed on the filesystem under `storage.download_dir`, and the temporary output and destination are derived from the subscription row to tie the DB state to the placement.
 Uploaded content is staged under `state_dir/uploads` until the encoder reads it, so the staged file has the same lifetime as the publication row.
-It does not own the file protocol, lookup rules, or the REST API contract.
+It does not own the file protocol, lookup rules, the meaning of a Profile body or its update rules, or the REST API contract; §4.8 owns the local storage layout of Profile keys and bodies.
 
 ## 3. Separation of metadata and blocks
 
 | Kind | Body | Persists |
 | --- | --- | --- |
-| metadata | SQLite and `omnius-core-migration` | Known nodes, file state and destination, block index |
+| metadata | SQLite and `omnius-core-migration` | Known nodes, file state and destination, block index, Profile bodies and the active Profile |
 | block | `KeyValueRocksdbStorage` | Byte strings of file bodies and MerkleLayers |
 | Subscription output | Filesystem under `storage.download_dir` | Temporary output and finalized output files |
 
@@ -48,6 +49,9 @@ Persistent state is split into a directory per component.
 ```text
 <state_dir>/
 ├── identity/
+├── profile/
+│   ├── sqlite.db
+│   └── keys/
 ├── repo/
 ├── uploads/
 ├── file_publisher/
@@ -62,7 +66,7 @@ Separating the publisher and subscriber storage areas prevents rebuilding or del
 `uploads/` holds the staged content of a publication that is still receiving bytes.
 A staged file is named by the publication ID, is deleted when the publication commits, is canceled, or fails, and is deleted at startup when no `Receiving` row names it.
 Because a temporary output is placed at the destination by rename, it is created in the destination's parent directory, which is under `storage.download_dir`, and not in `state_dir`.
-`identity/` holds the node's signing key; deleting it makes the next startup create a different key and node ID, so unlike other directories it cannot be undone by recreation.
+`identity/` holds the node's signing key; deleting it makes the next startup create a different node key and node ID. `profile/keys/` holds the Profile signing keys; deleting a key while its body remains in `profile/sqlite.db` fails startup, and deleting the whole `profile/` directory creates a new `Anonymous` Profile at the next startup. Recreating these directories does not restore the deleted keys or the identity they identified.
 Adding or migrating a directory name requires declaring a unit of migration and rollback.
 
 ## 4. Logical keys and migration
@@ -221,6 +225,23 @@ A migration whose name was already applied is not run again.
 A migration that may be applied to a distributed state is not rewritten; progress is made with a new-named migration.
 Even when directly fixing a pre-first-release migration, confirm that no applied state exists and record that confirmation in the change record.
 For the addition of Finalizing and the destination unique constraint, the initial inactive schema was changed, and no compatibility handling for migrating old state is provided.
+
+### 4.8 Profile storage
+
+A Profile's signed body is stored in `state_dir/profile/sqlite.db`, and its key is stored in `state_dir/profile/keys/<Profile ID>/signer`.
+The table holds the encoded signed body, its version, its update time, its creation time, and the active flag.
+A partial unique index admits at most one active row.
+
+The key file is the identity root.
+It is written to a temporary file in the same key directory, given owner-only permissions (`0600` on Unix), and renamed to `signer`.
+The key stays outside SQLite because it is a secret with its own permissions and lifetime.
+The key is loaded before the body is used, and the `OmniSigner` display must equal the stored Profile ID.
+The body is verified against the key when it is loaded.
+
+If keys exist without stored bodies, the daemon signs and stores an empty snapshot with version 1 and the current time for each.
+If a stored body has no key, startup fails because the Profile cannot sign an update.
+The active Profile is the row whose active flag is set.
+If no row is active, the oldest row by creation time, then by Profile ID, is activated.
 
 ## 5. Design decisions
 

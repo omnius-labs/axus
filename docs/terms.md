@@ -62,7 +62,7 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 | message | profile | `ProfileMessage` | - | Bulletin-board entry in a Profile, with a posted time and an inline body or a FileRef | post |
 | Profile | profile | `Profile` | - | Signed public statement of one identity, identified by its Profile ID: its FileRefs, trust and block lists, and messages | - |
 | Profile ID | profile | `Profile::id` | `name@u<base64url>` | Immutable identity of a Profile; `name` is 1–32 bytes of `[A-Za-z0-9._-]` and the suffix is the `OmniSigner` display form of the DER public key (`u` followed by the base64url encoding of its SHA3-256) | - |
-| active Profile | profile | `ProfileService::active` | - | The Profile that authors new publications and is the root of the trust evaluation | - |
+| active Profile | profile | `AxusService::active_profile` | - | The Profile that authors new publications and is the root of the trust evaluation | - |
 | profile key | profile | - | - | Ed25519 key pair that signs one Profile, distinct from the node key | profile signing key |
 | trust list | profile | `Profile::trusted` | - | Profile IDs the Profile trusts | allow list |
 | block list | profile | `Profile::blocked` | - | Profile IDs the Profile blocks | deny list, distrust list |

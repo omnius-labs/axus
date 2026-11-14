@@ -1,5 +1,5 @@
 mod key;
+mod local_profiles;
 mod repo;
-mod service;
 
-pub use service::ProfileService;
+pub use local_profiles::LocalProfiles;

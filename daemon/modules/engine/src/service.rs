@@ -29,21 +29,21 @@ use crate::{
             AppendContentResult, FileExchanger, FileExchangerIntervals, FileExchangerOption, NodeFinder, NodeFinderLocationFinder, NodeFinderOption, NodeFinderRepo,
             NodeProfileFetcherImpl, Publication, PublicationRemoveResult, PublicationView, SubscribedFile,
         },
-        profile::ProfileService,
+        profile::LocalProfiles,
         session::{
             SessionAccepter, SessionConnector,
             model::{SessionOption, SessionType},
         },
     },
     generated::axus::file::MAX_BLOCK_LENGTH,
-    model::NodeProfile,
+    model::{NodeProfile, Profile, ProfileDraft, ProfileId},
     prelude::*,
 };
 
 pub struct AxusService {
     node_finder: Arc<NodeFinder>,
     file_exchanger: FileExchanger,
-    profile_service: ProfileService,
+    local_profiles: LocalProfiles,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -57,15 +57,15 @@ pub struct AxusServiceOption {
 
 impl AxusService {
     pub async fn new<S: AsRef<Path>, A: AsRef<str>, T: AsRef<Path>>(state_dir: S, listen_addr: A, _temp_dir: T, option: AxusServiceOption) -> Result<Self> {
-        let (node_finder, file_exchanger, profile_service) = Self::create_components(state_dir.as_ref(), listen_addr.as_ref(), option).await?;
+        let (node_finder, file_exchanger, local_profiles) = Self::create_components(state_dir.as_ref(), listen_addr.as_ref(), option).await?;
         Ok(AxusService {
             node_finder,
             file_exchanger,
-            profile_service,
+            local_profiles,
         })
     }
 
-    async fn create_components(state_dir: &Path, listen_addr: &str, option: AxusServiceOption) -> Result<(Arc<NodeFinder>, FileExchanger, ProfileService)> {
+    async fn create_components(state_dir: &Path, listen_addr: &str, option: AxusServiceOption) -> Result<(Arc<NodeFinder>, FileExchanger, LocalProfiles)> {
         // 明示設定の違反は、接続 worker の開始前に返す。
         for profile in &option.bootstrap_node_profiles {
             profile.to_uri()?;
@@ -93,7 +93,7 @@ impl AxusService {
         let sleeper: Arc<dyn Sleeper + Send + Sync> = Arc::new(SleeperImpl);
         let identity = NodeIdentity::load_or_create(&state_dir.join("identity")).await?;
         let signer = identity.signer();
-        let profile_service = ProfileService::open(&state_dir.join("profile"), clock.clone()).await?;
+        let local_profiles = LocalProfiles::open(&state_dir.join("profile"), clock.clone()).await?;
         let mut my_addrs = my_addrs;
         if my_addrs.len() > NodeProfile::MAX_WIRE_ADDRS {
             warn!(
@@ -175,7 +175,7 @@ impl AxusService {
             }
         };
 
-        Ok((node_finder, file_exchanger, profile_service))
+        Ok((node_finder, file_exchanger, local_profiles))
     }
 
     pub async fn create_publication(&self, staging_dir: &std::path::Path, file_name: &str, size: i64) -> Result<Publication> {
@@ -259,15 +259,35 @@ impl AxusService {
         // FileExchanger uses the Sessions NodeFinder keeps looking nodes up for, so it stops first.
         self.file_exchanger.shutdown().await;
         self.node_finder.shutdown().await;
-        self.profile_service.shutdown().await;
+        self.local_profiles.shutdown().await;
     }
 
     pub fn my_node_profile(&self) -> NodeProfile {
         self.node_finder.my_node_profile()
     }
 
-    pub fn profile_service(&self) -> &ProfileService {
-        &self.profile_service
+    pub async fn create_profile(&self, name: &str) -> Result<Profile> {
+        self.local_profiles.create(name).await
+    }
+
+    pub async fn list_profiles(&self) -> Result<Vec<Profile>> {
+        self.local_profiles.list().await
+    }
+
+    pub async fn get_profile(&self, id: &ProfileId) -> Result<Option<Profile>> {
+        self.local_profiles.get(id).await
+    }
+
+    pub async fn active_profile(&self) -> Result<Option<Profile>> {
+        self.local_profiles.active().await
+    }
+
+    pub async fn activate_profile(&self, id: &ProfileId) -> Result<()> {
+        self.local_profiles.activate(id).await
+    }
+
+    pub async fn update_profile(&self, id: &ProfileId, draft: ProfileDraft) -> Result<Profile> {
+        self.local_profiles.update(id, draft).await
     }
 }
 
@@ -589,13 +609,12 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let state_dir = dir.path().join("node");
         let service = AxusService::new(&state_dir, "127.0.0.1:0", dir.path(), fast_option(vec![])).await?;
-        let active = service.profile_service().active().await?.unwrap();
+        let active = service.active_profile().await?.unwrap();
         assert_eq!(active.id().name(), "Anonymous");
         assert_eq!(active.version(), 1);
 
         let updated = service
-            .profile_service()
-            .update(
+            .update_profile(
                 active.id(),
                 ProfileDraft {
                     messages: vec![crate::generated::axus::model::ProfileMessage {
@@ -608,11 +627,11 @@ mod tests {
             .await?;
         assert_eq!(updated.version(), 2);
         service.shutdown().await;
-        assert!(service.profile_service().active().await.is_err());
+        assert!(service.active_profile().await.is_err());
         drop(service);
 
         let service = AxusService::new(&state_dir, "127.0.0.1:0", dir.path(), fast_option(vec![])).await?;
-        let active = service.profile_service().active().await?.unwrap();
+        let active = service.active_profile().await?.unwrap();
         assert_eq!(active.id(), updated.id());
         assert_eq!(active.version(), 2);
         assert_eq!(active.messages().len(), 1);

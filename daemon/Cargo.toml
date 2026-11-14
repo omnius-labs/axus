@@ -78,7 +78,7 @@ argon2 = "0.5"
 futures = "0.3.32"
 futures-util = "0.3.32"
 tower = { version = "0.5", features = ["util"] }
-serial_test = "3.4.0"
+serial_test = "4.0.1"
 rupnp = "3.0.0"
 local-ip-address = "0.6.13"
 nom = "8.0.0"

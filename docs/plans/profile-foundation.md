@@ -29,7 +29,7 @@ The foundation gives the later ProfileExchanger and Web of Trust a signed body t
 ### 2.1 Completion Criteria
 
 1. A fresh state directory has an active `Anonymous` Profile with a key at `state_dir/profile/keys/<Profile ID>/signer`, a signed body in `state_dir/profile/sqlite.db`, and owner-only key permissions on Unix.
-2. The `ProfileId` is recomputed from the public key in the signed body, and a body whose ID does not match its key, whose name is invalid, or whose ID exceeds 80 bytes is rejected.
+2. The `ProfileId` is recomputed from the public key in the signed body, and a body whose ID does not match its key, whose name is empty or invalid, or whose name or ID exceeds its limit is rejected.
 3. `ProfileService` creates, lists, gets, activates, and updates Profiles; the active Profile survives a restart; an update increments the version, sets the update time to now, signs the new body, and is serialized against another update; an update whose current time is earlier than the stored update time is rejected.
 4. A newer snapshot replaces an older one, an older snapshot is ignored, an equal update time uses the higher version, an update time more than 5 minutes ahead is rejected, and an equal time and version with a different body keeps the first and logs the second.
 5. A Profile cannot trust or block itself, the same Profile ID cannot appear in both lists, and the trust, block, FileRef, message, inline-body, and encoded-Profile limits are enforced.
@@ -71,9 +71,9 @@ The signed body is the exported RocketPack struct stored as a blob; the key stay
 
 ### 4.1 Assumed Decisions
 
-The core-rs `OmniSigner` name rule is an external prerequisite.
-It enforces 1–32 bytes of `[A-Za-z0-9._-]` with no `@` at creation, on import, and on the wire, and changes `OmniSigner.name` to `string[1..=32]`.
-`OmniCert.name` stays at 0–256 bytes because NodeProfile verification uses an empty cert name.
+The core-rs `OmniSigner` and `OmniCert` name rule is an external prerequisite.
+It enforces 0–32 bytes of `[A-Za-z0-9._-]`, allows the empty name for the NodeProfile certificate, and changes both `OmniSigner.name` and `OmniCert.name` to `string[..=32]`.
+The Axus Profile ID layer separately requires a non-empty 1–32 byte display part.
 Step 1 bumps the submodule after that core-rs PR merges.
 
 | Decision | Source |
@@ -92,7 +92,7 @@ The implementation branch is `feat/profile-foundation`.
 
 Affected without edits: a fresh `AxusService` creates `state_dir/profile` and an `Anonymous` Profile, so engine tests and daemon startup see the new state. Existing state directories without `profile/` are unchanged; the next start creates the Profile. No REST, UI, publication, exchange, or trust code changes.
 
-External: the core-rs submodule bump narrows `OmniSigner.name` from 0–256 to 1–32 bytes, a compatibility break for signers outside the rule. The daemon is pre-release and no migration is provided. The new Profile wire types are not used by an existing message, so no existing Axus wire message changes.
+External: the core-rs submodule bump narrows `OmniSigner.name` and `OmniCert.name` from 0–256 to 0–32 bytes; the empty name is allowed. The daemon is pre-release and no migration is provided. The new Profile wire types are not used by an existing message, so no existing Axus wire message changes.
 
 New engine names: `ProfileId`, `ProfileService`, and `ProfileDraft`. The terms `Profile ID` and `active Profile` are recorded in [terms.md](../terms.md#2-terminology). No REST names are added.
 
@@ -144,11 +144,12 @@ New `daemon/modules/engine/src/model/profile_id.rs` and the module export in [mo
 
 **What to do**
 Implement `ProfileId` as a parsed value with display, parsing, comparison, and hashing.
-Validate the name with the core-rs rule, split it from the suffix, decode the `u`-prefixed base64url suffix, and compare it with the SHA3-256 of the DER public key.
-Reject an ID over 80 bytes and a name containing `@`.
+Validate the name with the core-rs rule, then reject an empty display part because the Profile ID requires 1–32 bytes.
+Split the name from the suffix, decode the `u`-prefixed base64url suffix, and compare it with the SHA3-256 of the DER public key.
+Reject an ID over 80 bytes and a name containing `@`, an empty name, or a name over 32 bytes.
 
 **Completion criterion**
-Tests cover a known `Anonymous@...` ID, a name rejected by the core-rs rule, a tampered suffix, a public key that produces another suffix, and an ID over 80 bytes.
+Tests cover a known `Anonymous@...` ID, an empty display part rejected by the Profile ID layer, a name with an invalid character rejected by the core-rs rule, a tampered suffix, a public key that produces another suffix, and an ID over 80 bytes.
 
 <a id="s-4"></a>
 ### Step 4. Signed Profile model
@@ -226,7 +227,7 @@ An engine test named `profile_axus_service_lifecycle` starts an `AxusService`, r
 | Criterion | Command | Expected result |
 | --- | --- | --- |
 | 1 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_service_startup/)'` | The fresh-state test passes and asserts the `Anonymous` ID, the key file, the stored body, and the active row |
-| 2 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_id/)'` | All `ProfileId` tests pass |
+| 2 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_id/)'` | All `ProfileId` tests pass, including empty-name and invalid-character rejection |
 | 3 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_service/)'` | Create, list, get, active, activate, update, restart, version+1, update_time=now, signed-body, serialized-update, and clock-back-rejection tests pass |
 | 4 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_repo/)'` | The replacement, version, equivocation, and future-time tests pass |
 | 5 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_model/)'` | The signature, ID, self, overlap, and limit tests pass |
@@ -245,7 +246,7 @@ An engine test named `profile_axus_service_lifecycle` starts an `AxusService`, r
 The core-rs prerequisite is outside this repository.
 If the merged core-rs rule changes its mechanism, step 1 and the name tests must be redone, and the plan cannot complete until the submodule points at the merged commit.
 
-The core-rs change narrows `OmniSigner.name` from 0–256 to 1–32 bytes.
+The core-rs change narrows both `OmniSigner.name` and `OmniCert.name` from 0–256 to 0–32 bytes; the empty name is allowed.
 An existing signer outside the rule can no longer be imported; the daemon is pre-release and no migration is provided.
 Reverting the core-rs change requires a separate core-rs revert and another submodule bump.
 

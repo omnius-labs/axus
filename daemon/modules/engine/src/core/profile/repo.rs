@@ -169,6 +169,10 @@ UPDATE profiles
         Ok(())
     }
 
+    pub(crate) async fn shutdown(&self) {
+        self.db.close().await;
+    }
+
     #[cfg(test)]
     pub(crate) async fn deactivate_all(&self) -> Result<()> {
         sqlx::query("UPDATE profiles SET active = 0").execute(self.db.as_ref()).await?;

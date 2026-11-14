@@ -259,6 +259,7 @@ impl AxusService {
         // FileExchanger uses the Sessions NodeFinder keeps looking nodes up for, so it stops first.
         self.file_exchanger.shutdown().await;
         self.node_finder.shutdown().await;
+        self.profile_service.shutdown().await;
     }
 
     pub fn my_node_profile(&self) -> NodeProfile {
@@ -607,6 +608,7 @@ mod tests {
             .await?;
         assert_eq!(updated.version(), 2);
         service.shutdown().await;
+        assert!(service.profile_service().active().await.is_err());
         drop(service);
 
         let service = AxusService::new(&state_dir, "127.0.0.1:0", dir.path(), fast_option(vec![])).await?;

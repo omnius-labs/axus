@@ -96,6 +96,11 @@ impl ProfileService {
         self.repo.activate(id).await
     }
 
+    /// Closes the database pool so the service releases its state directory.
+    pub async fn shutdown(&self) {
+        self.repo.shutdown().await;
+    }
+
     /// Signs and stores a complete draft as the next version of `id`.
     pub async fn update(&self, id: &ProfileId, draft: ProfileDraft) -> Result<Profile> {
         let _guard = self.update_lock.lock().await;

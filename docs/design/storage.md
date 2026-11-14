@@ -318,6 +318,8 @@ There are no deferred decisions closed to this concern.
 ## 6. Current status and remaining work
 
 The NodeFinder, publisher, and subscriber repositories and the block storage exist.
+The Profile repository and key store exist: signed bodies and the active flag are in `state_dir/profile/sqlite.db`, and keys are under `state_dir/profile/keys/<Profile ID>/signer`.
+Startup recovery and active selection follow §4.8.
 In the Store open, the publisher and subscriber first finish the block reclamation described below, then accept the Task and entry operations.
 The publisher deletes all uncommitted keys, returns Processing to Pending, and then reclaims unreferenced keys with the sweep.
 The subscriber recovers Finalizing outputs per the §4.5 rules and deletes the keys of root hashes unreferenced by subscriptions and the temporary outputs of Canceled and Failed.

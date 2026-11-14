@@ -316,10 +316,10 @@ Decide when the owner needs to remove a local Profile.
 
 ## 9. Current status and remaining work
 
-The design is not implemented.
-Only the FileRef type exists, and the engine has an empty placeholder for the Profile exchange.
-The client has no Profile screen.
+The Profile foundation is implemented: the Profile ID, the signed body, the key store, the SQLite repository, the update rules, and startup activation.
+The engine still has only a placeholder for the Profile exchange, and the client has no Profile screen.
+Appending and removing FileRefs at a publish commit, the ProfileExchanger, the Web of Trust, and the Profile REST API and UI remain.
 
-The next work is the implementation of this document and [profile-exchanger.md](./profile-exchanger.md#1-about-this-document), followed by [web-of-trust.md](./web-of-trust.md#1-about-this-document), in the order of [design.md §6.2](../design.md#62-roadmap).
+The next work is [profile-exchanger.md](./profile-exchanger.md#1-about-this-document), followed by [web-of-trust.md](./web-of-trust.md#1-about-this-document), in the order of [design.md §6.2](../design.md#62-roadmap).
 
 For confirmed bugs, see [issues.md](../issues.md).

@@ -9,17 +9,14 @@ use crate::{
         connection::{FramedRecvExt as _, FramedSendExt as _},
         runtime::Shutdown,
     },
-    core::{
-        profile::LocalProfiles,
-        session::{SessionAccepter, model::SessionType},
-    },
+    core::session::{SessionAccepter, model::SessionType},
     generated::axus::profile::ExchangeMessage,
     model::ProfileId,
     prelude::*,
     protocol::profile::ExchangeMessageCodec,
 };
 
-use super::ProfileExchangerIntervals;
+use super::*;
 
 /// Accepts the Sessions peers dialed for a Profile and runs one serve worker per Session.
 pub struct TaskAccepter {

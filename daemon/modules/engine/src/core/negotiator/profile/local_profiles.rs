@@ -4,13 +4,19 @@ use chrono::{DateTime, Utc};
 use omnius_core_base::clock::Clock;
 
 use crate::{
-    core::profile::{
-        key::ProfileKeyStore,
-        repo::{FetchedProfile, FetchedProfileReplaceResult, ProfileReplaceResult, ProfileRepo},
-    },
     model::{Profile, ProfileDraft, ProfileId},
     prelude::*,
 };
+
+mod key;
+mod repo;
+
+use self::{
+    key::ProfileKeyStore,
+    repo::{FetchedProfile, ProfileReplaceResult, ProfileRepo},
+};
+
+pub(crate) use self::repo::FetchedProfileReplaceResult;
 
 /// The display name of the Profile a fresh state directory starts with.
 const DEFAULT_PROFILE_NAME: &str = "Anonymous";
@@ -200,7 +206,7 @@ mod tests {
         let first = open(dir.path(), &clock).await?;
         let anonymous = first.active().await?.unwrap();
         drop(first);
-        let (recovered_id, _) = super::super::key::ProfileKeyStore::new(dir.path()).create("Recovered").await?;
+        let (recovered_id, _) = super::key::ProfileKeyStore::new(dir.path()).create("Recovered").await?;
 
         let service = open(dir.path(), &clock).await?;
         let recovered = service.get(&recovered_id).await?.unwrap();

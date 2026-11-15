@@ -26,11 +26,10 @@ use crate::{
     core::{
         identity::NodeIdentity,
         negotiator::{
-            AppendContentResult, FileExchanger, FileExchangerIntervals, FileExchangerOption, NodeFinder, NodeFinderLocationFinder, NodeFinderOption,
+            AppendContentResult, FileExchanger, FileExchangerIntervals, FileExchangerOption, LocalProfiles, NodeFinder, NodeFinderLocationFinder, NodeFinderOption,
             NodeFinderProfileLocationFinder, NodeFinderRepo, NodeProfileFetcherImpl, ProfileExchanger, ProfileExchangerIntervals, ProfileExchangerOption, Publication,
             PublicationRemoveResult, PublicationView, SubscribedFile,
         },
-        profile::LocalProfiles,
         session::{
             SessionAccepter, SessionConnector,
             model::{SessionOption, SessionType},

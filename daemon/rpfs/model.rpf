@@ -30,6 +30,51 @@ struct NodeProfileSigningPayload {
   @2 updated_time: i64;
 }
 
+#[rust::derive(Eq, Hash)]
+struct Profile {
+  @0 id: string[..=MAX_PROFILE_ID_LENGTH];
+  @1 public_key: bytes[..=MAX_PUBLIC_KEY_LENGTH];
+  @2 version: u64;
+  @3 updated_time: i64;
+  @4 trusted: Vec<string[..=MAX_PROFILE_ID_LENGTH]>[..=MAX_PROFILE_TRUSTED];
+  @5 blocked: Vec<string[..=MAX_PROFILE_ID_LENGTH]>[..=MAX_PROFILE_BLOCKED];
+  @6 file_refs: Vec<FileRef>[..=MAX_PROFILE_FILE_REFS];
+  @7 messages: Vec<ProfileMessage>[..=MAX_PROFILE_MESSAGES];
+  @8 signature: bytes[..=MAX_SIGNATURE_LENGTH];
+}
+
+#[rust::derive(Eq, Hash)]
+struct ProfileSigningPayload {
+  @0 id: string[..=MAX_PROFILE_ID_LENGTH];
+  @1 public_key: bytes[..=MAX_PUBLIC_KEY_LENGTH];
+  @2 version: u64;
+  @3 updated_time: i64;
+  @4 trusted: Vec<string[..=MAX_PROFILE_ID_LENGTH]>[..=MAX_PROFILE_TRUSTED];
+  @5 blocked: Vec<string[..=MAX_PROFILE_ID_LENGTH]>[..=MAX_PROFILE_BLOCKED];
+  @6 file_refs: Vec<FileRef>[..=MAX_PROFILE_FILE_REFS];
+  @7 messages: Vec<ProfileMessage>[..=MAX_PROFILE_MESSAGES];
+}
+
+#[rust::derive(Eq, Hash)]
+struct ProfileMessage {
+  @0 posted_time: i64;
+  @1 body: ProfileMessageBody;
+}
+
+#[rust::derive(Eq, Hash)]
+enum ProfileMessageBody {
+  @1 Inline(value: bytes[..=MAX_INLINE_MESSAGE_BODY_LENGTH]);
+  @2 FileRef(value: FileRef);
+}
+
+const MAX_PROFILE_ID_LENGTH: u32 = 80;
+const MAX_PROFILE_TRUSTED: u32 = 256;
+const MAX_PROFILE_BLOCKED: u32 = 256;
+const MAX_PROFILE_FILE_REFS: u32 = 1024;
+const MAX_PROFILE_MESSAGES: u32 = 256;
+const MAX_INLINE_MESSAGE_BODY_LENGTH: u32 = 65536;
+const MAX_ENCODED_PROFILE_LENGTH: u32 = 1048576;
+
 const MAX_WIRE_ADDRS: u32 = 8;
 const MAX_PUBLIC_KEY_LENGTH: u32 = 256;
 const MAX_SIGNATURE_LENGTH: u32 = 64;

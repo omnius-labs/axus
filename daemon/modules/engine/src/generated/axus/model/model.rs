@@ -250,6 +250,472 @@ impl omnius_core_rocketpack::RocketPackStruct for NodeProfileSigningPayload {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Profile {
+    pub id: String,
+    pub public_key: Vec<u8>,
+    pub version: u64,
+    pub updated_time: i64,
+    pub trusted: Vec<String>,
+    pub blocked: Vec<String>,
+    pub file_refs: Vec<crate::generated::axus::model::FileRef>,
+    pub messages: Vec<crate::generated::axus::model::ProfileMessage>,
+    pub signature: Vec<u8>,
+}
+
+impl omnius_core_rocketpack::RocketPackStruct for Profile {
+    fn validate(value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        omnius_core_rocketpack::validate_length("Profile.id", 0, 80, (&value.id).len())?;
+        omnius_core_rocketpack::validate_length("Profile.public_key", 0, 256, (&value.public_key).len())?;
+        omnius_core_rocketpack::validate_length("Profile.trusted", 0, 256, (&value.trusted).len())?;
+        for item in (&value.trusted).iter() {
+            omnius_core_rocketpack::validate_length("Profile.trusted[]", 0, 80, (item).len())?;
+        }
+        omnius_core_rocketpack::validate_length("Profile.blocked", 0, 256, (&value.blocked).len())?;
+        for item in (&value.blocked).iter() {
+            omnius_core_rocketpack::validate_length("Profile.blocked[]", 0, 80, (item).len())?;
+        }
+        omnius_core_rocketpack::validate_length("Profile.file_refs", 0, 1024, (&value.file_refs).len())?;
+        for item in (&value.file_refs).iter() {
+            <crate::generated::axus::model::FileRef as omnius_core_rocketpack::RocketPackStruct>::validate(item)?;
+        }
+        omnius_core_rocketpack::validate_length("Profile.messages", 0, 256, (&value.messages).len())?;
+        for item in (&value.messages).iter() {
+            <crate::generated::axus::model::ProfileMessage as omnius_core_rocketpack::RocketPackStruct>::validate(item)?;
+        }
+        omnius_core_rocketpack::validate_length("Profile.signature", 0, 64, (&value.signature).len())?;
+        Ok(())
+    }
+
+    fn pack(encoder: &mut impl omnius_core_rocketpack::RocketPackEncoder, value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        encoder.write_map(9)?;
+        encoder.write_u64(0)?;
+        omnius_core_rocketpack::validate_length("Profile.id", 0, 80, (&value.id).len())?;
+        encoder.write_string((&value.id).as_str())?;
+        encoder.write_u64(1)?;
+        omnius_core_rocketpack::validate_length("Profile.public_key", 0, 256, (&value.public_key).len())?;
+        encoder.write_bytes((&value.public_key).as_slice())?;
+        encoder.write_u64(2)?;
+        encoder.write_u64(*(&value.version))?;
+        encoder.write_u64(3)?;
+        encoder.write_i64(*(&value.updated_time))?;
+        encoder.write_u64(4)?;
+        omnius_core_rocketpack::validate_length("Profile.trusted", 0, 256, (&value.trusted).len())?;
+        encoder.write_array((&value.trusted).len())?;
+        for item in (&value.trusted).iter() {
+            omnius_core_rocketpack::validate_length("Profile.trusted[]", 0, 80, (item).len())?;
+            encoder.write_string((item).as_str())?;
+        }
+        encoder.write_u64(5)?;
+        omnius_core_rocketpack::validate_length("Profile.blocked", 0, 256, (&value.blocked).len())?;
+        encoder.write_array((&value.blocked).len())?;
+        for item in (&value.blocked).iter() {
+            omnius_core_rocketpack::validate_length("Profile.blocked[]", 0, 80, (item).len())?;
+            encoder.write_string((item).as_str())?;
+        }
+        encoder.write_u64(6)?;
+        omnius_core_rocketpack::validate_length("Profile.file_refs", 0, 1024, (&value.file_refs).len())?;
+        encoder.write_array((&value.file_refs).len())?;
+        for item in (&value.file_refs).iter() {
+            encoder.write_struct(item)?;
+        }
+        encoder.write_u64(7)?;
+        omnius_core_rocketpack::validate_length("Profile.messages", 0, 256, (&value.messages).len())?;
+        encoder.write_array((&value.messages).len())?;
+        for item in (&value.messages).iter() {
+            encoder.write_struct(item)?;
+        }
+        encoder.write_u64(8)?;
+        omnius_core_rocketpack::validate_length("Profile.signature", 0, 64, (&value.signature).len())?;
+        encoder.write_bytes((&value.signature).as_slice())?;
+        Ok(())
+    }
+
+    fn unpack(decoder: &mut impl omnius_core_rocketpack::RocketPackDecoder) -> std::result::Result<Self, omnius_core_rocketpack::RocketPackDecoderError>
+    where
+        Self: Sized,
+    {
+        let mut __rpf_storage_id: Option<String> = None;
+        let mut __rpf_storage_public_key: Option<Vec<u8>> = None;
+        let mut __rpf_storage_version: Option<u64> = None;
+        let mut __rpf_storage_updated_time: Option<i64> = None;
+        let mut __rpf_storage_trusted: Option<Vec<String>> = None;
+        let mut __rpf_storage_blocked: Option<Vec<String>> = None;
+        let mut __rpf_storage_file_refs: Option<Vec<crate::generated::axus::model::FileRef>> = None;
+        let mut __rpf_storage_messages: Option<Vec<crate::generated::axus::model::ProfileMessage>> = None;
+        let mut __rpf_storage_signature: Option<Vec<u8>> = None;
+        let count = decoder.read_map()?;
+
+        for _ in 0..count {
+            match decoder.read_u64()? {
+                0 => {
+                    __rpf_storage_id = Some(decoder.read_string_bounded("Profile.id", 0, 80)?);
+                }
+                1 => {
+                    __rpf_storage_public_key = Some(decoder.read_bytes_bounded("Profile.public_key", 0, 256)?);
+                }
+                2 => {
+                    __rpf_storage_version = Some(decoder.read_u64()?);
+                }
+                3 => {
+                    __rpf_storage_updated_time = Some(decoder.read_i64()?);
+                }
+                4 => {
+                    let __count_0 = decoder.read_array_bounded("Profile.trusted", 0, 256)?;
+                    let mut __values_1: Vec<String> = Vec::new();
+                    for _ in 0..__count_0 {
+                        __values_1.push(decoder.read_string_bounded("Profile.trusted[]", 0, 80)?);
+                    }
+                    __rpf_storage_trusted = Some(__values_1);
+                }
+                5 => {
+                    let __count_2 = decoder.read_array_bounded("Profile.blocked", 0, 256)?;
+                    let mut __values_3: Vec<String> = Vec::new();
+                    for _ in 0..__count_2 {
+                        __values_3.push(decoder.read_string_bounded("Profile.blocked[]", 0, 80)?);
+                    }
+                    __rpf_storage_blocked = Some(__values_3);
+                }
+                6 => {
+                    let __count_4 = decoder.read_array_bounded("Profile.file_refs", 0, 1024)?;
+                    let mut __values_5: Vec<crate::generated::axus::model::FileRef> = Vec::new();
+                    for _ in 0..__count_4 {
+                        __values_5.push(decoder.read_struct::<crate::generated::axus::model::FileRef>()?);
+                    }
+                    __rpf_storage_file_refs = Some(__values_5);
+                }
+                7 => {
+                    let __count_6 = decoder.read_array_bounded("Profile.messages", 0, 256)?;
+                    let mut __values_7: Vec<crate::generated::axus::model::ProfileMessage> = Vec::new();
+                    for _ in 0..__count_6 {
+                        __values_7.push(decoder.read_struct::<crate::generated::axus::model::ProfileMessage>()?);
+                    }
+                    __rpf_storage_messages = Some(__values_7);
+                }
+                8 => {
+                    __rpf_storage_signature = Some(decoder.read_bytes_bounded("Profile.signature", 0, 64)?);
+                }
+                _ => decoder.skip_field()?,
+            }
+        }
+
+        Ok(Self {
+            id: __rpf_storage_id.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: id"))?,
+            public_key: __rpf_storage_public_key.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: public_key"))?,
+            version: __rpf_storage_version.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: version"))?,
+            updated_time: __rpf_storage_updated_time.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: updated_time"))?,
+            trusted: __rpf_storage_trusted.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: trusted"))?,
+            blocked: __rpf_storage_blocked.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: blocked"))?,
+            file_refs: __rpf_storage_file_refs.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: file_refs"))?,
+            messages: __rpf_storage_messages.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: messages"))?,
+            signature: __rpf_storage_signature.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: signature"))?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProfileSigningPayload {
+    pub id: String,
+    pub public_key: Vec<u8>,
+    pub version: u64,
+    pub updated_time: i64,
+    pub trusted: Vec<String>,
+    pub blocked: Vec<String>,
+    pub file_refs: Vec<crate::generated::axus::model::FileRef>,
+    pub messages: Vec<crate::generated::axus::model::ProfileMessage>,
+}
+
+impl omnius_core_rocketpack::RocketPackStruct for ProfileSigningPayload {
+    fn validate(value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        omnius_core_rocketpack::validate_length("ProfileSigningPayload.id", 0, 80, (&value.id).len())?;
+        omnius_core_rocketpack::validate_length("ProfileSigningPayload.public_key", 0, 256, (&value.public_key).len())?;
+        omnius_core_rocketpack::validate_length("ProfileSigningPayload.trusted", 0, 256, (&value.trusted).len())?;
+        for item in (&value.trusted).iter() {
+            omnius_core_rocketpack::validate_length("ProfileSigningPayload.trusted[]", 0, 80, (item).len())?;
+        }
+        omnius_core_rocketpack::validate_length("ProfileSigningPayload.blocked", 0, 256, (&value.blocked).len())?;
+        for item in (&value.blocked).iter() {
+            omnius_core_rocketpack::validate_length("ProfileSigningPayload.blocked[]", 0, 80, (item).len())?;
+        }
+        omnius_core_rocketpack::validate_length("ProfileSigningPayload.file_refs", 0, 1024, (&value.file_refs).len())?;
+        for item in (&value.file_refs).iter() {
+            <crate::generated::axus::model::FileRef as omnius_core_rocketpack::RocketPackStruct>::validate(item)?;
+        }
+        omnius_core_rocketpack::validate_length("ProfileSigningPayload.messages", 0, 256, (&value.messages).len())?;
+        for item in (&value.messages).iter() {
+            <crate::generated::axus::model::ProfileMessage as omnius_core_rocketpack::RocketPackStruct>::validate(item)?;
+        }
+        Ok(())
+    }
+
+    fn pack(encoder: &mut impl omnius_core_rocketpack::RocketPackEncoder, value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        encoder.write_map(8)?;
+        encoder.write_u64(0)?;
+        omnius_core_rocketpack::validate_length("ProfileSigningPayload.id", 0, 80, (&value.id).len())?;
+        encoder.write_string((&value.id).as_str())?;
+        encoder.write_u64(1)?;
+        omnius_core_rocketpack::validate_length("ProfileSigningPayload.public_key", 0, 256, (&value.public_key).len())?;
+        encoder.write_bytes((&value.public_key).as_slice())?;
+        encoder.write_u64(2)?;
+        encoder.write_u64(*(&value.version))?;
+        encoder.write_u64(3)?;
+        encoder.write_i64(*(&value.updated_time))?;
+        encoder.write_u64(4)?;
+        omnius_core_rocketpack::validate_length("ProfileSigningPayload.trusted", 0, 256, (&value.trusted).len())?;
+        encoder.write_array((&value.trusted).len())?;
+        for item in (&value.trusted).iter() {
+            omnius_core_rocketpack::validate_length("ProfileSigningPayload.trusted[]", 0, 80, (item).len())?;
+            encoder.write_string((item).as_str())?;
+        }
+        encoder.write_u64(5)?;
+        omnius_core_rocketpack::validate_length("ProfileSigningPayload.blocked", 0, 256, (&value.blocked).len())?;
+        encoder.write_array((&value.blocked).len())?;
+        for item in (&value.blocked).iter() {
+            omnius_core_rocketpack::validate_length("ProfileSigningPayload.blocked[]", 0, 80, (item).len())?;
+            encoder.write_string((item).as_str())?;
+        }
+        encoder.write_u64(6)?;
+        omnius_core_rocketpack::validate_length("ProfileSigningPayload.file_refs", 0, 1024, (&value.file_refs).len())?;
+        encoder.write_array((&value.file_refs).len())?;
+        for item in (&value.file_refs).iter() {
+            encoder.write_struct(item)?;
+        }
+        encoder.write_u64(7)?;
+        omnius_core_rocketpack::validate_length("ProfileSigningPayload.messages", 0, 256, (&value.messages).len())?;
+        encoder.write_array((&value.messages).len())?;
+        for item in (&value.messages).iter() {
+            encoder.write_struct(item)?;
+        }
+        Ok(())
+    }
+
+    fn unpack(decoder: &mut impl omnius_core_rocketpack::RocketPackDecoder) -> std::result::Result<Self, omnius_core_rocketpack::RocketPackDecoderError>
+    where
+        Self: Sized,
+    {
+        let mut __rpf_storage_id: Option<String> = None;
+        let mut __rpf_storage_public_key: Option<Vec<u8>> = None;
+        let mut __rpf_storage_version: Option<u64> = None;
+        let mut __rpf_storage_updated_time: Option<i64> = None;
+        let mut __rpf_storage_trusted: Option<Vec<String>> = None;
+        let mut __rpf_storage_blocked: Option<Vec<String>> = None;
+        let mut __rpf_storage_file_refs: Option<Vec<crate::generated::axus::model::FileRef>> = None;
+        let mut __rpf_storage_messages: Option<Vec<crate::generated::axus::model::ProfileMessage>> = None;
+        let count = decoder.read_map()?;
+
+        for _ in 0..count {
+            match decoder.read_u64()? {
+                0 => {
+                    __rpf_storage_id = Some(decoder.read_string_bounded("ProfileSigningPayload.id", 0, 80)?);
+                }
+                1 => {
+                    __rpf_storage_public_key = Some(decoder.read_bytes_bounded("ProfileSigningPayload.public_key", 0, 256)?);
+                }
+                2 => {
+                    __rpf_storage_version = Some(decoder.read_u64()?);
+                }
+                3 => {
+                    __rpf_storage_updated_time = Some(decoder.read_i64()?);
+                }
+                4 => {
+                    let __count_0 = decoder.read_array_bounded("ProfileSigningPayload.trusted", 0, 256)?;
+                    let mut __values_1: Vec<String> = Vec::new();
+                    for _ in 0..__count_0 {
+                        __values_1.push(decoder.read_string_bounded("ProfileSigningPayload.trusted[]", 0, 80)?);
+                    }
+                    __rpf_storage_trusted = Some(__values_1);
+                }
+                5 => {
+                    let __count_2 = decoder.read_array_bounded("ProfileSigningPayload.blocked", 0, 256)?;
+                    let mut __values_3: Vec<String> = Vec::new();
+                    for _ in 0..__count_2 {
+                        __values_3.push(decoder.read_string_bounded("ProfileSigningPayload.blocked[]", 0, 80)?);
+                    }
+                    __rpf_storage_blocked = Some(__values_3);
+                }
+                6 => {
+                    let __count_4 = decoder.read_array_bounded("ProfileSigningPayload.file_refs", 0, 1024)?;
+                    let mut __values_5: Vec<crate::generated::axus::model::FileRef> = Vec::new();
+                    for _ in 0..__count_4 {
+                        __values_5.push(decoder.read_struct::<crate::generated::axus::model::FileRef>()?);
+                    }
+                    __rpf_storage_file_refs = Some(__values_5);
+                }
+                7 => {
+                    let __count_6 = decoder.read_array_bounded("ProfileSigningPayload.messages", 0, 256)?;
+                    let mut __values_7: Vec<crate::generated::axus::model::ProfileMessage> = Vec::new();
+                    for _ in 0..__count_6 {
+                        __values_7.push(decoder.read_struct::<crate::generated::axus::model::ProfileMessage>()?);
+                    }
+                    __rpf_storage_messages = Some(__values_7);
+                }
+                _ => decoder.skip_field()?,
+            }
+        }
+
+        Ok(Self {
+            id: __rpf_storage_id.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: id"))?,
+            public_key: __rpf_storage_public_key.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: public_key"))?,
+            version: __rpf_storage_version.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: version"))?,
+            updated_time: __rpf_storage_updated_time.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: updated_time"))?,
+            trusted: __rpf_storage_trusted.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: trusted"))?,
+            blocked: __rpf_storage_blocked.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: blocked"))?,
+            file_refs: __rpf_storage_file_refs.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: file_refs"))?,
+            messages: __rpf_storage_messages.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: messages"))?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProfileMessage {
+    pub posted_time: i64,
+    pub body: crate::generated::axus::model::ProfileMessageBody,
+}
+
+impl omnius_core_rocketpack::RocketPackStruct for ProfileMessage {
+    fn validate(value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        <crate::generated::axus::model::ProfileMessageBody as omnius_core_rocketpack::RocketPackStruct>::validate(&value.body)?;
+        Ok(())
+    }
+
+    fn pack(encoder: &mut impl omnius_core_rocketpack::RocketPackEncoder, value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        encoder.write_map(2)?;
+        encoder.write_u64(0)?;
+        encoder.write_i64(*(&value.posted_time))?;
+        encoder.write_u64(1)?;
+        encoder.write_struct(&value.body)?;
+        Ok(())
+    }
+
+    fn unpack(decoder: &mut impl omnius_core_rocketpack::RocketPackDecoder) -> std::result::Result<Self, omnius_core_rocketpack::RocketPackDecoderError>
+    where
+        Self: Sized,
+    {
+        let mut __rpf_storage_posted_time: Option<i64> = None;
+        let mut __rpf_storage_body: Option<crate::generated::axus::model::ProfileMessageBody> = None;
+        let count = decoder.read_map()?;
+
+        for _ in 0..count {
+            match decoder.read_u64()? {
+                0 => {
+                    __rpf_storage_posted_time = Some(decoder.read_i64()?);
+                }
+                1 => {
+                    __rpf_storage_body = Some(decoder.read_struct::<crate::generated::axus::model::ProfileMessageBody>()?);
+                }
+                _ => decoder.skip_field()?,
+            }
+        }
+
+        Ok(Self {
+            posted_time: __rpf_storage_posted_time.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: posted_time"))?,
+            body: __rpf_storage_body.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: body"))?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ProfileMessageBody {
+    Inline { value: Vec<u8> },
+    FileRef { value: crate::generated::axus::model::FileRef },
+}
+
+impl omnius_core_rocketpack::RocketPackStruct for ProfileMessageBody {
+    fn validate(value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        match value {
+            Self::Inline { value } => {
+                omnius_core_rocketpack::validate_length("ProfileMessageBody.Inline.0", 0, 65536, (value).len())?;
+            }
+            Self::FileRef { value } => {
+                <crate::generated::axus::model::FileRef as omnius_core_rocketpack::RocketPackStruct>::validate(value)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn pack(encoder: &mut impl omnius_core_rocketpack::RocketPackEncoder, value: &Self) -> std::result::Result<(), omnius_core_rocketpack::RocketPackEncoderError> {
+        encoder.write_map(1)?;
+
+        match value {
+            Self::Inline { value } => {
+                encoder.write_u64(1)?;
+                encoder.write_map(1)?;
+                encoder.write_u64(0)?;
+                omnius_core_rocketpack::validate_length("ProfileMessageBody.Inline.0", 0, 65536, (value).len())?;
+                encoder.write_bytes((value).as_slice())?;
+            }
+            Self::FileRef { value } => {
+                encoder.write_u64(2)?;
+                encoder.write_map(1)?;
+                encoder.write_u64(0)?;
+                encoder.write_struct(value)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn unpack(decoder: &mut impl omnius_core_rocketpack::RocketPackDecoder) -> std::result::Result<Self, omnius_core_rocketpack::RocketPackDecoderError>
+    where
+        Self: Sized,
+    {
+        let mut __rpf_result: Option<Self> = None;
+        let __rpf_count = decoder.read_map()?;
+
+        for _ in 0..__rpf_count {
+            match decoder.read_u64()? {
+                1 => {
+                    let __inner_count_0 = decoder.read_map()?;
+                    let mut __rpf_storage_value: Option<Vec<u8>> = None;
+                    for _ in 0..__inner_count_0 {
+                        match decoder.read_u64()? {
+                            0 => {
+                                __rpf_storage_value = Some(decoder.read_bytes_bounded("ProfileMessageBody.Inline.0", 0, 65536)?);
+                            }
+                            _ => decoder.skip_field()?,
+                        }
+                    }
+                    __rpf_result = Some(Self::Inline {
+                        value: __rpf_storage_value.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: value"))?,
+                    });
+                }
+                2 => {
+                    let __inner_count_1 = decoder.read_map()?;
+                    let mut __rpf_storage_value: Option<crate::generated::axus::model::FileRef> = None;
+                    for _ in 0..__inner_count_1 {
+                        match decoder.read_u64()? {
+                            0 => {
+                                __rpf_storage_value = Some(decoder.read_struct::<crate::generated::axus::model::FileRef>()?);
+                            }
+                            _ => decoder.skip_field()?,
+                        }
+                    }
+                    __rpf_result = Some(Self::FileRef {
+                        value: __rpf_storage_value.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing field: value"))?,
+                    });
+                }
+                _ => decoder.skip_field()?,
+            }
+        }
+
+        __rpf_result.ok_or(omnius_core_rocketpack::RocketPackDecoderError::Other("missing enum variant"))
+    }
+}
+
+pub const MAX_PROFILE_ID_LENGTH: u32 = 80;
+
+pub const MAX_PROFILE_TRUSTED: u32 = 256;
+
+pub const MAX_PROFILE_BLOCKED: u32 = 256;
+
+pub const MAX_PROFILE_FILE_REFS: u32 = 1024;
+
+pub const MAX_PROFILE_MESSAGES: u32 = 256;
+
+pub const MAX_INLINE_MESSAGE_BODY_LENGTH: u32 = 65536;
+
+pub const MAX_ENCODED_PROFILE_LENGTH: u32 = 1048576;
+
 pub const MAX_WIRE_ADDRS: u32 = 8;
 
 pub const MAX_PUBLIC_KEY_LENGTH: u32 = 256;

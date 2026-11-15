@@ -14,6 +14,4 @@ Add a row when starting work, advance its state, and delete the row and child do
 
 ## 2. List
 
-| Plan | Purpose | State | Prerequisite |
-| --- | --- | --- | --- |
-| [profile-exchanger-exchange](./plans/profile-exchanger-exchange.md) | A node finds and fetches a Profile by ID and serves the Profiles it owns | in progress | - |
+There are no in-progress plans.

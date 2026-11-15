@@ -125,6 +125,26 @@ impl Endpoint {
             Result::Ok(())
         })
     }
+
+    fn spawn_not_found_server(&self) -> tokio::task::JoinHandle<Result<()>> {
+        let accepter = self.session_accepter.clone();
+        tokio::spawn(async move {
+            let session = accepter.accept(&SessionType::ProfileExchanger).await?;
+            session.stream.set_receive_timeout(Duration::from_secs(5));
+            let message = session.stream.receiver.lock().await.recv_message_with::<ExchangeMessageCodec>().await?;
+            let ExchangeMessage::Request { profile_id } = message else {
+                return Err(Error::new(ErrorKind::InvalidFormat).with_message("unexpected message instead of a profile request"));
+            };
+            session
+                .stream
+                .sender
+                .lock()
+                .await
+                .send_message_with::<ExchangeMessageCodec>(&ExchangeMessage::NotFound { profile_id })
+                .await?;
+            Result::Ok(())
+        })
+    }
 }
 
 struct TestNode {
@@ -252,6 +272,29 @@ async fn profile_exchanger_serves_only_owned_profiles() -> TestResult {
     third.shutdown().await;
     client.shutdown().await;
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn profile_exchanger_tries_the_next_location_after_not_found() -> TestResult {
+    let missing_dir = tempfile::tempdir()?;
+    let missing = Endpoint::new(missing_dir.path()).await?;
+    let good_dir = tempfile::tempdir()?;
+    let good = Endpoint::new(good_dir.path()).await?;
+    let client = TestNode::new().await?;
+    let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "Remote")?;
+    let profile = Profile::sign(&signer, 1, at(1_000_000), ProfileDraft::default())?;
+
+    let missing_server = missing.spawn_not_found_server();
+    let good_server = good.spawn_profile_server(profile.to_wire());
+    client.known(&[&missing.profile, &good.profile]);
+
+    assert_eq!(client.exchanger.fetch(profile.id()).await?, profile);
+    assert_eq!(client.exchanger.stored(profile.id()).await?, Some(profile));
+    missing_server.await??;
+    good_server.await??;
+
+    client.shutdown().await;
     Ok(())
 }
 
@@ -385,6 +428,12 @@ async fn profile_exchanger_shutdown_joins_an_active_serve_worker() -> TestResult
         .connect(&server.endpoint.profile.addrs()[0], &SessionType::ProfileExchanger)
         .await?;
 
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while server.exchanger.task_accepter.active_worker_count().await == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
     tokio::time::timeout(Duration::from_secs(5), server.shutdown()).await?;
     Ok(())
 }

@@ -81,6 +81,11 @@ impl TaskAccepter {
         v
     }
 
+    #[cfg(test)]
+    pub async fn active_worker_count(&self) -> usize {
+        self.join_handles.lock().await.iter().filter(|handle| !handle.is_finished()).count()
+    }
+
     async fn accept(&self) -> Result<()> {
         let session = select! {
             session = self.session_accepter.accept(&SessionType::ProfileExchanger) => session?,

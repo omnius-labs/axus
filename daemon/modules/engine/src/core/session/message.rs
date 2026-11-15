@@ -16,6 +16,7 @@ pub enum V1RequestType {
     Unknown = 0,
     NodeFinder = 1,
     FileExchanger = 2,
+    ProfileExchanger = 3,
 }
 
 #[derive(Debug, PartialEq, Eq)]

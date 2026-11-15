@@ -232,6 +232,11 @@ A Profile's signed body is stored in `state_dir/profile/sqlite.db`, and its key 
 The table holds the encoded signed body, its version, its update time, its creation time, and the active flag.
 A partial unique index admits at most one active row.
 
+A fetched Profile is stored in a `fetched_profiles` table in the same database.
+The table holds the encoded signed body, its version, its update time, and the fetch time.
+It has no key and no active flag, and only the ProfileExchanger reads and writes it.
+A fetched body is never advertised or served and does not participate in activation ([profile-exchanger.md §5.1](./profile-exchanger.md#51-when-a-profile-is-fetched)).
+
 The key file is the identity root.
 It is written to a temporary file in the same key directory, given owner-only permissions (`0600` on Unix), and renamed to `signer`.
 The key stays outside SQLite because it is a secret with its own permissions and lifetime.
@@ -239,7 +244,8 @@ The key is loaded before the body is used, and the `OmniSigner` display must equ
 The body is verified against the key when it is loaded.
 
 If keys exist without stored bodies, the daemon signs and stores an empty snapshot with version 1 and the current time for each.
-If a stored body has no key, startup fails because the Profile cannot sign an update.
+If a body in the owned `profiles` table has no key, startup fails because the Profile cannot sign an update.
+The fetched table has no key and is not checked against the key store.
 The active Profile is the row whose active flag is set.
 If no row is active, the oldest row by creation time, then by Profile ID, is activated.
 
@@ -352,4 +358,5 @@ On macOS, the engine tests confirm existing-entry protection and successful file
 The x86_64-apple-darwin build, the full Linux and Windows engine builds and sync execution, and power-loss hardware tests are not confirmed.
 The staged upload area under `state_dir/uploads`, the download directory, and the publication mapping are implemented.
 At startup the received offset is reconciled with the staged file, so an interrupted upload resumes from the stored bytes.
+The fetched table stores fetched Profiles apart from the owned rows, and tests confirm replacement, the fetch-time reset for the same body, stale and equivocation retention, restart survival, and isolation from the owned list and activation.
 For confirmed bugs, see [issues.md](../issues.md).

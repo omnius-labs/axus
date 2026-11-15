@@ -153,6 +153,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn enabled_profile_exchanger_session_is_routed() -> TestResult {
+        let (tcp_accepter, tcp_connector) = loopback_tcp_pair();
+        let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
+        let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
+        let sleeper = Arc::new(FakeSleeper);
+        let addr = OmniAddr::create_tcp("127.0.0.1".parse()?, 1);
+
+        let session_accepter = SessionAccepter::new(
+            tcp_accepter,
+            signer.clone(),
+            Arc::new(ClockUtc),
+            sleeper,
+            rng.clone(),
+            &[SessionType::NodeFinder, SessionType::ProfileExchanger],
+            SessionOption::default(),
+        )
+        .await;
+        let session_connector = SessionConnector::new(tcp_connector, signer, Arc::new(ClockUtc), rng, SessionOption::default());
+
+        let client = tokio::time::timeout(TEST_WATCHDOG, session_connector.connect(&addr, &SessionType::ProfileExchanger)).await??;
+        let server = tokio::time::timeout(TEST_WATCHDOG, session_accepter.accept(&SessionType::ProfileExchanger)).await??;
+        assert_eq!(client.typ, SessionType::ProfileExchanger);
+        assert_eq!(server.typ, SessionType::ProfileExchanger);
+        assert_eq!(SessionType::ProfileExchanger.max_frame_length(), crate::protocol::profile::MAX_FRAME_LENGTH);
+
+        session_accepter.shutdown().await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn enabled_file_exchanger_session_is_routed() -> TestResult {
         let (tcp_accepter, tcp_connector) = loopback_tcp_pair();
         let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);

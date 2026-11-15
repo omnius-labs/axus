@@ -267,6 +267,7 @@ impl Inner {
                 V1RequestType::Unknown => None,
                 V1RequestType::NodeFinder => Some(SessionType::NodeFinder),
                 V1RequestType::FileExchanger => Some(SessionType::FileExchanger),
+                V1RequestType::ProfileExchanger => Some(SessionType::ProfileExchanger),
             };
 
             let permit = match typ.as_ref() {

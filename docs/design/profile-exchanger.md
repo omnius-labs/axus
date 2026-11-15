@@ -68,11 +68,11 @@ The Session authenticates the peer and encrypts the exchange ([trust-security.md
 
 ### 4.2 Frame and messages
 
-A frame is at most 1 MiB, and one response carries one Profile.
+A frame is at most 1 MiB plus 256 bytes, and one response carries one Profile.
 The message set is a request for an ID, a response with the signed Profile, and a not-found answer.
 
 The receive deadline is 30 seconds, the same as FileExchanger's, and a receive that exceeds the frame limit or the deadline closes the Session.
-The limit matches the maximum encoded Profile ([profile.md](./profile.md#7-limits)), so a valid Profile always fits one frame and a larger body is rejected as a violation rather than streamed.
+The limit is the maximum encoded Profile ([profile.md](./profile.md#7-limits)) plus the envelope of the response, so a valid Profile always fits one frame and a larger body is rejected as a violation rather than streamed.
 A chunked transfer would allow larger Profiles, but it would also allow a peer to make a receiver allocate an unbounded body and would add a second consistency problem beside the update rules.
 
 ### 4.3 Serving rules
@@ -84,14 +84,15 @@ The node answers with the newest snapshot it owns.
 It does not answer with an older snapshot on request; the update rules decide which snapshot is current ([profile.md](./profile.md#5-update-rules)).
 
 A received body is verified before it is stored.
-A body that fails the signature check or the update order is discarded and the request fails; the serving node is not excluded, because a bad body is not a transport violation ([profile.md](./profile.md#5-update-rules)).
+A response whose body fails the signature check, whose ID differs from the requested ID, whose update order is older than the stored snapshot, or whose message is unexpected is discarded; the dialer tries the next location and the serving node is not excluded, because a bad body is not a transport violation ([profile.md](./profile.md#5-update-rules)).
+A request whose Profile ID is malformed, or a message that is not a request, is a protocol violation, and the serving side closes the Session.
 
 ## 5. Refresh
 
 ### 5.1 When a Profile is fetched
 
 A Profile is fetched when the node needs it: at the first evaluation that reaches it, when the active Profile changes, and when a trust or block list adds an ID.
-The fetched body is stored with its fetch time.
+The fetched body is stored with its fetch time in `state_dir/profile/sqlite.db`, apart from the Profiles the node owns ([storage.md §4.8](./storage.md#48-profile-storage)).
 
 The followed set is the node's own Profiles, the trust and block entries of the active Profile, and the Profiles discovered at distance 2 during the evaluation.
 The set is bounded by the evaluation limits ([web-of-trust.md](./web-of-trust.md#42-distance-and-the-expansion)).
@@ -102,6 +103,8 @@ A followed Profile is fetched again after a refresh period of 1 hour, and a manu
 This version has no push: a node learns of an update only by fetching again.
 
 A failed fetch leaves the last stored snapshot in place and retries with a backoff.
+A successful fetch of the same or a newer snapshot resets the fetch time; an older snapshot and an equivocation do not.
+An older snapshot or an equivocation is discarded like a body that fails verification, and the dialer tries the next location.
 A Profile that was never fetched stays unknown ([web-of-trust.md](./web-of-trust.md#43-states)).
 A not-found answer is a failure for that location, not a deletion of the Profile.
 
@@ -109,7 +112,7 @@ A not-found answer is a failure for that location, not a deletion of the Profile
 
 | Item | Limit |
 | --- | --- |
-| Frame | 1 MiB |
+| Frame | 1 MiB + 256 bytes |
 | Receive deadline | 30 seconds |
 | Profiles followed | 256 |
 | Concurrent exchange Sessions | 8 |
@@ -118,6 +121,7 @@ A not-found answer is a failure for that location, not a deletion of the Profile
 A serving node can withhold a Profile, and the design accepts that: availability is not a guarantee of the exchanger.
 It cannot forge a body, because the signature check fails, and it cannot roll a body back, because the receiver keeps the newer snapshot ([profile.md](./profile.md#52-replacement-and-rollback)).
 
+The concurrent Session limit counts dialed and accepted Sessions together.
 A requester can make a node read and send a Profile, so the frame and the concurrent Session limits bound the work.
 The bounds are per Session and per node, and the handshake deadlines of [session.md](./session.md#51-decided) bound the cost of a Session that never completes.
 
@@ -142,13 +146,14 @@ ProfileExchanger gets its own use beside NodeFinder and FileExchanger.
 **Rationale**
 The frame limit, deadlines, and failure rules differ from both other uses, and mixing them in one use would make the limits the loosest of the three.
 
-#### One Profile per 1 MiB frame
+#### One Profile per frame
 
 **Decision**
-A Profile is limited to 1 MiB and a response carries one Profile.
+A Profile is limited to 1 MiB, the frame limit is 1 MiB plus 256 bytes, and a response carries one Profile.
 
 **Rationale**
-A valid Profile always fits one frame, and a chunked transfer would add an allocation bound and a consistency problem without a current need.
+The envelope of the response and the message tags need room beside the body, so a Profile at the limit still fits one frame.
+A chunked transfer would add an allocation bound and a consistency problem without a current need.
 
 **Rejected**
 Chunked transfer was considered and rejected because the Profile limits keep a body inside one frame, and the message and FileRef lists have their own bounds.
@@ -164,6 +169,20 @@ Availability comes from the owner and from the locations the lookup returns.
 
 **Rejected**
 A caching relay was considered and rejected because it needs a freshness rule for the cache and a way to stop an old snapshot from circulating.
+
+#### Fetched Profiles are stored apart from owned Profiles
+
+**Decision**
+A fetched body is stored in `state_dir/profile/sqlite.db` in a fetched table, separate from the `profiles` table of owned Profiles.
+It is never advertised or served.
+
+**Rationale**
+The owned table requires a key and an active flag, and startup fails on an owned body without a key.
+A fetched body has no key and must not take part in activation.
+Keeping the tables apart makes accidentally serving a fetched body impossible by construction.
+
+**Rejected**
+A single table with an `owned` flag was considered and rejected because every query would need the flag, and a missed filter would turn a cached body into a served one.
 
 #### Profiles are refreshed by pull
 
@@ -211,9 +230,13 @@ Decide when a real Profile cannot fit the limits of [profile.md](./profile.md#7-
 
 ## 8. Current status and remaining work
 
-The design is not implemented.
-The engine has an empty module placeholder and no protocol, and the daemon does not advertise or dial a Profile.
+The lookup, exchange, and serving parts are implemented.
+ProfileExchanger advertises the AssetKeys of the Profiles this node owns through NodeFinder, finds another node by a Profile ID, fetches the signed body over its own Session use, verifies it, and stores it in the fetched table apart from the owned Profiles.
+A serving node answers only the Profiles it owns, and a fetched or unknown ID is answered as not-found.
+A not-found answer, a bad body, a stale snapshot, and an equivocation move the fetch to the next location; a bad body does not exclude the serving node.
+The dedicated use has a 1 MiB plus 256 byte frame limit and a 30 second receive deadline, and the accept and fetch paths share a limit of 8 concurrent Sessions.
 
-The implementation order is in [design.md §6.2](../design.md#62-roadmap).
+The periodic refresh and the followed set are not implemented; they await the Web of Trust evaluation ([web-of-trust.md](./web-of-trust.md#1-about-this-document)).
+The Profile REST API and UI also remain.
 
 For confirmed bugs, see [issues.md](../issues.md).

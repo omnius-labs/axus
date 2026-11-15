@@ -1,10 +1,13 @@
 use std::{path::Path, sync::Arc};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use omnius_core_base::clock::Clock;
 
 use crate::{
-    core::profile::{key::ProfileKeyStore, repo::ProfileReplaceResult, repo::ProfileRepo},
+    core::profile::{
+        key::ProfileKeyStore,
+        repo::{FetchedProfile, FetchedProfileReplaceResult, ProfileReplaceResult, ProfileRepo},
+    },
     model::{Profile, ProfileDraft, ProfileId},
     prelude::*,
 };
@@ -88,6 +91,15 @@ impl LocalProfiles {
         self.repo.get(id).await
     }
 
+    /// Stores a fetched snapshot only when it is the same as or newer than the stored one.
+    pub async fn store_fetched(&self, profile: &Profile, fetched_time: DateTime<Utc>) -> Result<FetchedProfileReplaceResult> {
+        self.repo.replace_fetched_if_newer(profile, fetched_time).await
+    }
+
+    pub async fn fetched(&self, id: &ProfileId) -> Result<Option<FetchedProfile>> {
+        self.repo.get_fetched(id).await
+    }
+
     pub async fn active(&self) -> Result<Option<Profile>> {
         self.repo.active().await
     }
@@ -130,11 +142,12 @@ mod tests {
 
     use chrono::DateTime;
     use omnius_core_base::clock::{Clock as _, FakeClockUtc};
+    use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
     use testresult::TestResult;
 
-    use super::LocalProfiles;
+    use super::{FetchedProfileReplaceResult, LocalProfiles};
     use crate::{
-        model::{ProfileDraft, ProfileId},
+        model::{Profile, ProfileDraft, ProfileId},
         prelude::*,
     };
 
@@ -320,6 +333,26 @@ mod tests {
         let service = open(dir.path(), &clock).await?;
 
         assert!(service.activate(&ProfileId::new("Missing", b"missing")?).await.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_profiles_a_fetched_profile_is_not_owned_and_survives_reopen() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let clock = Arc::new(FakeClockUtc::new(at(1_000_000)));
+        let service = open(dir.path(), &clock).await?;
+        let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "Remote")?;
+        let fetched = Profile::sign(&signer, 1, clock.now(), ProfileDraft::default())?;
+
+        assert_eq!(service.store_fetched(&fetched, clock.now()).await?, FetchedProfileReplaceResult::Replaced);
+        assert_eq!(service.get(fetched.id()).await?, None);
+        assert!(!service.list().await?.contains(&fetched));
+        assert_eq!(service.fetched(fetched.id()).await?.unwrap().profile, fetched);
+
+        drop(service);
+        let reopened = open(dir.path(), &clock).await?;
+        assert_eq!(reopened.get(fetched.id()).await?, None);
+        assert_eq!(reopened.fetched(fetched.id()).await?.unwrap().profile, fetched);
         Ok(())
     }
 }

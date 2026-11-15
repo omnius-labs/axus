@@ -105,7 +105,7 @@ A design where a few workers process handshakes serially is not adopted because 
 
 **Decision**
 Frames during the handshake are at most 16 KiB in both directions.
-After use selection, the limit switches to 256 KiB for NodeFinder, 1 MiB for ProfileExchanger, and, for FileExchanger, the maximum block length of 1 MiB plus the hash and tag carried in the block message.
+After use selection, the limit switches to 256 KiB for NodeFinder, the maximum encoded Profile of 1 MiB plus 256 bytes for ProfileExchanger, and, for FileExchanger, the maximum block length of 1 MiB plus the hash and tag carried in the block message.
 A Session whose received frame exceeds the limit is closed.
 The post-establishment receive deadline of FileExchanger is the source of [file-transfer.md](./file-transfer.md#53-state-messages-and-session-lifetime).
 
@@ -240,5 +240,6 @@ The wire decode of NodeMessage and NodeProfile checks the element count limits b
 Tests confirm the decode-time rejection of the profile and AssetKey counts and a Session closed by a frame over the limit.
 NodeFinder's frame limit is 256 KiB, confirmed by tests sending and receiving at exactly the limit and rejecting over-limit frames.
 FileExchanger starts with the daemon, advertises the root hashes of committed files, and dials the nodes that provide a subscribed root hash; the REST API starts publishing and subscribing.
+ProfileExchanger selects its own use, applies the 1 MiB plus 256 byte frame limit, and a test confirms that the use is routed after startup.
 
 For confirmed bugs, see [issues.md](../issues.md).

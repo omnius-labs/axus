@@ -67,6 +67,7 @@ The map of the document family is held by [design.md](./design.md#11-division-of
 | trust list | profile | `Profile::trusted` | - | Profile IDs the Profile trusts | allow list |
 | block list | profile | `Profile::blocked` | - | Profile IDs the Profile blocks | deny list, distrust list |
 | ProfileExchanger | profile-exchanger | `ProfileExchanger` | - | Component that looks up, exchanges, and refreshes Profiles | MemoExchanger, memo |
+| fetched Profile | profile-exchanger | - | - | Signed Profile received from another node and stored for evaluation; never advertised or served by this node | cached Profile, remote Profile |
 | Web of Trust | web-of-trust | - | - | Local evaluation of the trust and block lists over signed Profiles | WoT |
 | F2F | web-of-trust | - | - | Network that admits only mutually trusted peers at connection time; not adopted | friend-to-friend |
 | rpf | rocketpack | `.rpf` | `.rpf` file | Schema file defining RocketPack types and field numbers | Rust type definition |

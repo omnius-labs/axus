@@ -9,13 +9,14 @@ use omnius_core_omnikit::model::omni_addr::OmniAddr;
 use crate::{
     base::connection::FramedStream,
     model::NodeProfile,
-    protocol::{file, node},
+    protocol::{file, node, profile},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SessionType {
     NodeFinder,
     FileExchanger,
+    ProfileExchanger,
 }
 
 impl SessionType {
@@ -23,6 +24,7 @@ impl SessionType {
         match self {
             Self::NodeFinder => node::MAX_FRAME_LENGTH,
             Self::FileExchanger => file::MAX_FRAME_LENGTH,
+            Self::ProfileExchanger => profile::MAX_FRAME_LENGTH,
         }
     }
 }

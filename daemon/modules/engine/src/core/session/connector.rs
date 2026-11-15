@@ -85,6 +85,7 @@ impl SessionConnector {
                 request_type: match typ {
                     SessionType::NodeFinder => V1RequestType::NodeFinder,
                     SessionType::FileExchanger => V1RequestType::FileExchanger,
+                    SessionType::ProfileExchanger => V1RequestType::ProfileExchanger,
                 },
             };
             stream.sender.lock().await.send_message_with::<V1RequestMessageCodec>(&send_session_request_message).await?;

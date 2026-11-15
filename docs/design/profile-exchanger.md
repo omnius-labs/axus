@@ -18,6 +18,7 @@ This document assumes the vocabulary of [terms.md](../terms.md). Term definition
 | [session.md](./session.md#2-responsibilities-and-boundaries) | Session establishment and the use selection |
 | [trust-security.md](./trust-security.md#3-division-of-guarantees-and-threats) | What the Session authenticates and the frame layer |
 | [file-transfer.md](./file-transfer.md#2-responsibilities-and-boundaries) | Publishing and subscribing to the files a FileRef names |
+| [profile_exchanger.rs](../../daemon/modules/engine/src/core/negotiator/profile/profile_exchanger.rs) | ProfileExchanger implementation |
 | [terms.md](../terms.md) | Term definitions |
 
 ### 1.2 Tenses used in this document

@@ -18,6 +18,7 @@ This document assumes the vocabulary of [terms.md](../terms.md). Term definition
 | [file-transfer.md](./file-transfer.md#2-responsibilities-and-boundaries) | Publishing and subscribing to the files a FileRef names |
 | [trust-security.md](./trust-security.md#2-responsibilities-and-boundaries) | What the Session authenticates and the identity of the node |
 | [daemon-api.md](./daemon-api.md#1-about-this-document) | The REST resources and their authentication |
+| [profile_store.rs](../../daemon/modules/engine/src/core/negotiator/profile/profile_store.rs) | Storage of owned and fetched Profiles, the owned Profiles' keys, and the update rules |
 | [terms.md](../terms.md) | Term definitions |
 
 ### 1.2 Tenses used in this document
@@ -317,9 +318,10 @@ Decide when the owner needs to remove a local Profile.
 ## 9. Current status and remaining work
 
 The Profile foundation is implemented: the Profile ID, the signed body, the key store, the SQLite repository, the update rules, and startup activation.
-The engine still has only a placeholder for the Profile exchange, and the client has no Profile screen.
-Appending and removing FileRefs at a publish commit, the ProfileExchanger, the Web of Trust, and the Profile REST API and UI remain.
+ProfileExchanger now looks a Profile up by ID, fetches and verifies the body, serves the Profiles this node owns, and stores fetched bodies apart from owned Profiles.
+The periodic refresh and followed set, appending and removing FileRefs at a publish commit, the Web of Trust, and the Profile REST API and UI remain.
+The client has no Profile screen.
 
-The next work is [profile-exchanger.md](./profile-exchanger.md#1-about-this-document), followed by [web-of-trust.md](./web-of-trust.md#1-about-this-document), in the order of [design.md §6.2](../design.md#62-roadmap).
+The next work is [web-of-trust.md](./web-of-trust.md#1-about-this-document), in the order of [design.md §6.2](../design.md#62-roadmap).
 
 For confirmed bugs, see [issues.md](../issues.md).

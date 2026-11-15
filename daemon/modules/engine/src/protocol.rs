@@ -2,6 +2,7 @@ mod encoded_size;
 pub(crate) mod file;
 pub(crate) mod node;
 mod node_profile;
+pub(crate) mod profile;
 pub(crate) mod session;
 pub(crate) mod uri;
 

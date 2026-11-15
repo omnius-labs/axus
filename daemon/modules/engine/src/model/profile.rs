@@ -236,7 +236,7 @@ impl Profile {
         Ok(message)
     }
 
-    fn to_wire(&self) -> wire::Profile {
+    pub(crate) fn to_wire(&self) -> wire::Profile {
         wire::Profile {
             id: self.id.to_string(),
             public_key: self.public_key.clone(),

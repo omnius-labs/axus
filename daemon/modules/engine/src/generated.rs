@@ -12,6 +12,9 @@ pub mod axus {
     pub mod node {
         include!("generated/axus/node/node.rs");
     }
+    pub mod profile {
+        include!("generated/axus/profile/profile.rs");
+    }
     pub mod session {
         include!("generated/axus/session/session.rs");
     }

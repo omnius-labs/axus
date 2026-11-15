@@ -246,6 +246,17 @@ impl NodeFinder {
 
         Ok(locations)
     }
+
+    /// Looks the AssetKey up in the network, asking the closest known nodes when the cache has none.
+    pub async fn lookup(&self, key: &AssetKey) -> Result<Vec<Arc<NodeProfile>>> {
+        let task_lookup = self
+            .task_lookup
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| Error::new(ErrorKind::UnexpectedError).with_message("the lookup task is not running"))?;
+        task_lookup.lookup(key).await
+    }
 }
 
 #[async_trait]

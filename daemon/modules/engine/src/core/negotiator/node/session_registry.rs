@@ -197,6 +197,7 @@ mod tests {
             handshake_type,
             cert: signer.sign(b"test")?,
             stream: FramedStream::new(reader, writer, SessionType::NodeFinder.max_frame_length()),
+            _accept_permit: None,
         };
 
         Ok(Arc::new(SessionStatus::new(session)))

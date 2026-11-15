@@ -53,8 +53,8 @@ The trust in an author is evaluated from the signed Profiles ([web-of-trust.md](
 NodeFinder relay can amplify information, so TTL, count, connection count, and message-size limits and the handshake and receive deadlines are enforced at protocol input boundaries.
 The handshake from Session authentication through use selection spans 10 seconds in total after the TCP connection, and the accepting side runs at most 64 concurrently.
 Connections over the limit are closed without reading or writing, and connections past the deadline are also closed.
-The frame limits are 16 KiB during the handshake, 256 KiB for NodeFinder after use selection, 1 MiB for ProfileExchanger, and a value based on FileExchanger's maximum block length of 1 MiB; a Session whose reception exceeds the limit is closed.
-The ProfileExchanger limit matches the maximum encoded Profile ([profile.md](./profile.md#7-limits)).
+The frame limits are 16 KiB during the handshake, 256 KiB for NodeFinder after use selection, the maximum encoded Profile of 1 MiB plus 256 bytes for ProfileExchanger, and a value based on FileExchanger's maximum block length of 1 MiB; a Session whose reception exceeds the limit is closed.
+The ProfileExchanger limit is the maximum encoded Profile plus the response envelope ([profile.md](./profile.md#7-limits), [profile-exchanger.md](./profile-exchanger.md#42-frame-and-messages)).
 These are constraints for curbing the receiving side's resource consumption by pre- and post-authentication peers, and the details and rationale are the source of [session.md](./session.md#51-decided).
 NodeFinder closes a Session that receives nothing, both during the Hello/Profile exchange and after establishment, for 3 times the communication cycle.
 With the default communication cycle of 20 seconds the receive deadline is 60 seconds, and the peer sends a Status every cycle even when it has nothing else to send.

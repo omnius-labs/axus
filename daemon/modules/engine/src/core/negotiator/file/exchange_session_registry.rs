@@ -123,6 +123,7 @@ mod tests {
                 handshake_type,
                 cert: signer.sign(b"test").unwrap(),
                 stream: FramedStream::new(reader, writer, SessionType::FileExchanger.max_frame_length()),
+                _accept_permit: None,
             },
         ))
     }

@@ -24,6 +24,26 @@ pub(crate) enum ProfileReplaceResult {
     Equivocation,
 }
 
+/// A signed Profile received from another node and the time it was fetched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FetchedProfile {
+    pub profile: Profile,
+    pub fetched_time: DateTime<Utc>,
+}
+
+/// The result of storing a fetched snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FetchedProfileReplaceResult {
+    /// The fetched snapshot replaced the stored one.
+    Replaced,
+    /// The same snapshot was fetched again and its fetch time was updated.
+    Unchanged,
+    /// The fetched snapshot is older than the stored one and was not stored.
+    Stale,
+    /// The fetched snapshot has the same update time and version but another body.
+    Equivocation,
+}
+
 /// Stores signed Profile bodies and the active flag in SQLite.
 pub(crate) struct ProfileRepo {
     db: Arc<SqlitePool>,
@@ -53,9 +73,10 @@ impl ProfileRepo {
     }
 
     async fn migrate(db: &SqlitePool) -> Result<()> {
-        let requests = vec![MigrationRequest {
-            name: "2026-11-14_init".to_string(),
-            queries: r#"
+        let requests = vec![
+            MigrationRequest {
+                name: "2026-11-14_init".to_string(),
+                queries: r#"
 CREATE TABLE IF NOT EXISTS profiles (
     id TEXT NOT NULL PRIMARY KEY,
     value BLOB NOT NULL,
@@ -66,8 +87,22 @@ CREATE TABLE IF NOT EXISTS profiles (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS unique_index_active_profile ON profiles (active) WHERE active = 1;
 "#
-            .to_string(),
-        }];
+                .to_string(),
+            },
+            MigrationRequest {
+                name: "2026-11-15_fetched_profiles".to_string(),
+                queries: r#"
+CREATE TABLE IF NOT EXISTS fetched_profiles (
+    id TEXT NOT NULL PRIMARY KEY,
+    value BLOB NOT NULL,
+    version INTEGER NOT NULL,
+    updated_time INTEGER NOT NULL,
+    fetched_time INTEGER NOT NULL
+);
+"#
+                .to_string(),
+            },
+        ];
 
         SqliteMigrator::migrate(db, requests).await?;
 
@@ -256,6 +291,122 @@ UPDATE profiles
 
         Ok(result)
     }
+
+    /// Reads a fetched Profile and the time it was fetched.
+    pub async fn get_fetched(&self, id: &ProfileId) -> Result<Option<FetchedProfile>> {
+        let value: Option<(Vec<u8>, i64)> = sqlx::query_as(
+            r#"
+SELECT value, fetched_time
+    FROM fetched_profiles
+    WHERE id = ?
+"#,
+        )
+        .bind(id.as_str())
+        .fetch_optional(self.db.as_ref())
+        .await?;
+
+        value
+            .map(|(value, fetched_time)| {
+                Ok(FetchedProfile {
+                    profile: Profile::import(&value)?,
+                    fetched_time: DateTime::from_timestamp(fetched_time, 0).ok_or_else(|| Error::new(ErrorKind::UnexpectedError).with_message("invalid fetched profile time"))?,
+                })
+            })
+            .transpose()
+    }
+
+    /// Stores a fetched snapshot only when it is the same as or newer than the stored one.
+    pub async fn replace_fetched_if_newer(&self, profile: &Profile, fetched_time: DateTime<Utc>) -> Result<FetchedProfileReplaceResult> {
+        let now = self.clock.now();
+        if !profile.is_updated_within_skew(now) {
+            return Err(Error::new(ErrorKind::InvalidFormat).with_message("profile update time is too far in the future"));
+        }
+        let value = profile.export()?;
+        let version = i64::try_from(profile.version())?;
+
+        let mut tx = self.db.begin_with("BEGIN IMMEDIATE").await?;
+        let current: Option<(Vec<u8>, i64, i64)> = sqlx::query_as(
+            r#"
+SELECT value, version, updated_time
+    FROM fetched_profiles
+    WHERE id = ?
+"#,
+        )
+        .bind(profile.id().as_str())
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let result = match current {
+            None => {
+                sqlx::query(
+                    r#"
+INSERT INTO fetched_profiles (id, value, version, updated_time, fetched_time)
+    VALUES (?, ?, ?, ?, ?)
+"#,
+                )
+                .bind(profile.id().as_str())
+                .bind(&value)
+                .bind(version)
+                .bind(profile.updated_time())
+                .bind(fetched_time.timestamp())
+                .execute(&mut *tx)
+                .await?;
+                FetchedProfileReplaceResult::Replaced
+            }
+            Some((current_value, current_version, current_updated_time)) => {
+                let newer = profile.updated_time() > current_updated_time || (profile.updated_time() == current_updated_time && version > current_version);
+                if newer {
+                    sqlx::query(
+                        r#"
+UPDATE fetched_profiles
+    SET value = ?, version = ?, updated_time = ?, fetched_time = ?
+    WHERE id = ?
+"#,
+                    )
+                    .bind(&value)
+                    .bind(version)
+                    .bind(profile.updated_time())
+                    .bind(fetched_time.timestamp())
+                    .bind(profile.id().as_str())
+                    .execute(&mut *tx)
+                    .await?;
+                    FetchedProfileReplaceResult::Replaced
+                } else if profile.updated_time() == current_updated_time && version == current_version {
+                    if value == current_value {
+                        sqlx::query(
+                            r#"
+UPDATE fetched_profiles
+    SET fetched_time = ?
+    WHERE id = ?
+"#,
+                        )
+                        .bind(fetched_time.timestamp())
+                        .bind(profile.id().as_str())
+                        .execute(&mut *tx)
+                        .await?;
+                        FetchedProfileReplaceResult::Unchanged
+                    } else {
+                        FetchedProfileReplaceResult::Equivocation
+                    }
+                } else {
+                    FetchedProfileReplaceResult::Stale
+                }
+            }
+        };
+
+        tx.commit().await?;
+
+        if result == FetchedProfileReplaceResult::Equivocation {
+            warn!(
+                profile_id = %profile.id(),
+                updated_time = profile.updated_time(),
+                version = profile.version(),
+                "ignoring an equivocating fetched profile snapshot; the first body is kept"
+            );
+        }
+
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -265,7 +416,7 @@ mod tests {
     use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
     use testresult::TestResult;
 
-    use super::{ProfileReplaceResult, ProfileRepo};
+    use super::{FetchedProfileReplaceResult, ProfileReplaceResult, ProfileRepo};
     use crate::{
         model::{Profile, ProfileDraft, ProfileId},
         prelude::*,
@@ -451,6 +602,106 @@ mod tests {
 
         assert!(repo.get(profile.id()).await.is_err());
         assert!(repo.list().await.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn profile_repo_a_fetched_profile_survives_a_restart() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (repo, _) = create_repo(dir.path()).await?;
+        let profile = profile(&signer("Remote"), 1, 1_000_000);
+        assert_eq!(repo.replace_fetched_if_newer(&profile, at(1_000_010)).await?, FetchedProfileReplaceResult::Replaced);
+
+        let (repo, _) = create_repo(dir.path()).await?;
+        let fetched = repo.get_fetched(profile.id()).await?.expect("the fetched profile is stored");
+        assert_eq!(fetched.profile, profile);
+        assert_eq!(fetched.fetched_time, at(1_000_010));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn profile_repo_a_newer_fetched_snapshot_replaces_the_stored_one_and_its_time() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (repo, _) = create_repo(dir.path()).await?;
+        let signer = signer("Remote");
+        let first = profile(&signer, 1, 1_000_000);
+        let second = profile(&signer, 2, 1_000_001);
+        repo.replace_fetched_if_newer(&first, at(1_000_010)).await?;
+
+        assert_eq!(repo.replace_fetched_if_newer(&second, at(1_000_020)).await?, FetchedProfileReplaceResult::Replaced);
+        let fetched = repo.get_fetched(first.id()).await?.expect("the fetched profile is stored");
+        assert_eq!(fetched.profile, second);
+        assert_eq!(fetched.fetched_time, at(1_000_020));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn profile_repo_the_same_fetched_body_updates_only_the_fetch_time() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (repo, _) = create_repo(dir.path()).await?;
+        let profile = profile(&signer("Remote"), 1, 1_000_000);
+        repo.replace_fetched_if_newer(&profile, at(1_000_010)).await?;
+
+        assert_eq!(repo.replace_fetched_if_newer(&profile, at(1_000_020)).await?, FetchedProfileReplaceResult::Unchanged);
+        let fetched = repo.get_fetched(profile.id()).await?.expect("the fetched profile is stored");
+        assert_eq!(fetched.profile, profile);
+        assert_eq!(fetched.fetched_time, at(1_000_020));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn profile_repo_an_older_fetched_snapshot_is_stale() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (repo, _) = create_repo(dir.path()).await?;
+        let signer = signer("Remote");
+        let older = profile(&signer, 1, 1_000_000);
+        let newer = profile(&signer, 2, 1_000_001);
+        repo.replace_fetched_if_newer(&newer, at(1_000_010)).await?;
+
+        assert_eq!(repo.replace_fetched_if_newer(&older, at(1_000_020)).await?, FetchedProfileReplaceResult::Stale);
+        let fetched = repo.get_fetched(older.id()).await?.expect("the fetched profile is stored");
+        assert_eq!(fetched.profile, newer);
+        assert_eq!(fetched.fetched_time, at(1_000_010));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn profile_repo_an_equivocating_fetched_snapshot_keeps_the_first_body() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (repo, _) = create_repo(dir.path()).await?;
+        let signer = signer("Remote");
+        let first = profile(&signer, 1, 1_000_000);
+        let other = ProfileId::new("Other", b"other-public-key")?;
+        let second = Profile::sign(
+            &signer,
+            1,
+            at(1_000_000),
+            ProfileDraft {
+                trusted: vec![other],
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(first.id(), second.id());
+        assert_ne!(first, second);
+        repo.replace_fetched_if_newer(&first, at(1_000_010)).await?;
+
+        assert_eq!(repo.replace_fetched_if_newer(&second, at(1_000_020)).await?, FetchedProfileReplaceResult::Equivocation);
+        let fetched = repo.get_fetched(first.id()).await?.expect("the fetched profile is stored");
+        assert_eq!(fetched.profile, first);
+        assert_eq!(fetched.fetched_time, at(1_000_010));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn profile_repo_a_fetched_profile_is_not_owned_or_active() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (repo, _) = create_repo(dir.path()).await?;
+        let fetched = profile(&signer("Remote"), 1, 1_000_000);
+        repo.replace_fetched_if_newer(&fetched, at(1_000_010)).await?;
+
+        assert_eq!(repo.get(fetched.id()).await?, None);
+        assert_eq!(repo.list().await?, Vec::new());
+        assert_eq!(repo.active().await?, None);
         Ok(())
     }
 }

@@ -1,0 +1,20 @@
+version 1;
+package axus::profile;
+
+use axus::model::Profile;
+
+/// One request and one answer for the signed body of a Profile.
+#[rust::derive(Eq)]
+enum ExchangeMessage {
+  @1 Request {
+    @1 profile_id: string[..=MAX_PROFILE_ID_LENGTH];
+  };
+  @2 Response {
+    @1 profile: Profile;
+  };
+  @3 NotFound {
+    @1 profile_id: string[..=MAX_PROFILE_ID_LENGTH];
+  };
+}
+
+const MAX_PROFILE_ID_LENGTH: u32 = 80;

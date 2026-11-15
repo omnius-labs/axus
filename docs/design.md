@@ -162,7 +162,8 @@ Overall, the daemon startup path owns down to FileExchanger and connects to othe
 From file publishing to decoding, including P2P transfer between daemons over loopback TCP, is confirmed by engine-internal tests, and the browser flow confirms the same path through the REST API.
 The browser client in `ui-web/` covers the setup, login, publication, and subscription screens, and a Playwright flow tests it against two daemons.
 The Profile foundation is implemented.
-The ProfileExchanger and the Web of Trust remain, along with publication integration and the Profile API and UI; their status is in their own documents.
+ProfileExchanger lookup, exchange, serving, and on-demand fetch are implemented; its periodic refresh and followed set, the Web of Trust, publication integration, and the Profile API and UI remain.
+Their status is in their own documents.
 
 ### 6.2 Roadmap
 
@@ -175,6 +176,6 @@ The implementation order follows the data: a Profile must exist before it can be
 | 2 | Implement ProfileExchanger lookup, exchange, and refresh | 1 |
 | 3 | Implement the Web of Trust evaluation and the trust display | 1, 2 |
 
-Item 1 is implemented as the Profile foundation. Appending and removing FileRefs at a publish commit, the ProfileExchanger, the Web of Trust, and the Profile API and UI remain.
+Item 1 is implemented as the Profile foundation. Item 2 is implemented for lookup, exchange, serving, and on-demand fetch; periodic refresh and the followed set remain. Appending and removing FileRefs at a publish commit, the Web of Trust, and the Profile API and UI remain.
 
 For confirmed bugs and fix directions, see [issues.md](./issues.md).

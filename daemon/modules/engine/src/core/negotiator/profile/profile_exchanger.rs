@@ -61,7 +61,7 @@ impl Default for ProfileExchangerIntervals {
 
 /// Finds and fetches the signed body of a Profile by its ID, and serves the Profiles this node owns.
 pub struct ProfileExchanger {
-    local_profiles: Arc<LocalProfiles>,
+    profile_store: Arc<ProfileStore>,
     session_connector: Arc<SessionConnector>,
     location_finder: Arc<dyn ProfileLocationFinder>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
@@ -75,7 +75,7 @@ impl ProfileExchanger {
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        local_profiles: Arc<LocalProfiles>,
+        profile_store: Arc<ProfileStore>,
         session_connector: Arc<SessionConnector>,
         session_accepter: Arc<SessionAccepter>,
         location_finder: Arc<dyn ProfileLocationFinder>,
@@ -84,7 +84,7 @@ impl ProfileExchanger {
         intervals: ProfileExchangerIntervals,
     ) -> Result<Self> {
         Self::new_with_slots(
-            local_profiles,
+            profile_store,
             session_connector,
             session_accepter,
             location_finder,
@@ -98,7 +98,7 @@ impl ProfileExchanger {
     /// Uses the same semaphore as the SessionAccepter, so the accept and fetch paths share one limit.
     #[allow(clippy::too_many_arguments)]
     pub async fn new_with_slots(
-        local_profiles: Arc<LocalProfiles>,
+        profile_store: Arc<ProfileStore>,
         session_connector: Arc<SessionConnector>,
         session_accepter: Arc<SessionAccepter>,
         location_finder: Arc<dyn ProfileLocationFinder>,
@@ -107,9 +107,9 @@ impl ProfileExchanger {
         intervals: ProfileExchangerIntervals,
     ) -> Result<Self> {
         let cancellation_token = CancellationToken::new();
-        let task_accepter = TaskAccepter::new(local_profiles.clone(), session_accepter, intervals.clone(), cancellation_token.clone());
+        let task_accepter = TaskAccepter::new(profile_store.clone(), session_accepter, intervals.clone(), cancellation_token.clone());
         let exchanger = Self {
-            local_profiles,
+            profile_store,
             session_connector,
             location_finder,
             clock,
@@ -133,17 +133,17 @@ impl ProfileExchanger {
 
     /// Replaces the Profile AssetKeys advertised by push with the Profiles this node owns.
     pub async fn refresh_provided(&self) -> Result<()> {
-        let asset_keys = self.local_profiles.list().await?.into_iter().map(|profile| AssetKey::profile(profile.id())).collect();
+        let asset_keys = self.profile_store.list().await?.into_iter().map(|profile| AssetKey::profile(profile.id())).collect();
         self.location_finder.set_provided(asset_keys);
         Ok(())
     }
 
     /// Reads a Profile this node owns or has fetched, without network access.
     pub async fn stored(&self, id: &ProfileId) -> Result<Option<Profile>> {
-        if let Some(profile) = self.local_profiles.get(id).await? {
+        if let Some(profile) = self.profile_store.get(id).await? {
             return Ok(Some(profile));
         }
-        Ok(self.local_profiles.fetched(id).await?.map(|fetched| fetched.profile))
+        Ok(self.profile_store.fetched(id).await?.map(|fetched| fetched.profile))
     }
 
     /// Fetches a Profile by ID from the locations NodeFinder returns.
@@ -151,7 +151,7 @@ impl ProfileExchanger {
     /// An owned Profile is returned directly. NotFound, a bad body, and a stale or equivocating
     /// snapshot move to the next location; the serving node is not excluded for a bad body.
     pub async fn fetch(&self, id: &ProfileId) -> Result<Profile> {
-        if let Some(profile) = self.local_profiles.get(id).await? {
+        if let Some(profile) = self.profile_store.get(id).await? {
             return Ok(profile);
         }
 
@@ -214,7 +214,7 @@ impl ProfileExchanger {
             return Err(Error::new(ErrorKind::InvalidFormat).with_message("the response carries another profile id"));
         }
 
-        match self.local_profiles.store_fetched(&profile, self.clock.now()).await? {
+        match self.profile_store.store_fetched(&profile, self.clock.now()).await? {
             FetchedProfileReplaceResult::Replaced | FetchedProfileReplaceResult::Unchanged => Ok(profile),
             FetchedProfileReplaceResult::Stale => Err(Error::new(ErrorKind::Reject).with_message("the fetched profile is older than the stored one")),
             FetchedProfileReplaceResult::Equivocation => Err(Error::new(ErrorKind::Reject).with_message("the fetched profile equivocates")),
@@ -382,7 +382,7 @@ mod tests {
     struct TestNode {
         exchanger: ProfileExchanger,
         endpoint: Endpoint,
-        local_profiles: Arc<LocalProfiles>,
+        profile_store: Arc<ProfileStore>,
         locations: Arc<FixedProfileLocationFinder>,
         dir: tempfile::TempDir,
     }
@@ -396,10 +396,10 @@ mod tests {
             let dir = tempfile::tempdir()?;
             let slots = ProfileExchangerOption::default().session_slots();
             let endpoint = Endpoint::with_slots(dir.path(), Some(slots.clone())).await?;
-            let local_profiles = Arc::new(LocalProfiles::open(&dir.path().join("profile"), endpoint.clock.clone()).await?);
+            let profile_store = Arc::new(ProfileStore::open(&dir.path().join("profile"), endpoint.clock.clone()).await?);
             let locations = Arc::new(FixedProfileLocationFinder::new(endpoint.profile.id().to_vec()));
             let exchanger = ProfileExchanger::new_with_slots(
-                local_profiles.clone(),
+                profile_store.clone(),
                 endpoint.session_connector.clone(),
                 endpoint.session_accepter.clone(),
                 locations.clone(),
@@ -412,14 +412,14 @@ mod tests {
             Ok(Self {
                 exchanger,
                 endpoint,
-                local_profiles,
+                profile_store,
                 locations,
                 dir,
             })
         }
 
         async fn active(&self) -> TestResult<Profile> {
-            Ok(self.local_profiles.active().await?.expect("a fresh node has an active profile"))
+            Ok(self.profile_store.active().await?.expect("a fresh node has an active profile"))
         }
 
         fn known(&self, peers: &[&NodeProfile]) {
@@ -428,7 +428,7 @@ mod tests {
 
         async fn shutdown(&self) {
             self.exchanger.shutdown().await;
-            self.local_profiles.shutdown().await;
+            self.profile_store.shutdown().await;
         }
     }
 
@@ -436,12 +436,12 @@ mod tests {
     async fn profile_exchanger_startup_failure_leaves_no_worker() -> TestResult {
         let dir = tempfile::tempdir()?;
         let endpoint = Endpoint::new(dir.path()).await?;
-        let local_profiles = Arc::new(LocalProfiles::open(&dir.path().join("profile"), endpoint.clock.clone()).await?);
-        local_profiles.shutdown().await;
+        let profile_store = Arc::new(ProfileStore::open(&dir.path().join("profile"), endpoint.clock.clone()).await?);
+        profile_store.shutdown().await;
         let locations = Arc::new(FixedProfileLocationFinder::new(endpoint.profile.id().to_vec()));
 
         let result = ProfileExchanger::new(
-            local_profiles,
+            profile_store,
             endpoint.session_connector.clone(),
             endpoint.session_accepter.clone(),
             locations,
@@ -478,7 +478,7 @@ mod tests {
 
         let profile_dir = client.dir.path().join("profile");
         client.shutdown().await;
-        let reopened = LocalProfiles::open(&profile_dir, Arc::new(ClockUtc)).await?;
+        let reopened = ProfileStore::open(&profile_dir, Arc::new(ClockUtc)).await?;
         assert_eq!(reopened.get(profile.id()).await?, None);
         assert_eq!(reopened.fetched(profile.id()).await?.expect("the fetched profile is stored").profile, profile);
         reopened.shutdown().await;
@@ -534,8 +534,8 @@ mod tests {
     async fn profile_exchanger_tries_the_next_location_after_a_bad_body() -> TestResult {
         let dir = tempfile::tempdir()?;
         let bad = Endpoint::new(dir.path()).await?;
-        let bad_local = Arc::new(LocalProfiles::open(&dir.path().join("profile"), bad.clock.clone()).await?);
-        let bad_profile = bad_local.active().await?.expect("a fresh node has an active profile");
+        let bad_store = Arc::new(ProfileStore::open(&dir.path().join("profile"), bad.clock.clone()).await?);
+        let bad_profile = bad_store.active().await?.expect("a fresh node has an active profile");
         let honest = TestNode::new().await?;
         let client = TestNode::new().await?;
         let honest_profile = honest.active().await?;
@@ -559,7 +559,7 @@ mod tests {
         let fetched = client.exchanger.fetch(honest_profile.id()).await?;
         assert_eq!(fetched, honest_profile);
         bad_server.await??;
-        bad_local.shutdown().await;
+        bad_store.shutdown().await;
 
         client.shutdown().await;
         honest.shutdown().await;
@@ -601,7 +601,7 @@ mod tests {
         let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "Remote")?;
         let older = Profile::sign(&signer, 1, at(1_000_000), ProfileDraft::default())?;
         let newer = Profile::sign(&signer, 2, at(1_000_001), ProfileDraft::default())?;
-        client.local_profiles.store_fetched(&newer, at(1_000_002)).await?;
+        client.profile_store.store_fetched(&newer, at(1_000_002)).await?;
 
         let bad_server = bad.spawn_profile_server(older.to_wire());
         let good_server = good.spawn_profile_server(newer.to_wire());
@@ -636,7 +636,7 @@ mod tests {
             },
         )?;
         assert_ne!(first, second);
-        client.local_profiles.store_fetched(&first, at(1_000_002)).await?;
+        client.profile_store.store_fetched(&first, at(1_000_002)).await?;
 
         let bad_server = bad.spawn_profile_server(second.to_wire());
         let good_server = good.spawn_profile_server(first.to_wire());
@@ -717,7 +717,7 @@ mod tests {
         let endpoint = Endpoint::new(dir.path()).await?;
         let client_dir = tempfile::tempdir()?;
         let client_endpoint = Endpoint::new(client_dir.path()).await?;
-        let server_profiles = Arc::new(LocalProfiles::open(&dir.path().join("profile"), endpoint.clock.clone()).await?);
+        let server_profiles = Arc::new(ProfileStore::open(&dir.path().join("profile"), endpoint.clock.clone()).await?);
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
         let accepter = endpoint.session_accepter.clone();
@@ -757,7 +757,7 @@ mod tests {
             })
         };
 
-        let client_profiles = Arc::new(LocalProfiles::open(&client_dir.path().join("profile"), client_endpoint.clock.clone()).await?);
+        let client_profiles = Arc::new(ProfileStore::open(&client_dir.path().join("profile"), client_endpoint.clock.clone()).await?);
         let locations = Arc::new(FixedProfileLocationFinder::new(client_endpoint.profile.id().to_vec()));
         locations.set_locations(vec![endpoint.profile.clone()]);
         let exchanger = ProfileExchanger::new(

@@ -219,7 +219,7 @@ Both the processing order and the syncing prevent finalized metadata from refere
 
 ### 4.7 Migration
 
-[repo.rs (publisher)](../../daemon/modules/engine/src/core/negotiator/file/file_publisher/repo.rs), [repo.rs (subscriber)](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/repo.rs), [repo.rs (profile)](../../daemon/modules/engine/src/core/negotiator/profile/local_profiles/repo.rs), and [node_finder_repo.rs](../../daemon/modules/engine/src/core/negotiator/node/node_finder_repo.rs) apply named MigrationRequest objects in order.
+[repo.rs (publisher)](../../daemon/modules/engine/src/core/negotiator/file/file_publisher/repo.rs), [repo.rs (subscriber)](../../daemon/modules/engine/src/core/negotiator/file/file_subscriber/repo.rs), [repo.rs (profile)](../../daemon/modules/engine/src/core/negotiator/profile/profile_store/repo.rs), and [node_finder_repo.rs](../../daemon/modules/engine/src/core/negotiator/node/node_finder_repo.rs) apply named MigrationRequest objects in order.
 A migration whose name was already applied is not run again.
 
 A migration that may be applied to a distributed state is not rewritten; progress is made with a new-named migration.

@@ -20,7 +20,7 @@ use super::*;
 
 /// Accepts the Sessions peers dialed for a Profile and runs one serve worker per Session.
 pub struct TaskAccepter {
-    local_profiles: Arc<LocalProfiles>,
+    profile_store: Arc<ProfileStore>,
     session_accepter: Arc<SessionAccepter>,
     intervals: ProfileExchangerIntervals,
     cancellation_token: tokio_util::sync::CancellationToken,
@@ -44,13 +44,13 @@ impl Shutdown for TaskAccepter {
 
 impl TaskAccepter {
     pub fn new(
-        local_profiles: Arc<LocalProfiles>,
+        profile_store: Arc<ProfileStore>,
         session_accepter: Arc<SessionAccepter>,
         intervals: ProfileExchangerIntervals,
         cancellation_token: tokio_util::sync::CancellationToken,
     ) -> Arc<Self> {
         let v = Arc::new(Self {
-            local_profiles,
+            profile_store,
             session_accepter,
             intervals,
             cancellation_token,
@@ -89,13 +89,13 @@ impl TaskAccepter {
             _ = self.cancellation_token.cancelled() => return Ok(()),
         };
 
-        let local_profiles = self.local_profiles.clone();
+        let profile_store = self.profile_store.clone();
         let receive_timeout = self.intervals.receive_timeout;
         let cancellation_token = self.cancellation_token.clone();
         let mut workers = self.join_handles.lock().await;
         workers.retain(|handle| !handle.is_finished());
         workers.push(tokio::spawn(async move {
-            let result = Self::serve_session(session, local_profiles, receive_timeout, cancellation_token).await;
+            let result = Self::serve_session(session, profile_store, receive_timeout, cancellation_token).await;
             if let Err(error) = result {
                 debug!(error_message = error.to_string(), "profile exchange serve session ended");
             }
@@ -107,7 +107,7 @@ impl TaskAccepter {
     /// Answers Requests until the peer closes, the receive deadline passes, or shutdown begins.
     async fn serve_session(
         session: crate::core::session::model::Session,
-        local_profiles: Arc<LocalProfiles>,
+        profile_store: Arc<ProfileStore>,
         receive_timeout: std::time::Duration,
         cancellation_token: tokio_util::sync::CancellationToken,
     ) -> Result<()> {
@@ -125,7 +125,7 @@ impl TaskAccepter {
                 return Err(Error::new(ErrorKind::InvalidFormat).with_message("unexpected message instead of a profile request"));
             };
             let id = ProfileId::parse(&profile_id)?;
-            let response = match local_profiles.get(&id).await? {
+            let response = match profile_store.get(&id).await? {
                 Some(profile) => ExchangeMessage::Response { profile: profile.to_wire() },
                 None => ExchangeMessage::NotFound { profile_id: profile_id.clone() },
             };

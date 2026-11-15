@@ -21,8 +21,9 @@ pub(crate) use self::repo::FetchedProfileReplaceResult;
 /// The display name of the Profile a fresh state directory starts with.
 const DEFAULT_PROFILE_NAME: &str = "Anonymous";
 
-/// Owns the local Profiles: their keys, signed bodies, update rules, and the active Profile.
-pub struct LocalProfiles {
+/// Stores this node's Profiles: the owned Profiles with their keys, signed bodies, update rules, and the active Profile,
+/// and the fetched Profiles kept apart from them.
+pub struct ProfileStore {
     repo: ProfileRepo,
     keys: ProfileKeyStore,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
@@ -30,7 +31,7 @@ pub struct LocalProfiles {
     update_lock: TokioMutex<()>,
 }
 
-impl LocalProfiles {
+impl ProfileStore {
     /// Opens the state directory, recovers keys and bodies, and ensures one active Profile.
     pub async fn open(profile_dir: &Path, clock: Arc<dyn Clock<Utc> + Send + Sync>) -> Result<Self> {
         let keys = ProfileKeyStore::new(profile_dir);
@@ -88,7 +89,7 @@ impl LocalProfiles {
         Ok(profile)
     }
 
-    /// Every local Profile, ordered by creation time and then by Profile ID.
+    /// Every owned Profile, ordered by creation time and then by Profile ID.
     pub async fn list(&self) -> Result<Vec<Profile>> {
         self.repo.list().await
     }
@@ -151,7 +152,7 @@ mod tests {
     use omnius_core_omnikit::generated::omni_sign::{OmniSignType, OmniSigner};
     use testresult::TestResult;
 
-    use super::{FetchedProfileReplaceResult, LocalProfiles};
+    use super::{FetchedProfileReplaceResult, ProfileStore};
     use crate::{
         model::{Profile, ProfileDraft, ProfileId},
         prelude::*,
@@ -161,12 +162,12 @@ mod tests {
         DateTime::from_timestamp(seconds, 0).unwrap()
     }
 
-    async fn open(dir: &std::path::Path, clock: &Arc<FakeClockUtc>) -> Result<LocalProfiles> {
-        LocalProfiles::open(dir, clock.clone()).await
+    async fn open(dir: &std::path::Path, clock: &Arc<FakeClockUtc>) -> Result<ProfileStore> {
+        ProfileStore::open(dir, clock.clone()).await
     }
 
     #[tokio::test]
-    async fn local_profiles_startup_a_fresh_state_creates_an_active_anonymous_profile() -> TestResult {
+    async fn profile_store_startup_a_fresh_state_creates_an_active_anonymous_profile() -> TestResult {
         let dir = tempfile::tempdir()?;
         let clock = Arc::new(FakeClockUtc::new(at(1_000_000)));
         let service = open(dir.path(), &clock).await?;
@@ -186,7 +187,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_profiles_startup_reopening_does_not_duplicate_the_anonymous_profile() -> TestResult {
+    async fn profile_store_startup_reopening_does_not_duplicate_the_anonymous_profile() -> TestResult {
         let dir = tempfile::tempdir()?;
         let clock = Arc::new(FakeClockUtc::new(at(1_000_000)));
         let first = open(dir.path(), &clock).await?;
@@ -200,7 +201,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_profiles_startup_a_key_without_a_body_is_recovered_as_an_empty_profile() -> TestResult {
+    async fn profile_store_startup_a_key_without_a_body_is_recovered_as_an_empty_profile() -> TestResult {
         let dir = tempfile::tempdir()?;
         let clock = Arc::new(FakeClockUtc::new(at(1_000_000)));
         let first = open(dir.path(), &clock).await?;
@@ -218,7 +219,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_profiles_startup_a_body_without_a_key_fails_startup() -> TestResult {
+    async fn profile_store_startup_a_body_without_a_key_fails_startup() -> TestResult {
         let dir = tempfile::tempdir()?;
         let clock = Arc::new(FakeClockUtc::new(at(1_000_000)));
         let service = open(dir.path(), &clock).await?;
@@ -231,7 +232,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_profiles_startup_a_state_without_an_active_profile_activates_the_oldest() -> TestResult {
+    async fn profile_store_startup_a_state_without_an_active_profile_activates_the_oldest() -> TestResult {
         let dir = tempfile::tempdir()?;
         let clock = Arc::new(FakeClockUtc::new(at(1_000_000)));
         let service = open(dir.path(), &clock).await?;
@@ -248,7 +249,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_profiles_create_list_get_active_activate_and_update() -> TestResult {
+    async fn profile_store_create_list_get_active_activate_and_update() -> TestResult {
         let dir = tempfile::tempdir()?;
         let clock = Arc::new(FakeClockUtc::new(at(1_000_000)));
         let service = open(dir.path(), &clock).await?;
@@ -290,7 +291,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_profiles_a_clock_that_moves_back_is_rejected() -> TestResult {
+    async fn profile_store_a_clock_that_moves_back_is_rejected() -> TestResult {
         let dir = tempfile::tempdir()?;
         let clock = Arc::new(FakeClockUtc::new(at(1_000_000)));
         let service = open(dir.path(), &clock).await?;
@@ -307,7 +308,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_profiles_updates_are_serialized_and_increment_the_version() -> TestResult {
+    async fn profile_store_updates_are_serialized_and_increment_the_version() -> TestResult {
         let dir = tempfile::tempdir()?;
         let clock = Arc::new(FakeClockUtc::new(at(1_000_000)));
         let service = Arc::new(open(dir.path(), &clock).await?);
@@ -333,7 +334,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_profiles_activating_an_unknown_profile_is_rejected() -> TestResult {
+    async fn profile_store_activating_an_unknown_profile_is_rejected() -> TestResult {
         let dir = tempfile::tempdir()?;
         let clock = Arc::new(FakeClockUtc::new(at(1_000_000)));
         let service = open(dir.path(), &clock).await?;
@@ -343,7 +344,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_profiles_a_fetched_profile_is_not_owned_and_survives_reopen() -> TestResult {
+    async fn profile_store_a_fetched_profile_is_not_owned_and_survives_reopen() -> TestResult {
         let dir = tempfile::tempdir()?;
         let clock = Arc::new(FakeClockUtc::new(at(1_000_000)));
         let service = open(dir.path(), &clock).await?;

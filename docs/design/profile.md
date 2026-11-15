@@ -18,7 +18,7 @@ This document assumes the vocabulary of [terms.md](../terms.md). Term definition
 | [file-transfer.md](./file-transfer.md#2-responsibilities-and-boundaries) | Publishing and subscribing to the files a FileRef names |
 | [trust-security.md](./trust-security.md#2-responsibilities-and-boundaries) | What the Session authenticates and the identity of the node |
 | [daemon-api.md](./daemon-api.md#1-about-this-document) | The REST resources and their authentication |
-| [local_profiles.rs](../../daemon/modules/engine/src/core/negotiator/profile/local_profiles.rs) | Implementation of the local Profiles, their keys, and the update rules |
+| [profile_store.rs](../../daemon/modules/engine/src/core/negotiator/profile/profile_store.rs) | Storage of owned and fetched Profiles, the owned Profiles' keys, and the update rules |
 | [terms.md](../terms.md) | Term definitions |
 
 ### 1.2 Tenses used in this document

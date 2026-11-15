@@ -37,6 +37,8 @@ pub struct SessionAccepter {
     tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
     /// One receiver per use, each behind its own lock, so that waiting to accept one use never blocks accepting another.
     receivers: Arc<HashMap<SessionType, TokioMutex<mpsc::Receiver<QueuedSession>>>>,
+    #[allow(dead_code)]
+    accept_limits: Arc<HashMap<SessionType, Arc<Semaphore>>>,
     task_accepter: TaskAccepter,
     accept_wait_timeout: Duration,
 }
@@ -45,9 +47,11 @@ pub struct SessionAccepter {
 struct QueuedSession {
     session: Session,
     queued_at: Instant,
+    accept_permit: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
 }
 
 impl SessionAccepter {
+    #[cfg(test)]
     pub async fn new(
         tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
         signer: Arc<OmniSigner>,
@@ -56,6 +60,21 @@ impl SessionAccepter {
         rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         supported_types: &[SessionType],
         option: SessionOption,
+    ) -> Self {
+        Self::new_with_limits(tcp_accepter, signer, clock, sleeper, rng, supported_types, option, &[]).await
+    }
+
+    /// `accept_limits` bounds the established Sessions of a use, including the ones waiting in its queue.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn new_with_limits(
+        tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
+        signer: Arc<OmniSigner>,
+        clock: Arc<dyn Clock<Utc> + Send + Sync>,
+        sleeper: Arc<dyn Sleeper + Send + Sync>,
+        rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
+        supported_types: &[SessionType],
+        option: SessionOption,
+        accept_limits: &[(SessionType, Arc<Semaphore>)],
     ) -> Self {
         let accept_wait_timeout = option.handshake_timeout;
         let mut senders = HashMap::<SessionType, mpsc::Sender<QueuedSession>>::new();
@@ -70,15 +89,31 @@ impl SessionAccepter {
             receivers.insert(typ.clone(), TokioMutex::new(rx));
         }
 
-        let task_accepter = TaskAccepter::new(Arc::new(TokioMutex::new(senders)), tcp_accepter.clone(), signer, clock, rng, sleeper, option);
+        let accept_limits: Arc<HashMap<SessionType, Arc<Semaphore>>> = Arc::new(accept_limits.iter().cloned().collect());
+        let task_accepter = TaskAccepter::new(
+            Arc::new(TokioMutex::new(senders)),
+            tcp_accepter.clone(),
+            signer,
+            clock,
+            rng,
+            sleeper,
+            option,
+            accept_limits.clone(),
+        );
         task_accepter.run().await;
 
         Self {
             tcp_accepter,
             receivers: Arc::new(receivers),
+            accept_limits,
             task_accepter,
             accept_wait_timeout,
         }
+    }
+
+    #[cfg(test)]
+    pub fn accept_limit(&self, typ: &SessionType) -> Option<Arc<Semaphore>> {
+        self.accept_limits.get(typ).cloned()
     }
 
     pub async fn accept(&self, typ: &SessionType) -> Result<Session> {
@@ -93,7 +128,9 @@ impl SessionAccepter {
             let queued = receiver.recv().await.ok_or_else(|| Error::new(ErrorKind::EndOfStream).with_message("receiver is closed"))?;
             // A Session nobody took within the wait time is dropped, which closes its connection and frees the queue slot.
             if queued.queued_at.elapsed() <= self.accept_wait_timeout {
-                return Ok(queued.session);
+                let mut session = queued.session;
+                session._accept_permit = queued.accept_permit;
+                return Ok(session);
             }
             warn!(address = queued.session.address.to_string(), "dropped an established session nobody accepted in time");
         }
@@ -119,6 +156,7 @@ struct TaskAccepter {
 }
 
 impl TaskAccepter {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<QueuedSession>>>>,
         tcp_accepter: Arc<dyn ConnectionTcpAccepter + Send + Sync>,
@@ -127,9 +165,11 @@ impl TaskAccepter {
         rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
         sleeper: Arc<dyn Sleeper + Send + Sync>,
         option: SessionOption,
+        accept_limits: Arc<HashMap<SessionType, Arc<Semaphore>>>,
     ) -> Self {
         let inner = Inner {
             senders,
+            accept_limits,
             signer,
             clock,
             rng,
@@ -229,6 +269,7 @@ impl Shutdown for TaskAccepter {
 #[derive(Clone)]
 struct Inner {
     senders: Arc<TokioMutex<HashMap<SessionType, mpsc::Sender<QueuedSession>>>>,
+    accept_limits: Arc<HashMap<SessionType, Arc<Semaphore>>>,
     signer: Arc<OmniSigner>,
     clock: Arc<dyn Clock<Utc> + Send + Sync>,
     rng: Arc<Mutex<dyn rand::Rng + Send + Sync>>,
@@ -270,6 +311,13 @@ impl Inner {
                 V1RequestType::ProfileExchanger => Some(SessionType::ProfileExchanger),
             };
 
+            let accept_permit = match typ.as_ref() {
+                Some(typ) => match self.accept_limits.get(typ) {
+                    Some(limit) => Some(Arc::new(limit.clone().acquire_owned().await.map_err(|e| Error::from_error(e, ErrorKind::UnexpectedError))?)),
+                    None => None,
+                },
+                None => None,
+            };
             let permit = match typ.as_ref() {
                 Some(typ) => self.senders.lock().await.get(typ).cloned().and_then(|sender| sender.try_reserve_owned().ok()),
                 None => None,
@@ -289,10 +337,12 @@ impl Inner {
                     handshake_type: SessionHandshakeType::Accepted,
                     cert,
                     stream,
+                    _accept_permit: None,
                 };
                 permit.send(QueuedSession {
                     session,
                     queued_at: Instant::now(),
+                    accept_permit,
                 });
             } else {
                 let send_session_result_message = V1ResultMessage {

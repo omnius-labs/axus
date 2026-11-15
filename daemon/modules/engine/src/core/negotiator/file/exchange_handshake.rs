@@ -104,6 +104,7 @@ mod tests {
             handshake_type: SessionHandshakeType::Connected,
             cert: signer.sign(b"test")?,
             stream: FramedStream::new(a_reader, a_writer, SessionType::FileExchanger.max_frame_length()),
+            _accept_permit: None,
         };
         let accepting = Session {
             typ: SessionType::FileExchanger,
@@ -111,6 +112,7 @@ mod tests {
             handshake_type: SessionHandshakeType::Accepted,
             cert: signer.sign(b"test")?,
             stream: FramedStream::new(b_reader, b_writer, SessionType::FileExchanger.max_frame_length()),
+            _accept_permit: None,
         };
         Ok((dialing, accepting))
     }

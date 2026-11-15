@@ -544,6 +544,7 @@ mod tests {
             handshake_type: SessionHandshakeType::Connected,
             cert: peer_cert,
             stream: FramedStream::new(local_reader, local_writer, MAX_FRAME_LENGTH),
+            _accept_permit: None,
         };
         Ok((session, FramedStream::new(peer_reader, peer_writer, MAX_FRAME_LENGTH), peer_node_profile))
     }

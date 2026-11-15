@@ -25,15 +25,19 @@ use super::ProfileExchangerIntervals;
 pub struct TaskAccepter {
     local_profiles: Arc<LocalProfiles>,
     session_accepter: Arc<SessionAccepter>,
-    slots: Arc<tokio::sync::Semaphore>,
     intervals: ProfileExchangerIntervals,
     cancellation_token: tokio_util::sync::CancellationToken,
+    main_handle: TokioMutex<Option<JoinHandle<()>>>,
     join_handles: TokioMutex<Vec<JoinHandle<()>>>,
 }
 
 #[async_trait]
 impl Shutdown for TaskAccepter {
     async fn shutdown(&self) {
+        self.cancellation_token.cancel();
+        if let Some(main_handle) = self.main_handle.lock().await.take() {
+            let _ = main_handle.await;
+        }
         let handles = std::mem::take(&mut *self.join_handles.lock().await);
         for handle in handles {
             let _ = handle.await;
@@ -45,16 +49,15 @@ impl TaskAccepter {
     pub fn new(
         local_profiles: Arc<LocalProfiles>,
         session_accepter: Arc<SessionAccepter>,
-        slots: Arc<tokio::sync::Semaphore>,
         intervals: ProfileExchangerIntervals,
         cancellation_token: tokio_util::sync::CancellationToken,
     ) -> Arc<Self> {
         let v = Arc::new(Self {
             local_profiles,
             session_accepter,
-            slots,
             intervals,
             cancellation_token,
+            main_handle: TokioMutex::new(None),
             join_handles: TokioMutex::new(Vec::new()),
         });
         let this = v.clone();
@@ -74,20 +77,11 @@ impl TaskAccepter {
                 }
             }
         });
-        v.join_handles.try_lock().expect("the task was just created").push(join_handle);
+        *v.main_handle.try_lock().expect("the task was just created") = Some(join_handle);
         v
     }
 
-    #[cfg(test)]
-    pub fn session_slots(&self) -> &Arc<tokio::sync::Semaphore> {
-        &self.slots
-    }
-
     async fn accept(&self) -> Result<()> {
-        let permit = select! {
-            permit = self.slots.clone().acquire_owned() => permit.map_err(|e| Error::from_error(e, ErrorKind::UnexpectedError))?,
-            _ = self.cancellation_token.cancelled() => return Ok(()),
-        };
         let session = select! {
             session = self.session_accepter.accept(&SessionType::ProfileExchanger) => session?,
             _ = self.cancellation_token.cancelled() => return Ok(()),
@@ -103,7 +97,6 @@ impl TaskAccepter {
             if let Err(error) = result {
                 debug!(error_message = error.to_string(), "profile exchange serve session ended");
             }
-            drop(permit);
         }));
 
         Ok(())
@@ -134,7 +127,12 @@ impl TaskAccepter {
                 Some(profile) => ExchangeMessage::Response { profile: profile.to_wire() },
                 None => ExchangeMessage::NotFound { profile_id: profile_id.clone() },
             };
-            session.stream.sender.lock().await.send_message_with::<ExchangeMessageCodec>(&response).await?;
+            select! {
+                result = async {
+                    session.stream.sender.lock().await.send_message_with::<ExchangeMessageCodec>(&response).await
+                } => result?,
+                _ = cancellation_token.cancelled() => return Ok(()),
+            }
         }
     }
 }

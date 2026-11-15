@@ -46,6 +46,13 @@ impl Default for ProfileExchangerOption {
     }
 }
 
+impl ProfileExchangerOption {
+    /// The semaphore shared by the accepter and the fetch path.
+    pub fn session_slots(&self) -> Arc<Semaphore> {
+        Arc::new(Semaphore::new(self.max_session_count))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProfileExchangerIntervals {
     pub receive_timeout: Duration,
@@ -74,6 +81,7 @@ pub struct ProfileExchanger {
 }
 
 impl ProfileExchanger {
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         local_profiles: Arc<LocalProfiles>,
@@ -84,9 +92,31 @@ impl ProfileExchanger {
         option: ProfileExchangerOption,
         intervals: ProfileExchangerIntervals,
     ) -> Result<Self> {
-        let slots = Arc::new(Semaphore::new(option.max_session_count));
+        Self::new_with_slots(
+            local_profiles,
+            session_connector,
+            session_accepter,
+            location_finder,
+            clock,
+            option.session_slots(),
+            intervals,
+        )
+        .await
+    }
+
+    /// Uses the same semaphore as the SessionAccepter, so the accept and fetch paths share one limit.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn new_with_slots(
+        local_profiles: Arc<LocalProfiles>,
+        session_connector: Arc<SessionConnector>,
+        session_accepter: Arc<SessionAccepter>,
+        location_finder: Arc<dyn ProfileLocationFinder>,
+        clock: Arc<dyn Clock<Utc> + Send + Sync>,
+        slots: Arc<Semaphore>,
+        intervals: ProfileExchangerIntervals,
+    ) -> Result<Self> {
         let cancellation_token = CancellationToken::new();
-        let task_accepter = TaskAccepter::new(local_profiles.clone(), session_accepter, slots.clone(), intervals.clone(), cancellation_token.clone());
+        let task_accepter = TaskAccepter::new(local_profiles.clone(), session_accepter, intervals.clone(), cancellation_token.clone());
         let exchanger = Self {
             local_profiles,
             session_connector,

@@ -109,8 +109,9 @@ impl AxusService {
         let my_node_profile = NodeProfile::sign(&signer, my_addrs, clock.now())?;
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
 
+        let profile_slots = ProfileExchangerOption::default().session_slots();
         let session_accepter = Arc::new(
-            SessionAccepter::new(
+            SessionAccepter::new_with_limits(
                 tcp_accepter.clone(),
                 signer.clone(),
                 clock.clone(),
@@ -118,6 +119,7 @@ impl AxusService {
                 rng.clone(),
                 &[SessionType::NodeFinder, SessionType::FileExchanger, SessionType::ProfileExchanger],
                 SessionOption::default(),
+                &[(SessionType::ProfileExchanger, profile_slots.clone())],
             )
             .await,
         );
@@ -178,13 +180,13 @@ impl AxusService {
             }
         };
 
-        let profile_exchanger = match ProfileExchanger::new(
+        let profile_exchanger = match ProfileExchanger::new_with_slots(
             local_profiles.clone(),
             session_connector,
             session_accepter,
             Arc::new(NodeFinderProfileLocationFinder::new(node_finder.clone())),
             clock,
-            ProfileExchangerOption::default(),
+            profile_slots,
             ProfileExchangerIntervals::default(),
         )
         .await

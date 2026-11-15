@@ -26,7 +26,7 @@ mod tests {
     use tokio::{
         io::{AsyncReadExt as _, AsyncWriteExt as _},
         net::{TcpListener, TcpStream},
-        sync::{Mutex as TokioMutex, mpsc},
+        sync::{Mutex as TokioMutex, Semaphore, mpsc},
     };
     use tokio_util::bytes::Bytes;
 
@@ -180,6 +180,41 @@ mod tests {
 
         session_accepter.shutdown().await;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_profile_exchanger_accept_limit_counts_queued_sessions() -> TestResult {
+        let (tcp_accepter, tcp_connector) = loopback_tcp_pair();
+        let signer = Arc::new(OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "test")?);
+        let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
+        let sleeper = Arc::new(FakeSleeper);
+        let addr = OmniAddr::create_tcp("127.0.0.1".parse()?, 1);
+        let limit = Arc::new(Semaphore::new(1));
+
+        let session_accepter = SessionAccepter::new_with_limits(
+            tcp_accepter,
+            signer.clone(),
+            Arc::new(ClockUtc),
+            sleeper,
+            rng.clone(),
+            &[SessionType::ProfileExchanger],
+            SessionOption::default(),
+            &[(SessionType::ProfileExchanger, limit.clone())],
+        )
+        .await;
+        let session_connector = SessionConnector::new(tcp_connector, signer, Arc::new(ClockUtc), rng, SessionOption::default());
+
+        let first = tokio::time::timeout(TEST_WATCHDOG, session_connector.connect(&addr, &SessionType::ProfileExchanger)).await??;
+        let second = tokio::time::timeout(Duration::from_millis(200), session_connector.connect(&addr, &SessionType::ProfileExchanger)).await;
+        assert!(second.is_err(), "a session waiting in the queue still holds the limit");
+
+        let accepted = tokio::time::timeout(TEST_WATCHDOG, session_accepter.accept(&SessionType::ProfileExchanger)).await??;
+        assert_eq!(accepted.typ, SessionType::ProfileExchanger);
+        drop(accepted);
+        drop(first);
+
+        session_accepter.shutdown().await;
         Ok(())
     }
 

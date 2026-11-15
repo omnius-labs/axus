@@ -121,7 +121,7 @@ A not-found answer is a failure for that location, not a deletion of the Profile
 A serving node can withhold a Profile, and the design accepts that: availability is not a guarantee of the exchanger.
 It cannot forge a body, because the signature check fails, and it cannot roll a body back, because the receiver keeps the newer snapshot ([profile.md](./profile.md#52-replacement-and-rollback)).
 
-The concurrent Session limit counts dialed and accepted Sessions together.
+The concurrent Session limit counts dialed and accepted Sessions together, including an accepted Session waiting in the queue for the use.
 A requester can make a node read and send a Profile, so the frame and the concurrent Session limits bound the work.
 The bounds are per Session and per node, and the handshake deadlines of [session.md](./session.md#51-decided) bound the cost of a Session that never completes.
 

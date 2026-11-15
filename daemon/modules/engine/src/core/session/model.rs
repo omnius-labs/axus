@@ -86,6 +86,9 @@ pub struct Session {
     #[allow(unused)]
     pub cert: OmniCert,
     pub stream: FramedStream,
+    /// Keeps the per-use accept limit permit until this Session is dropped.
+    #[allow(unused)]
+    pub(crate) _accept_permit: Option<std::sync::Arc<tokio::sync::OwnedSemaphorePermit>>,
 }
 
 impl Session {

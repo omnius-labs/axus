@@ -228,15 +228,15 @@ The design status names lookup, exchange, serving, fetched storage, and the defe
 
 | Criterion | Command | Expected result |
 | --- | --- | --- |
-| 1 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_asset_key|profile_exchanger.*location/)'` | The owned AssetKeys reach the push listener and the lookup returns the owner |
+| 1 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_asset_key|profile_exchanger_advertises|profile_exchanger_fetches_a_profile_between_services/)'` | The owned AssetKeys reach the push listener and the service lookup returns the owner |
 | 2 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_exchanger.*fetch/)'` | The fetched Profile is verified and stored |
 | 3 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_exchanger.*serve|profile_exchanger.*not_found/)'` | Owned IDs are served and fetched or unknown IDs get NotFound |
-| 4 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_exchanger.*bad_body|profile_exchanger.*bad_id|profile_exchanger.*stale|profile_exchanger.*equivocation/)'` | The bad body, mismatched ID, stale snapshot, and equivocation are not stored, the next location is tried, and the location is not excluded |
+| 4 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_exchanger.*bad_body|profile_exchanger.*bad_id|profile_exchanger.*bad_signature|profile_exchanger.*stale|profile_exchanger.*equivocation/)'` | A bad body, mismatched ID, bad signature, stale snapshot, and equivocation are not stored, the next location is tried, and the location is not excluded |
 | 5 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/fetched_profile|profile_exchanger.*restart/)'` | Fetched rows survive a restart and stay out of the owned list |
 | 6 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/session::tests|protocol::profile/)'` | The use selection, frame limit, and codec tests pass |
-| 7 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_exchanger.*session_limit/)'` | The accept and fetch paths never hold more than 8 Sessions together |
+| 7 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/profile_exchanger_shares_one_session_limit|profile_exchanger_limits_concurrent_fetch_sessions|the_profile_exchanger_accept_limit_counts_queued_sessions/)'` | The accept and fetch paths use the same limit, a queued Session counts, and no more than 8 Sessions are held together |
 | 8 | `cd daemon && snapshot="$(mktemp -d "${AGENT_TEMP_DIR:-/tmp}/axus-generated.XXXXXX")" && cp -R modules/engine/src/generated "$snapshot/generated" && cp modules/engine/src/generated.rs "$snapshot/generated.rs" && ./gen-rocketpack.sh && diff -ru "$snapshot/generated" modules/engine/src/generated && diff -u "$snapshot/generated.rs" modules/engine/src/generated.rs; status=$?; rm -rf "$snapshot"; exit $status` | Exit code 0 with no diff |
-| 9 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/service::tests.*profile_exchanger/)'` | Two services fetch a Profile by ID and the restart read succeeds; a failed startup leaves no running worker; shutdown joins the workers |
+| 9 | `cd daemon && RUSTC_WRAPPER= cargo nextest run --all-features -E 'test(/service::tests.*profile_exchanger|profile_exchanger_startup_failure|profile_exchanger_shutdown_joins/)'` | Two services fetch a Profile by ID and the restart read succeeds; a failed startup leaves no running worker; shutdown joins an active worker |
 | 10 | `cd daemon && RUSTC_WRAPPER= cargo make lint && RUSTC_WRAPPER= cargo make test` | Exit code 0, all tests pass |
 
 ## 7. Risks and Rollback

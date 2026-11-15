@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use chrono::{DateTime, Utc};
 use futures::future::join_all;
 use parking_lot::Mutex;
 use rand::{
@@ -21,7 +22,10 @@ use omnius_core_base::{
     clock::{Clock, ClockUtc},
     sleeper::SleeperImpl,
 };
-use omnius_core_omnikit::{generated::omni_sign::OmniSigner, model::omni_addr::OmniAddr};
+use omnius_core_omnikit::{
+    generated::omni_sign::{OmniSignType, OmniSigner},
+    model::omni_addr::OmniAddr,
+};
 
 use crate::{
     base::connection::{ConnectionTcpAccepter, ConnectionTcpAccepterImpl, ConnectionTcpConnectorImpl, TcpProxyOption, TcpProxyType},
@@ -33,12 +37,17 @@ use crate::{
             model::{SessionOption, SessionType},
         },
     },
-    generated::axus::profile::ExchangeMessage,
-    model::{AssetKey, NodeProfile, Profile, ProfileId},
+    generated::axus::{model::Profile as WireProfile, profile::ExchangeMessage},
+    model::{AssetKey, NodeProfile, Profile, ProfileDraft, ProfileId},
     protocol::profile::ExchangeMessageCodec,
 };
 
 use super::*;
+
+// omnius-lint:allow(free-fn) timestamp helper for the test fixtures
+fn at(seconds: i64) -> DateTime<Utc> {
+    DateTime::from_timestamp(seconds, 0).unwrap()
+}
 
 const FAST_INTERVALS: ProfileExchangerIntervals = ProfileExchangerIntervals {
     receive_timeout: Duration::from_secs(2),
@@ -55,6 +64,10 @@ struct Endpoint {
 
 impl Endpoint {
     async fn new(dir: &Path) -> TestResult<Self> {
+        Self::with_slots(dir, None).await
+    }
+
+    async fn with_slots(dir: &Path, slots: Option<Arc<tokio::sync::Semaphore>>) -> TestResult<Self> {
         let clock: Arc<dyn Clock<Utc> + Send + Sync> = Arc::new(ClockUtc);
         let sleeper: Arc<dyn omnius_core_base::sleeper::Sleeper + Send + Sync> = Arc::new(SleeperImpl);
         let rng = Arc::new(Mutex::new(ChaCha20Rng::from_rng(&mut UnwrapErr(SysRng))));
@@ -71,8 +84,9 @@ impl Endpoint {
             })
             .await?,
         );
+        let accept_limits = slots.into_iter().map(|slots| (SessionType::ProfileExchanger, slots)).collect::<Vec<_>>();
         let session_accepter = Arc::new(
-            SessionAccepter::new(
+            SessionAccepter::new_with_limits(
                 tcp_accepter,
                 signer.clone(),
                 clock.clone(),
@@ -80,6 +94,7 @@ impl Endpoint {
                 rng.clone(),
                 &[SessionType::ProfileExchanger],
                 SessionOption::default(),
+                &accept_limits,
             )
             .await,
         );
@@ -91,6 +106,23 @@ impl Endpoint {
             session_connector,
             profile,
             clock,
+        })
+    }
+
+    fn spawn_profile_server(&self, profile: WireProfile) -> tokio::task::JoinHandle<Result<()>> {
+        let accepter = self.session_accepter.clone();
+        tokio::spawn(async move {
+            let session = accepter.accept(&SessionType::ProfileExchanger).await?;
+            session.stream.set_receive_timeout(Duration::from_secs(5));
+            let _ = session.stream.receiver.lock().await.recv_message_with::<ExchangeMessageCodec>().await?;
+            session
+                .stream
+                .sender
+                .lock()
+                .await
+                .send_message_with::<ExchangeMessageCodec>(&ExchangeMessage::Response { profile })
+                .await?;
+            Result::Ok(())
         })
     }
 }
@@ -110,16 +142,17 @@ impl TestNode {
 
     async fn with_intervals(intervals: ProfileExchangerIntervals) -> TestResult<Self> {
         let dir = tempfile::tempdir()?;
-        let endpoint = Endpoint::new(dir.path()).await?;
+        let slots = ProfileExchangerOption::default().session_slots();
+        let endpoint = Endpoint::with_slots(dir.path(), Some(slots.clone())).await?;
         let local_profiles = Arc::new(LocalProfiles::open(&dir.path().join("profile"), endpoint.clock.clone()).await?);
         let locations = Arc::new(FixedProfileLocationFinder::new(endpoint.profile.id().to_vec()));
-        let exchanger = ProfileExchanger::new(
+        let exchanger = ProfileExchanger::new_with_slots(
             local_profiles.clone(),
             endpoint.session_connector.clone(),
             endpoint.session_accepter.clone(),
             locations.clone(),
             endpoint.clock.clone(),
-            ProfileExchangerOption::default(),
+            slots,
             intervals,
         )
         .await?;
@@ -259,6 +292,104 @@ async fn profile_exchanger_tries_the_next_location_after_a_bad_body() -> TestRes
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn profile_exchanger_tries_the_next_location_after_a_bad_signature() -> TestResult {
+    let bad_dir = tempfile::tempdir()?;
+    let bad = Endpoint::new(bad_dir.path()).await?;
+    let good_dir = tempfile::tempdir()?;
+    let good = Endpoint::new(good_dir.path()).await?;
+    let client = TestNode::new().await?;
+    let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "Remote")?;
+    let profile = Profile::sign(&signer, 1, at(1_000_000), ProfileDraft::default())?;
+    let mut tampered = profile.to_wire();
+    tampered.signature[0] ^= 1;
+
+    let bad_server = bad.spawn_profile_server(tampered);
+    let good_server = good.spawn_profile_server(profile.to_wire());
+    client.known(&[&bad.profile, &good.profile]);
+
+    assert_eq!(client.exchanger.fetch(profile.id()).await?, profile);
+    assert_eq!(client.exchanger.stored(profile.id()).await?, Some(profile));
+    bad_server.await??;
+    good_server.await??;
+
+    client.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn profile_exchanger_tries_the_next_location_after_a_stale_snapshot() -> TestResult {
+    let bad_dir = tempfile::tempdir()?;
+    let bad = Endpoint::new(bad_dir.path()).await?;
+    let good_dir = tempfile::tempdir()?;
+    let good = Endpoint::new(good_dir.path()).await?;
+    let client = TestNode::new().await?;
+    let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "Remote")?;
+    let older = Profile::sign(&signer, 1, at(1_000_000), ProfileDraft::default())?;
+    let newer = Profile::sign(&signer, 2, at(1_000_001), ProfileDraft::default())?;
+    client.local_profiles.store_fetched(&newer, at(1_000_002)).await?;
+
+    let bad_server = bad.spawn_profile_server(older.to_wire());
+    let good_server = good.spawn_profile_server(newer.to_wire());
+    client.known(&[&bad.profile, &good.profile]);
+
+    assert_eq!(client.exchanger.fetch(newer.id()).await?, newer);
+    assert_eq!(client.exchanger.stored(newer.id()).await?, Some(newer));
+    bad_server.await??;
+    good_server.await??;
+
+    client.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn profile_exchanger_tries_the_next_location_after_an_equivocation() -> TestResult {
+    let bad_dir = tempfile::tempdir()?;
+    let bad = Endpoint::new(bad_dir.path()).await?;
+    let good_dir = tempfile::tempdir()?;
+    let good = Endpoint::new(good_dir.path()).await?;
+    let client = TestNode::new().await?;
+    let signer = OmniSigner::new(OmniSignType::Ed25519_Sha3_256_Base64Url, "Remote")?;
+    let first = Profile::sign(&signer, 1, at(1_000_000), ProfileDraft::default())?;
+    let other = ProfileId::new("Other", b"other-public-key")?;
+    let second = Profile::sign(
+        &signer,
+        1,
+        at(1_000_000),
+        ProfileDraft {
+            trusted: vec![other],
+            ..Default::default()
+        },
+    )?;
+    assert_ne!(first, second);
+    client.local_profiles.store_fetched(&first, at(1_000_002)).await?;
+
+    let bad_server = bad.spawn_profile_server(second.to_wire());
+    let good_server = good.spawn_profile_server(first.to_wire());
+    client.known(&[&bad.profile, &good.profile]);
+
+    assert_eq!(client.exchanger.fetch(first.id()).await?, first);
+    assert_eq!(client.exchanger.stored(first.id()).await?, Some(first));
+    bad_server.await??;
+    good_server.await??;
+
+    client.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn profile_exchanger_shutdown_joins_an_active_serve_worker() -> TestResult {
+    let server = TestNode::new().await?;
+    let _session = server
+        .endpoint
+        .session_connector
+        .connect(&server.endpoint.profile.addrs()[0], &SessionType::ProfileExchanger)
+        .await?;
+
+    tokio::time::timeout(Duration::from_secs(5), server.shutdown()).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn profile_exchanger_closes_the_session_for_a_malformed_request() -> TestResult {
     let server = TestNode::new().await?;
     let session = server
@@ -287,9 +418,13 @@ async fn profile_exchanger_closes_the_session_for_a_malformed_request() -> TestR
 async fn profile_exchanger_shares_one_session_limit_between_accept_and_fetch() -> TestResult {
     let node = TestNode::new().await?;
 
-    assert!(Arc::ptr_eq(&node.exchanger.slots, node.exchanger.task_accepter.session_slots()));
-    // The accepter reserves one permit while it waits for the next connection.
-    assert_eq!(node.exchanger.task_accepter.session_slots().available_permits(), 7);
+    let accept_limit = node
+        .endpoint
+        .session_accepter
+        .accept_limit(&SessionType::ProfileExchanger)
+        .expect("the accepter has the ProfileExchanger limit");
+    assert!(Arc::ptr_eq(&node.exchanger.slots, &accept_limit));
+    assert_eq!(accept_limit.available_permits(), 8);
 
     node.shutdown().await;
     Ok(())

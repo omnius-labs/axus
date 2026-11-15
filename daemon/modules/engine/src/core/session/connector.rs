@@ -105,6 +105,7 @@ impl SessionConnector {
                 handshake_type: SessionHandshakeType::Connected,
                 cert,
                 stream,
+                _accept_permit: None,
             };
 
             Ok(session)

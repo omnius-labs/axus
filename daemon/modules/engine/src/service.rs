@@ -331,7 +331,7 @@ pub use crate::core::negotiator::NodeFinderIntervals;
 #[cfg(test)]
 mod tests {
     use crate::protocol::MessageCodec;
-    use std::{net::TcpListener, sync::Arc, time::Duration};
+    use std::{net::TcpListener, path::Path, sync::Arc, time::Duration};
 
     use chrono::Utc;
     use parking_lot::Mutex;
@@ -381,19 +381,11 @@ mod tests {
     async fn node_finds_asset_key_owner_through_bootstrap_node() -> TestResult {
         let dir = tempfile::tempdir()?;
 
-        let owner_port = free_port()?;
-        let owner = AxusService::new(dir.path().join("owner"), format!("127.0.0.1:{owner_port}"), dir.path(), fast_option(vec![])).await?;
+        let owner = AxusService::new(dir.path().join("owner"), "127.0.0.1:0", dir.path(), fast_option(vec![])).await?;
         let owner_id = owner.node_finder.my_node_profile().id().to_vec();
 
         let owner_node_profile = owner.node_finder.my_node_profile();
-        let seeker_port = free_port()?;
-        let seeker = AxusService::new(
-            dir.path().join("seeker"),
-            format!("127.0.0.1:{seeker_port}"),
-            dir.path(),
-            fast_option(vec![owner_node_profile.clone()]),
-        )
-        .await?;
+        let seeker = AxusService::new(dir.path().join("seeker"), "127.0.0.1:0", dir.path(), fast_option(vec![owner_node_profile.clone()])).await?;
 
         // Kadex は自ノードより近いノードにだけ want を送るため、owner を最も近いノードにする
         let asset_key = AssetKey {
@@ -428,12 +420,12 @@ mod tests {
         let found = seeker.node_finder.find_node_profile(&asset_key).await?;
 
         assert!(found.iter().all(|node_profile| node_profile.id() == owner_id.as_slice()));
-        // owner は特定のアドレスで待ち受けているため、そのアドレスを広告する
-        assert!(
-            found
-                .iter()
-                .all(|node_profile| node_profile.addrs() == [OmniAddr::create_tcp("127.0.0.1".parse().unwrap(), owner_port)])
-        );
+        // owner は特定のアドレスで待ち受けているため、OS が割り当てた port を含むそのアドレスを広告する
+        let owner_addr = owner_node_profile.addrs()[0].parse_tcp_ip()?;
+        assert_eq!(owner_node_profile.addrs().len(), 1);
+        assert_eq!(owner_addr.ip(), "127.0.0.1".parse::<std::net::IpAddr>()?);
+        assert_ne!(owner_addr.port(), 0);
+        assert!(found.iter().all(|node_profile| node_profile.addrs() == owner_node_profile.addrs()));
         assert_eq!(seeker.node_finder.get_session_count().await, 1);
         assert_eq!(owner.node_finder.get_session_count().await, 1);
 
@@ -448,26 +440,7 @@ mod tests {
         // 同時に接続し合う状況は起動の時刻に左右されるため、何度か繰り返す
         for _ in 0..5 {
             let dir = tempfile::tempdir()?;
-            let a_dir = dir.path().join("a");
-            let b_dir = dir.path().join("b");
-            let (a_port, b_port) = (free_port()?, free_port()?);
-
-            // 互いを bootstrap に指定するため、起動の前に鍵を作って公開鍵を確定させる
-            let a_node_profile = NodeProfile::sign(
-                &NodeIdentity::load_or_create(&a_dir.join("identity")).await?.signer(),
-                vec![OmniAddr::create_tcp("127.0.0.1".parse()?, a_port)],
-                Utc::now(),
-            )?;
-            let b_node_profile = NodeProfile::sign(
-                &NodeIdentity::load_or_create(&b_dir.join("identity")).await?.signer(),
-                vec![OmniAddr::create_tcp("127.0.0.1".parse()?, b_port)],
-                Utc::now(),
-            )?;
-
-            let (a, b) = tokio::try_join!(
-                AxusService::new(&a_dir, format!("127.0.0.1:{a_port}"), dir.path(), fast_option(vec![b_node_profile])),
-                AxusService::new(&b_dir, format!("127.0.0.1:{b_port}"), dir.path(), fast_option(vec![a_node_profile])),
-            )?;
+            let (a, b) = start_mutually_bootstrapped_pair(dir.path()).await?;
 
             Watchdog::wait_for_with_snapshot(
                 "both nodes keep one Session",
@@ -501,24 +474,11 @@ mod tests {
         let dir = tempfile::tempdir()?;
 
         // hub だけが owner と seeker の両方を知り、owner と seeker は hub だけを bootstrap に指定する
-        let hub_port = free_port()?;
-        let hub = AxusService::new(dir.path().join("hub"), format!("127.0.0.1:{hub_port}"), dir.path(), fast_option(vec![])).await?;
+        let hub = AxusService::new(dir.path().join("hub"), "127.0.0.1:0", dir.path(), fast_option(vec![])).await?;
         let hub_node_profile = hub.node_finder.my_node_profile();
 
-        let owner = AxusService::new(
-            dir.path().join("owner"),
-            format!("127.0.0.1:{}", free_port()?),
-            dir.path(),
-            fast_option(vec![hub_node_profile.clone()]),
-        )
-        .await?;
-        let seeker = AxusService::new(
-            dir.path().join("seeker"),
-            format!("127.0.0.1:{}", free_port()?),
-            dir.path(),
-            fast_option(vec![hub_node_profile.clone()]),
-        )
-        .await?;
+        let owner = AxusService::new(dir.path().join("owner"), "127.0.0.1:0", dir.path(), fast_option(vec![hub_node_profile.clone()])).await?;
+        let seeker = AxusService::new(dir.path().join("seeker"), "127.0.0.1:0", dir.path(), fast_option(vec![hub_node_profile.clone()])).await?;
         let owner_node_profile = owner.node_finder.my_node_profile();
 
         // Kadex は自 node より AssetKey に近い node にだけ want と push を送るため、hub を最も近い node にする
@@ -631,7 +591,7 @@ mod tests {
             advertise_addrs: addrs.clone(),
             ..fast_option(vec![])
         };
-        let service = AxusService::new(dir.path().join("state"), format!("127.0.0.1:{}", free_port()?), dir.path(), option).await?;
+        let service = AxusService::new(dir.path().join("state"), "127.0.0.1:0", dir.path(), option).await?;
         let profile = service.node_finder.my_node_profile();
         assert_eq!(profile.addrs(), &addrs[..NodeProfile::MAX_WIRE_ADDRS]);
         assert_eq!(crate::protocol::NodeProfileCodec::decode(&crate::protocol::NodeProfileCodec::encode(&profile)?)?, profile);
@@ -677,15 +637,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn profile_exchanger_fetches_a_profile_between_services() -> TestResult {
         let dir = tempfile::tempdir()?;
-        let owner = AxusService::new(dir.path().join("owner"), format!("127.0.0.1:{}", free_port()?), dir.path(), fast_option(vec![])).await?;
+        let owner = AxusService::new(dir.path().join("owner"), "127.0.0.1:0", dir.path(), fast_option(vec![])).await?;
         let owner_profile = owner.active_profile().await?.expect("a fresh node has an active profile");
-        let seeker = AxusService::new(
-            dir.path().join("seeker"),
-            format!("127.0.0.1:{}", free_port()?),
-            dir.path(),
-            fast_option(vec![owner.node_finder.my_node_profile()]),
-        )
-        .await?;
+        let seeker = AxusService::new(dir.path().join("seeker"), "127.0.0.1:0", dir.path(), fast_option(vec![owner.node_finder.my_node_profile()])).await?;
 
         let fetched = Arc::new(Mutex::new(None::<Profile>));
         Watchdog::wait_for("the seeker fetches the owner's profile", || {
@@ -729,6 +683,47 @@ mod tests {
                 lookup: Duration::from_millis(100),
             },
             ..Default::default()
+        }
+    }
+
+    /// 互いを bootstrap に指定した 2 つの node を同時に起動する。
+    /// 署名済みの NodeProfile に待ち受け port が入るため、起動の前に port を確定させる必要がある。
+    /// port を確保してから bind するまでの間に他のテストが同じ port を使うことがあるため、その場合は port を取り直して起動をやり直す。
+    async fn start_mutually_bootstrapped_pair(base_dir: &Path) -> Result<(AxusService, AxusService)> {
+        const MAX_ATTEMPTS: usize = 3;
+
+        let a_dir = base_dir.join("a");
+        let b_dir = base_dir.join("b");
+        // 鍵は永続化されるため、やり直しても公開鍵は変わらない
+        let a_signer = NodeIdentity::load_or_create(&a_dir.join("identity")).await?.signer();
+        let b_signer = NodeIdentity::load_or_create(&b_dir.join("identity")).await?.signer();
+
+        let mut attempt = 1;
+        loop {
+            let (a_port, b_port) = (free_port()?, free_port()?);
+            let a_node_profile = NodeProfile::sign(&a_signer, vec![OmniAddr::create_tcp("127.0.0.1".parse()?, a_port)], Utc::now())?;
+            let b_node_profile = NodeProfile::sign(&b_signer, vec![OmniAddr::create_tcp("127.0.0.1".parse()?, b_port)], Utc::now())?;
+
+            let (a, b) = tokio::join!(
+                AxusService::new(&a_dir, format!("127.0.0.1:{a_port}"), base_dir, fast_option(vec![b_node_profile])),
+                AxusService::new(&b_dir, format!("127.0.0.1:{b_port}"), base_dir, fast_option(vec![a_node_profile])),
+            );
+            let error = match (a, b) {
+                (Ok(a), Ok(b)) => return Ok((a, b)),
+                (Ok(started), Err(error)) | (Err(error), Ok(started)) => {
+                    started.shutdown().await;
+                    error
+                }
+                (Err(error), Err(_)) => error,
+            };
+
+            let is_addr_in_use = std::error::Error::source(&error)
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .is_some_and(|source| source.kind() == std::io::ErrorKind::AddrInUse);
+            if !is_addr_in_use || attempt >= MAX_ATTEMPTS {
+                return Err(error);
+            }
+            attempt += 1;
         }
     }
 
